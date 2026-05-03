@@ -631,26 +631,130 @@ export class PlayerService {
     }
   }
 
+  /**
+   * Advance the current player index for a game.
+   *
+   * When `client` and `prevPlayerIndex` are provided (transactional path):
+   *  1. Uses `client.query` for the UPDATE (participates in caller's transaction).
+   *  2. Calls `cleanupExpiredEffects` for the previous player.
+   *  3. Calls `consumeLostTurn` for the next player; if lost, recursively
+   *     advances with an infinite-loop guard (at most playerCount skips).
+   *  4. Emits `emitTurnChange` for the final active player.
+   *
+   * When neither `client` nor `prevPlayerIndex` is provided (legacy path),
+   * skips effect management entirely — existing callers are unaffected.
+   */
   static async updateCurrentPlayerIndex(
     gameId: string,
-    currentPlayerIndex: number
+    currentPlayerIndex: number,
+    client?: import('pg').PoolClient,
+    prevPlayerIndex?: number,
   ): Promise<void> {
     const query = `
-            UPDATE games 
+            UPDATE games
             SET current_player_index = $1, updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
         `;
-    await db.query(query, [currentPlayerIndex, gameId]);
-    
-    // Emit turn change event to all clients in the game room
+
+    if (client) {
+      await client.query(query, [currentPlayerIndex, gameId]);
+    } else {
+      await db.query(query, [currentPlayerIndex, gameId]);
+    }
+
+    // ── Transactional turn lifecycle (SP-3) ──────────────────────────────────
+    if (client && prevPlayerIndex !== undefined) {
+      // Step 1: Clean up effects that expired when prevPlayer completed their turn.
+      // Use the previous player's current_turn_number as the completed turn number.
+      const prevPlayerRow = await client.query(
+        'SELECT id, current_turn_number FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
+        [gameId, prevPlayerIndex],
+      );
+      const prevTurnNumber: number = Number(prevPlayerRow.rows[0]?.current_turn_number ?? 0);
+
+      const { expiredCardIds } = await activeEffectManager.cleanupExpiredEffects(
+        gameId,
+        prevPlayerIndex,
+        prevTurnNumber,
+        client,
+      );
+      if (expiredCardIds.length > 0) {
+        // SP-4 will broadcast socket events; for now log for observability.
+        console.info(
+          `[PlayerService] Effects expired on turn end: cardIds=${expiredCardIds.join(',')} prevPlayerIndex=${prevPlayerIndex} gameId=${gameId}`,
+        );
+      }
+
+      // Step 2: Determine total player count so we can guard against infinite skips.
+      const countRow = await client.query(
+        'SELECT COUNT(*) AS cnt FROM players WHERE game_id = $1',
+        [gameId],
+      );
+      const playerCount = Number(countRow.rows[0]?.cnt ?? 1);
+
+      // Step 3: Check for Derailment turn-skips, advancing until an active player.
+      let resolvedIndex = currentPlayerIndex;
+      let skipsRemaining = playerCount; // guard: at most playerCount advances
+
+      while (skipsRemaining > 0) {
+        const nextRow = await client.query(
+          'SELECT id, current_turn_number FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
+          [gameId, resolvedIndex],
+        );
+        const nextPlayerId: string | undefined = nextRow.rows[0]?.id as string | undefined;
+
+        if (!nextPlayerId) {
+          console.warn(`[PlayerService] No player found at index ${resolvedIndex} in game ${gameId}`);
+          break;
+        }
+
+        const turnSkipped = await activeEffectManager.consumeLostTurn(gameId, nextPlayerId, client);
+
+        if (!turnSkipped) {
+          // This player is active — stop here.
+          break;
+        }
+
+        // Player was skipped due to Derailment.
+        console.info(
+          `[PlayerService] Player turn skipped (Derailment): playerId=${nextPlayerId} index=${resolvedIndex} gameId=${gameId}`,
+        );
+
+        resolvedIndex = (resolvedIndex + 1) % playerCount;
+        skipsRemaining--;
+      }
+
+      // Step 4: Emit turn change for the resolved active player.
+      const { emitTurnChange } = await import('./socketService');
+      const finalRow = await client.query(
+        'SELECT id, current_turn_number FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
+        [gameId, resolvedIndex],
+      );
+      const finalPlayerId: string | undefined = finalRow.rows[0]?.id as string | undefined;
+      if (finalPlayerId) {
+        // Update the stored index if we advanced past skipped players.
+        if (resolvedIndex !== currentPlayerIndex) {
+          await client.query(
+            `UPDATE games SET current_player_index = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+            [resolvedIndex, gameId],
+          );
+        }
+        emitTurnChange(gameId, resolvedIndex, finalPlayerId);
+      } else {
+        console.warn(`[PlayerService] No player found at resolved index ${resolvedIndex} for game ${gameId}`);
+      }
+
+      return;
+    }
+
+    // ── Legacy path: no client — emit turn change via db.query ───────────────
     const { getSocketIO } = await import('./socketService');
     const io = getSocketIO();
     if (io) {
-      // Get the player ID for the current player (internal query - doesn't need hand data)
       // Query players in same order as getPlayers (ORDER BY created_at ASC for consistency)
       const playerQuery = await db.query(
         'SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
-        [gameId, currentPlayerIndex]
+        [gameId, currentPlayerIndex],
       );
       // Validate that we have a valid player at this index
       if (playerQuery.rows && playerQuery.rows.length > 0 && currentPlayerIndex >= 0) {
@@ -787,7 +891,17 @@ export class PlayerService {
       let drawResult = demandDeckService.drawCard();
       while (drawResult !== null && drawResult.type === 'event') {
         console.info(`[fulfillDemand] Drew event card ${drawResult.card.id} — processing via EventCardService`);
-        await EventCardService.processEventCard(gameId, drawResult.card, playerId, client);
+        const eventResult = await EventCardService.processEventCard(gameId, drawResult.card, playerId, client);
+        if (eventResult.persistentEffectDescriptor) {
+          console.info(`[fulfillDemand] Persisting active effect: cardId=${drawResult.card.id} gameId=${gameId}`);
+          await activeEffectManager.addActiveEffect(
+            gameId,
+            eventResult.persistentEffectDescriptor,
+            eventResult.cardType,
+            eventResult.perPlayerEffects,
+            client,
+          );
+        }
         demandDeckService.discardEventCard(drawResult.card.id);
         drawResult = demandDeckService.drawCard();
       }
@@ -948,7 +1062,17 @@ export class PlayerService {
         const eventCardId = newDrawResult.card.id;
         discardedEventCardIds.push(eventCardId);
         console.info(`[deliverLoad] Drew event card ${eventCardId} — processing via EventCardService`);
-        await EventCardService.processEventCard(gameId, newDrawResult.card, playerId, client);
+        const deliverEventResult = await EventCardService.processEventCard(gameId, newDrawResult.card, playerId, client);
+        if (deliverEventResult.persistentEffectDescriptor) {
+          console.info(`[deliverLoad] Persisting active effect: cardId=${eventCardId} gameId=${gameId}`);
+          await activeEffectManager.addActiveEffect(
+            gameId,
+            deliverEventResult.persistentEffectDescriptor,
+            deliverEventResult.cardType,
+            deliverEventResult.perPlayerEffects,
+            client,
+          );
+        }
         demandDeckService.discardEventCard(eventCardId);
         newDrawResult = demandDeckService.drawCard();
       }
@@ -1756,7 +1880,17 @@ export class PlayerService {
       if (result.type === 'event') {
         // Process the event card via EventCardService (replaces Project 1 discard stub)
         console.info(`[discardHandCore] Drew event card ${result.card.id} — processing via EventCardService`);
-        await EventCardService.processEventCard(gameId, result.card, playerId, client);
+        const discardEventResult = await EventCardService.processEventCard(gameId, result.card, playerId, client);
+        if (discardEventResult.persistentEffectDescriptor) {
+          console.info(`[discardHandCore] Persisting active effect: cardId=${result.card.id} gameId=${gameId}`);
+          await activeEffectManager.addActiveEffect(
+            gameId,
+            discardEventResult.persistentEffectDescriptor,
+            discardEventResult.cardType,
+            discardEventResult.perPlayerEffects,
+            client,
+          );
+        }
         demandDeckService.discardEventCard(result.card.id);
         discardedEventIds.push(result.card.id);
         continue;
