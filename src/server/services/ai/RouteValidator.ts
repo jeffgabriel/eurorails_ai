@@ -326,6 +326,9 @@ export class RouteValidator {
         if (trackCost > runningCash) {
           v.feasible = false;
           v.error = `Cumulative budget exceeded: need ~${trackCost}M track to reach ${stop.city}, only ~${runningCash}M remaining after prior stops.`;
+          // JIRA-211: stop is infeasible — bot will not visit it, so its cost must
+          // not poison the running budget for downstream stops.
+          continue;
         }
         runningCash -= trackCost;
       } else {
@@ -334,6 +337,8 @@ export class RouteValidator {
         if (trackCost > runningCash) {
           v.feasible = false;
           v.error = `Cumulative budget exceeded: need ~${trackCost}M track to reach ${stop.city}, only ~${runningCash}M remaining after prior stops.`;
+          // JIRA-211: same guard — skip runningCash mutation for infeasible stop.
+          continue;
         }
         runningCash -= trackCost;
         runningCash += stop.payment ?? demand?.payout ?? 0;

@@ -680,6 +680,84 @@ describe('RouteValidator', () => {
       expect(result.prunedRoute).toBeUndefined();
     });
   });
+
+  // ── JIRA-211: running-cash drain on infeasible stops ──────────────────────────
+
+  describe('JIRA-211: runningCash not drained by infeasible stops', () => {
+    it('should prune unaffordable Antwerpen deliver and keep affordable Warszawa pickup + Milano deliver', () => {
+      // Game scenario from JIRA-211 (game b1dc793c T13):
+      //   bot.money = 27M, bot.loads = ['Labor']
+      //   Stop 1: deliver Labor @ Antwerpen — needs 36M track, only 27M → infeasible
+      //   Stop 2: pickup Ham @ Warszawa — needs 4M track
+      //   Stop 3: deliver Ham @ Milano — needs 19M track, payout 26M
+      //
+      // Bug: without the fix, infeasible Antwerpen stop drained runningCash by 36M
+      // then credited 26M payout, leaving only 27-36+26=17M for Warszawa (ok) but
+      // then 17-4-19=-6M for Milano → false rejection of Milano.
+      //
+      // Fix: infeasible stop is skipped entirely — runningCash stays at 27M.
+      // Warszawa: 27-4 = 23M remaining. Milano: 23M ≥ 19M → feasible.
+      // The error message must report "27M" (actual cash), NOT "13M" (bug's phantom value).
+
+      const laborDemand = makeDemand({
+        cardIndex: 91,
+        loadType: 'Labor',
+        supplyCity: 'OnTrain',
+        deliveryCity: 'Antwerpen',
+        payout: 26,
+        isLoadOnTrain: true,
+        isSupplyOnNetwork: true,
+        isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 0,
+        estimatedTrackCostToDelivery: 36,
+      });
+
+      const hamDemand = makeDemand({
+        cardIndex: 53,
+        loadType: 'Ham',
+        supplyCity: 'Warszawa',
+        deliveryCity: 'Milano',
+        payout: 26,
+        isSupplyOnNetwork: false,
+        isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 4,
+        estimatedTrackCostToDelivery: 19,
+      });
+
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Labor', city: 'Antwerpen', demandCardId: 91, payment: 26 },
+          { action: 'pickup', loadType: 'Ham', city: 'Warszawa' },
+          { action: 'deliver', loadType: 'Ham', city: 'Milano', demandCardId: 53, payment: 26 },
+        ],
+      });
+
+      const context = makeContext({ demands: [laborDemand, hamDemand] });
+      const snapshot = makeSnapshot(27);
+      snapshot.bot.loads = ['Labor'];
+
+      const result = RouteValidator.validate(route, context, snapshot);
+
+      // Route is valid — Warszawa pickup + Milano deliver survive after Antwerpen pruned
+      expect(result.valid).toBe(true);
+      expect(result.prunedRoute).toBeDefined();
+
+      // Pruned route contains exactly the two affordable stops
+      const stops = result.prunedRoute!.stops;
+      expect(stops).toHaveLength(2);
+      expect(stops[0]).toMatchObject({ action: 'pickup', loadType: 'Ham', city: 'Warszawa' });
+      expect(stops[1]).toMatchObject({ action: 'deliver', loadType: 'Ham', city: 'Milano' });
+
+      // Antwerpen budget error appears — with actual cash (27M), NOT the bug's phantom value (13M)
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain('Antwerpen');
+      expect(result.errors[0]).toContain('27M');
+      expect(result.errors[0]).not.toContain('13M');
+
+      // Milano is feasible — no error for it
+      expect(result.errors.every(e => !e.includes('Milano'))).toBe(true);
+    });
+  });
 });
 
 // ── JIRA-181: Schema enum tests (standalone) ────────────────────────────────
