@@ -901,6 +901,9 @@ export class PlayerService {
           if (restriction.type === 'no_pickup_delivery_in_zone') {
             const zoneSet = new Set(restriction.zone);
             if (cityKey && zoneSet.has(cityKey)) {
+              console.warn(
+                `[PlayerService] Delivery rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${city} cityKey=${cityKey}`,
+              );
               throw new Error(
                 `Delivery blocked by active event (Strike): city ${city} is within the coastal strike zone`,
               );
@@ -1230,6 +1233,9 @@ export class PlayerService {
           // Zone membership alone is sufficient — no need to re-check terrain type.
           const zoneSet = new Set(restriction.zone);
           if (zoneSet.has(destKey)) {
+            console.warn(
+              `[PlayerService] Movement rejected by event restriction: type=blocked_terrain gameId=${gameId} playerId=${playerId} destKey=${destKey}`,
+            );
             throw new Error(
               `Movement blocked by active event (Snow): destination ${destKey} is in the blocked terrain zone`,
             );
@@ -1237,6 +1243,9 @@ export class PlayerService {
         }
         if (restriction.type === 'no_movement_on_player_rail' && restriction.targetPlayerId === playerId) {
           // The drawing player cannot move on their own rail this turn (Rail Strike #123)
+          console.warn(
+            `[PlayerService] Movement rejected by event restriction: type=no_movement_on_player_rail gameId=${gameId} playerId=${playerId}`,
+          );
           throw new Error(
             `Movement blocked by active event (Rail Strike): player ${playerId} cannot move on their own track this turn`,
           );
@@ -2375,6 +2384,9 @@ export class PlayerService {
           if (restriction.type === 'no_pickup_delivery_in_zone') {
             const zoneSet = new Set(restriction.zone);
             if (cityKey && zoneSet.has(cityKey)) {
+              console.warn(
+                `[PlayerService] Pickup rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${cityName} cityKey=${cityKey}`,
+              );
               throw new Error(
                 `Pickup blocked by active event (Strike): city ${cityName} is within the coastal strike zone`,
               );
@@ -2529,6 +2541,9 @@ export class PlayerService {
           for (const seg of newSegments) {
             const destKey = `${seg.to.row},${seg.to.col}`;
             if (zoneSet.has(destKey) && restriction.blockedTerrain.includes(seg.to.terrain)) {
+              console.warn(
+                `[PlayerService] Build rejected by event restriction: type=blocked_terrain gameId=${gameId} playerId=${playerId} destKey=${destKey} terrain=${TerrainType[seg.to.terrain]}`,
+              );
               throw new Error(
                 `Build blocked by active event: destination milepost ${destKey} has blocked terrain (${TerrainType[seg.to.terrain]}) in restricted zone`,
               );
@@ -2536,6 +2551,9 @@ export class PlayerService {
           }
         }
         if (restriction.type === 'no_build_for_player' && restriction.targetPlayerId === playerId) {
+          console.warn(
+            `[PlayerService] Build rejected by event restriction: type=no_build_for_player gameId=${gameId} playerId=${playerId}`,
+          );
           throw new Error(
             `Build blocked by active event (Rail Strike): player ${playerId} cannot build track this turn`,
           );
@@ -2551,6 +2569,9 @@ export class PlayerService {
           if (riverEdgeKeys) {
             for (const seg of newSegments) {
               if (segmentCrossesRiver(seg, riverEdgeKeys)) {
+                console.warn(
+                  `[PlayerService] Build rejected by event restriction: type=flood_rebuild gameId=${gameId} playerId=${playerId} river=${effect.floodedRiver}`,
+                );
                 throw new Error(
                   `Build blocked: cannot rebuild track across the ${effect.floodedRiver} river while Flood event is active`,
                 );
