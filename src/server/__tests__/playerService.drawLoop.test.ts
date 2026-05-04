@@ -103,6 +103,33 @@ function persistentResult(cardId: number, descriptor = { cardId, drawingPlayerId
   };
 }
 
+/** EventCardResult for Flood with floodedRiver */
+function floodPersistentResult(cardId: number, riverName: string, descriptor = { cardId, drawingPlayerId: 'p1', drawingPlayerIndex: 0, expiresAfterTurnNumber: 2, affectedZone: [] as string[] }) {
+  return {
+    cardId,
+    cardType: EventCardType.Flood,
+    drawingPlayerId: 'p1',
+    affectedZone: [] as string[],
+    perPlayerEffects: [],
+    floodSegmentsRemoved: [],
+    persistentEffectDescriptor: descriptor,
+    floodedRiver: riverName,
+  };
+}
+
+function floodEventCardResult(id: number) {
+  return {
+    type: 'event' as const,
+    card: {
+      id,
+      type: EventCardType.Flood,
+      title: 'Flood!',
+      description: 'Test flood event',
+      effectConfig: { type: EventCardType.Flood, river: 'Rhine' },
+    },
+  };
+}
+
 /** EventCardResult WITHOUT persistentEffectDescriptor (e.g. ExcessProfitTax) */
 function nonPersistentResult(cardId: number) {
   return {
@@ -150,6 +177,7 @@ describe('PlayerService.fulfillDemand — draw loop addActiveEffect', () => {
       EventCardType.Strike,
       [],
       expect.anything(), // client
+      undefined, // floodedRiver
     );
   });
 
@@ -178,6 +206,26 @@ describe('PlayerService.fulfillDemand — draw loop addActiveEffect', () => {
     await PlayerService.fulfillDemand(gameId, playerId, 'Paris', 'Coal', cardId);
 
     expect(mockAddActiveEffect).toHaveBeenCalledTimes(2);
+  });
+
+  it('should pass floodedRiver to addActiveEffect for Flood events', async () => {
+    const descriptor = { cardId: 133, drawingPlayerId: playerId, drawingPlayerIndex: 0, expiresAfterTurnNumber: 2, affectedZone: [] as string[] };
+    mockProcessEventCard.mockResolvedValue(floodPersistentResult(133, 'Rhine', descriptor));
+    (demandDeckService.drawCard as jest.Mock)
+      .mockReturnValueOnce(floodEventCardResult(133))
+      .mockReturnValueOnce(demandResult(99));
+
+    await PlayerService.fulfillDemand(gameId, playerId, 'Paris', 'Coal', cardId);
+
+    expect(mockAddActiveEffect).toHaveBeenCalledTimes(1);
+    expect(mockAddActiveEffect).toHaveBeenCalledWith(
+      gameId,
+      descriptor,
+      EventCardType.Flood,
+      [],
+      expect.anything(), // client
+      'Rhine',
+    );
   });
 
   it('should still draw until demand card after persisting effects', async () => {
@@ -230,6 +278,7 @@ describe('PlayerService.discardHandForPlayer — draw loop addActiveEffect', () 
       EventCardType.Strike,
       [],
       expect.anything(),
+      undefined, // floodedRiver
     );
   });
 
@@ -262,5 +311,104 @@ describe('PlayerService.discardHandForPlayer — draw loop addActiveEffect', () 
     await PlayerService.discardHandForPlayer(gameId, playerId);
 
     expect(mockAddActiveEffect).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── deliverLoadForUser draw loop ────────────────────────────────────────────
+
+describe('PlayerService.deliverLoadForUser — draw loop addActiveEffect', () => {
+  const gameId = 'game-1';
+  const userId = 'user-1';
+  const playerId = 'player-1';
+  const cardId = 5;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockClient.query.mockImplementation((sql: string, params?: any[]) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return Promise.resolve();
+      // Player SELECT FOR UPDATE
+      if (sql.includes('SELECT id, money') && sql.includes('user_id')) {
+        return Promise.resolve({
+          rows: [{
+            id: playerId,
+            money: 100,
+            debtOwed: 0,
+            hand: [cardId, 2, 3],
+            loads: ['Coal'],
+            turnNumber: 1,
+          }],
+        });
+      }
+      // Game current_player_index
+      if (sql.includes('current_player_index') && sql.includes('games')) {
+        return Promise.resolve({ rows: [{ current_player_index: 0 }] });
+      }
+      // Active player lookup
+      if (sql.includes('ORDER BY created_at ASC LIMIT 1 OFFSET')) {
+        return Promise.resolve({ rows: [{ id: playerId }] });
+      }
+      if (sql.includes('UPDATE players')) return Promise.resolve({ rows: [] });
+      return Promise.resolve({ rows: [] });
+    });
+
+    // Mock getCard to return a valid demand card
+    (demandDeckService.getCard as jest.Mock).mockReturnValue({
+      id: cardId,
+      demands: [{ city: 'Berlin', resource: 'Coal', payment: 10 }],
+    });
+
+    // Mock getPickupDeliveryRestrictions to return empty
+    (activeEffectManager.getPickupDeliveryRestrictions as jest.Mock).mockResolvedValue([]);
+  });
+
+  it('should call addActiveEffect when processEventCard returns persistentEffectDescriptor', async () => {
+    const descriptor = { cardId: 121, drawingPlayerId: playerId, drawingPlayerIndex: 0, expiresAfterTurnNumber: 2, affectedZone: [] };
+    mockProcessEventCard.mockResolvedValue(persistentResult(121, descriptor));
+    (demandDeckService.drawCard as jest.Mock)
+      .mockReturnValueOnce(eventCardResult(121))
+      .mockReturnValueOnce(demandResult(99));
+
+    await PlayerService.deliverLoadForUser(gameId, userId, 'Berlin', 'Coal' as any, cardId);
+
+    expect(mockAddActiveEffect).toHaveBeenCalledTimes(1);
+    expect(mockAddActiveEffect).toHaveBeenCalledWith(
+      gameId,
+      descriptor,
+      EventCardType.Strike,
+      [],
+      expect.anything(),
+      undefined,
+    );
+  });
+
+  it('should NOT call addActiveEffect when persistentEffectDescriptor is absent', async () => {
+    mockProcessEventCard.mockResolvedValue(nonPersistentResult(124));
+    (demandDeckService.drawCard as jest.Mock)
+      .mockReturnValueOnce(eventCardResult(124))
+      .mockReturnValueOnce(demandResult(99));
+
+    await PlayerService.deliverLoadForUser(gameId, userId, 'Berlin', 'Coal' as any, cardId);
+
+    expect(mockAddActiveEffect).not.toHaveBeenCalled();
+  });
+
+  it('should pass floodedRiver to addActiveEffect for Flood events', async () => {
+    const descriptor = { cardId: 133, drawingPlayerId: playerId, drawingPlayerIndex: 0, expiresAfterTurnNumber: 2, affectedZone: [] as string[] };
+    mockProcessEventCard.mockResolvedValue(floodPersistentResult(133, 'Danube', descriptor));
+    (demandDeckService.drawCard as jest.Mock)
+      .mockReturnValueOnce(floodEventCardResult(133))
+      .mockReturnValueOnce(demandResult(99));
+
+    await PlayerService.deliverLoadForUser(gameId, userId, 'Berlin', 'Coal' as any, cardId);
+
+    expect(mockAddActiveEffect).toHaveBeenCalledTimes(1);
+    expect(mockAddActiveEffect).toHaveBeenCalledWith(
+      gameId,
+      descriptor,
+      EventCardType.Flood,
+      [],
+      expect.anything(),
+      'Danube',
+    );
   });
 });

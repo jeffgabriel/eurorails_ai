@@ -14,7 +14,7 @@ import { getFerryEdges } from "../../shared/services/majorCityGroups";
 import { TrackSegment } from "../../shared/types/TrackTypes";
 import { EventCardService } from "./EventCardService";
 import { activeEffectManager } from "./ActiveEffectManager";
-import { EventCardType } from "../../shared/types/EventCard";
+import { EventCardType, EventCardResult } from "../../shared/types/EventCard";
 
 type TurnActionDeliver = {
   kind: "deliver";
@@ -50,6 +50,29 @@ interface PlayerRow {
 }
 
 export class PlayerService {
+  /**
+   * Persist an active effect produced by an event card draw.
+   * Extracted to eliminate duplication across fulfillDemand, deliverLoad, and discardHandCore.
+   */
+  private static async persistEventEffect(
+    gameId: string,
+    eventResult: EventCardResult,
+    client: import('pg').PoolClient,
+    logPrefix: string,
+  ): Promise<void> {
+    if (eventResult.persistentEffectDescriptor) {
+      console.info(`[${logPrefix}] Persisting active effect: cardId=${eventResult.cardId} gameId=${gameId}`);
+      await activeEffectManager.addActiveEffect(
+        gameId,
+        eventResult.persistentEffectDescriptor,
+        eventResult.cardType,
+        eventResult.perPlayerEffects,
+        client,
+        eventResult.floodedRiver,
+      );
+    }
+  }
+
   /**
    * Return the canonical milepost key ("row,col") for a city name by looking
    * up the grid. Returns null if the city is not found.
@@ -892,16 +915,7 @@ export class PlayerService {
       while (drawResult !== null && drawResult.type === 'event') {
         console.info(`[fulfillDemand] Drew event card ${drawResult.card.id} — processing via EventCardService`);
         const eventResult = await EventCardService.processEventCard(gameId, drawResult.card, playerId, client);
-        if (eventResult.persistentEffectDescriptor) {
-          console.info(`[fulfillDemand] Persisting active effect: cardId=${drawResult.card.id} gameId=${gameId}`);
-          await activeEffectManager.addActiveEffect(
-            gameId,
-            eventResult.persistentEffectDescriptor,
-            eventResult.cardType,
-            eventResult.perPlayerEffects,
-            client,
-          );
-        }
+        await PlayerService.persistEventEffect(gameId, eventResult, client, 'fulfillDemand');
         demandDeckService.discardEventCard(drawResult.card.id);
         drawResult = demandDeckService.drawCard();
       }
@@ -1063,16 +1077,7 @@ export class PlayerService {
         discardedEventCardIds.push(eventCardId);
         console.info(`[deliverLoad] Drew event card ${eventCardId} — processing via EventCardService`);
         const deliverEventResult = await EventCardService.processEventCard(gameId, newDrawResult.card, playerId, client);
-        if (deliverEventResult.persistentEffectDescriptor) {
-          console.info(`[deliverLoad] Persisting active effect: cardId=${eventCardId} gameId=${gameId}`);
-          await activeEffectManager.addActiveEffect(
-            gameId,
-            deliverEventResult.persistentEffectDescriptor,
-            deliverEventResult.cardType,
-            deliverEventResult.perPlayerEffects,
-            client,
-          );
-        }
+        await PlayerService.persistEventEffect(gameId, deliverEventResult, client, 'deliverLoad');
         demandDeckService.discardEventCard(eventCardId);
         newDrawResult = demandDeckService.drawCard();
       }
@@ -1881,16 +1886,7 @@ export class PlayerService {
         // Process the event card via EventCardService (replaces Project 1 discard stub)
         console.info(`[discardHandCore] Drew event card ${result.card.id} — processing via EventCardService`);
         const discardEventResult = await EventCardService.processEventCard(gameId, result.card, playerId, client);
-        if (discardEventResult.persistentEffectDescriptor) {
-          console.info(`[discardHandCore] Persisting active effect: cardId=${result.card.id} gameId=${gameId}`);
-          await activeEffectManager.addActiveEffect(
-            gameId,
-            discardEventResult.persistentEffectDescriptor,
-            discardEventResult.cardType,
-            discardEventResult.perPlayerEffects,
-            client,
-          );
-        }
+        await PlayerService.persistEventEffect(gameId, discardEventResult, client, 'discardHandCore');
         demandDeckService.discardEventCard(result.card.id);
         discardedEventIds.push(result.card.id);
         continue;
