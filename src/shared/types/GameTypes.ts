@@ -590,8 +590,13 @@ export interface LLMStrategyConfig {
     /** If omitted, uses LLM_DEFAULT_MODELS[provider][skillLevel] */
     model?: string;
     apiKey: string;
-    /** Auth mode for Anthropic provider. 'bearer' uses OAuth token; 'api-key' uses x-api-key (default). */
-    authMode?: 'api-key' | 'bearer';
+    /**
+     * Credential mode for Anthropic provider.
+     * 'api-key'     — uses x-api-key header against api.anthropic.com (default, CI/prod).
+     * 'subscription' — routes through @anthropic-ai/claude-agent-sdk using local
+     *                  ~/.claude/.credentials.json; opt-in via ANTHROPIC_USE_CLAUDE_CODE=1.
+     */
+    credentialMode?: 'api-key' | 'subscription';
     /** Timeout in ms for LLM API calls. Default 30000 (30s). */
     timeoutMs: number;
     /** Number of retries with minimal prompt before heuristic fallback. Default 1. */

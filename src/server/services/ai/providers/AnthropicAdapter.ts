@@ -1,16 +1,15 @@
 import { ProviderResponse } from '../../../../shared/types/GameTypes';
 import { ProviderAdapter, ThinkingConfig } from './ProviderAdapter';
 import { ProviderTimeoutError, ProviderAPIError, ProviderAuthError } from './errors';
+import { stripCodeFences } from './jsonExtraction';
 
 export class AnthropicAdapter implements ProviderAdapter {
   private readonly credential: string;
   private readonly timeoutMs: number;
-  private readonly authMode: 'api-key' | 'bearer';
 
-  constructor(credential: string, timeoutMs: number = 15000, authMode: 'api-key' | 'bearer' = 'api-key') {
+  constructor(credential: string, timeoutMs: number = 15000) {
     this.credential = credential;
     this.timeoutMs = timeoutMs;
-    this.authMode = authMode;
   }
 
   async chat(request: {
@@ -116,13 +115,10 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   /**
    * Strip markdown code fences from a string.
-   * Handles ` ```json\n...\n``` ` and ` ```\n...\n``` ` formats.
-   * Returns the input unchanged if no fences are detected.
+   * Delegates to the shared jsonExtraction helper.
    */
   static stripCodeFences(text: string): string {
-    // Strip leading fence: ```json\n or ```\n
-    const stripped = text.replace(/^```(?:json)?\s*\n/, '').replace(/\n```\s*$/, '');
-    return stripped;
+    return stripCodeFences(text);
   }
 
   private async executeRequest(
@@ -130,16 +126,10 @@ export class AnthropicAdapter implements ProviderAdapter {
     signal: AbortSignal,
     isHaiku: boolean = false,
   ): Promise<{ response?: ProviderResponse; error?: { status: number; body: string } }> {
-    // Build auth header: bearer mode sends Authorization header; api-key mode sends x-api-key.
-    // Never send both simultaneously.
-    const authHeader: Record<string, string> = this.authMode === 'bearer'
-      ? { 'Authorization': `Bearer ${this.credential}` }
-      : { 'x-api-key': this.credential };
-
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        ...authHeader,
+        'x-api-key': this.credential,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },

@@ -1208,15 +1208,22 @@ export class AIStrategyEngine {
 
   /**
    * Resolve the Anthropic credential from environment variables.
-   * Precedence: ANTHROPIC_AUTH_TOKEN (bearer) → ANTHROPIC_API_KEY (api-key) → null.
+   * Precedence:
+   *   1. ANTHROPIC_USE_CLAUDE_CODE=1 → subscription mode (no API key needed).
+   *   2. ANTHROPIC_API_KEY set        → api-key mode.
+   *   3. Neither set                  → null (no LLM).
+   *
+   * ANTHROPIC_USE_CLAUDE_CODE is a strict opt-in: only the literal string '1'
+   * activates subscription mode. Any other value (e.g. 'true') is ignored.
+   * This prevents accidental activation in CI or production environments.
+   *
    * Centralised here so hasLLMApiKey and createBrain share the same resolution logic.
    */
   private static resolveAnthropicCredential():
-    | { credential: string; mode: 'api-key' | 'bearer' }
+    | { credential: string; mode: 'api-key' | 'subscription' }
     | null {
-    const authToken = process.env['ANTHROPIC_AUTH_TOKEN'];
-    if (authToken) {
-      return { credential: authToken, mode: 'bearer' };
+    if (process.env['ANTHROPIC_USE_CLAUDE_CODE'] === '1') {
+      return { credential: '', mode: 'subscription' };
     }
     const apiKey = process.env['ANTHROPIC_API_KEY'];
     if (apiKey) {
@@ -1243,12 +1250,12 @@ export class AIStrategyEngine {
     const skillLevel = (botConfig.skillLevel as BotSkillLevel) ?? BotSkillLevel.Medium;
 
     let apiKey: string;
-    let authMode: 'api-key' | 'bearer' | undefined;
+    let credentialMode: 'api-key' | 'subscription' | undefined;
 
     if (provider === LLMProvider.Anthropic) {
       const resolved = AIStrategyEngine.resolveAnthropicCredential();
       apiKey = resolved?.credential ?? '';
-      authMode = resolved?.mode;
+      credentialMode = resolved?.mode;
     } else {
       const envKey = AIStrategyEngine.ENV_KEY_MAP[provider];
       apiKey = process.env[envKey] ?? '';
@@ -1259,7 +1266,7 @@ export class AIStrategyEngine {
       provider,
       model: botConfig.model,
       apiKey,
-      authMode,
+      credentialMode,
       timeoutMs: 30000,
       maxRetries: 1,
     });

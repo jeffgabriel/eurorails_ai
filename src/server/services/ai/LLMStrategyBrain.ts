@@ -25,6 +25,7 @@ import { getRoutePlanningPrompt, getCargoConflictPrompt, getUpgradeBeforeDropPro
 import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
 import { OpenAIAdapter } from './providers/OpenAIAdapter';
+import { ClaudeAgentSdkAdapter } from './providers/ClaudeAgentSdkAdapter';
 import { ProviderAdapter } from './providers/ProviderAdapter';
 import { LoggingProviderAdapter } from './LoggingProviderAdapter';
 import { ProviderAuthError } from './providers/errors';
@@ -101,15 +102,15 @@ export class LLMStrategyBrain {
     // Resolve model from config or default lookup
     this.model = config.model ?? LLM_DEFAULT_MODELS[config.provider][config.skillLevel];
 
-    // Log auth mode once at construction time for observability (never log credential value)
+    // Log credential mode once at construction time for observability (never log credential value)
     if (config.provider === LLMProvider.Anthropic) {
-      const resolvedAuthMode = config.authMode ?? 'api-key';
-      console.log(`[LLMStrategyBrain] anthropic auth_mode=${resolvedAuthMode}`);
+      const resolvedCredentialMode = config.credentialMode ?? 'api-key';
+      console.log(`[LLMStrategyBrain] anthropic credential_mode=${resolvedCredentialMode}`);
     }
 
     // Create provider adapter wrapped with logging decorator
     this.adapter = new LoggingProviderAdapter(
-      LLMStrategyBrain.createAdapter(config.provider, config.apiKey, config.timeoutMs, config.authMode),
+      LLMStrategyBrain.createAdapter(config.provider, config.apiKey, config.timeoutMs, config.credentialMode),
     );
   }
 
@@ -428,19 +429,22 @@ export class LLMStrategyBrain {
 
   /**
    * Create the appropriate provider adapter.
-   * authMode is only used for the Anthropic provider; other providers ignore it.
+   * credentialMode is only used for the Anthropic provider; other providers ignore it.
+   * When credentialMode === 'subscription', ClaudeAgentSdkAdapter is used (no apiKey needed).
+   * Otherwise, AnthropicAdapter is used with the provided apiKey.
    */
   private static createAdapter(
     provider: LLMProvider,
     apiKey: string,
     timeoutMs: number,
-    authMode?: 'api-key' | 'bearer',
+    credentialMode?: 'api-key' | 'subscription',
   ): ProviderAdapter {
     switch (provider) {
       case LLMProvider.Anthropic:
-        return authMode
-          ? new AnthropicAdapter(apiKey, timeoutMs, authMode)
-          : new AnthropicAdapter(apiKey, timeoutMs);
+        if (credentialMode === 'subscription') {
+          return new ClaudeAgentSdkAdapter(timeoutMs);
+        }
+        return new AnthropicAdapter(apiKey, timeoutMs);
       case LLMProvider.Google:
         return new GoogleAdapter(apiKey, timeoutMs);
       case LLMProvider.OpenAI:

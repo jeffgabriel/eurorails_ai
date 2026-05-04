@@ -17,6 +17,7 @@ jest.mock('../../services/ai/LLMTranscriptLogger', () => ({
 jest.mock('../../services/ai/providers/AnthropicAdapter');
 jest.mock('../../services/ai/providers/GoogleAdapter');
 jest.mock('../../services/ai/providers/OpenAIAdapter');
+jest.mock('../../services/ai/providers/ClaudeAgentSdkAdapter');
 
 // Mock ActionResolver
 jest.mock('../../services/ai/ActionResolver', () => ({
@@ -71,6 +72,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
 // Import after mocking
 import { AnthropicAdapter } from '../../services/ai/providers/AnthropicAdapter';
 import { GoogleAdapter } from '../../services/ai/providers/GoogleAdapter';
+import { ClaudeAgentSdkAdapter } from '../../services/ai/providers/ClaudeAgentSdkAdapter';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { ResponseParser } from '../../services/ai/ResponseParser';
 import { RouteValidator } from '../../services/ai/RouteValidator';
@@ -802,30 +804,8 @@ describe('LLMStrategyBrain', () => {
       expect(AnthropicAdapter).toHaveBeenCalledWith('anthropic-key', 5000);
     });
 
-    // AC8: bearer mode — auth-mode log line emitted at construction, contains 'bearer', not token value
-    it('AC8: authMode=bearer emits exactly one log line containing "bearer" and NOT the token value', () => {
-      const logSpy = jest.spyOn(console, 'log').mockImplementation();
-
-      new LLMStrategyBrain({
-        skillLevel: BotSkillLevel.Medium,
-        provider: LLMProvider.Anthropic,
-        apiKey: 'tok-SECRET',
-        authMode: 'bearer',
-        timeoutMs: 5000,
-        maxRetries: 1,
-      });
-
-      const bearerLogs = logSpy.mock.calls.filter(
-        (call) => typeof call[0] === 'string' && call[0].includes('bearer'),
-      );
-      expect(bearerLogs).toHaveLength(1);
-      expect(bearerLogs[0][0]).not.toContain('tok-SECRET');
-
-      logSpy.mockRestore();
-    });
-
-    // AC8: api-key mode — log line emitted at construction, contains 'api-key', not credential
-    it('AC8: authMode=api-key emits exactly one log line containing "api-key"', () => {
+    // credential_mode log: api-key mode emits credential_mode=api-key at construction
+    it('credentialMode=api-key: emits exactly one log line containing "credential_mode=api-key"', () => {
       const logSpy = jest.spyOn(console, 'log').mockImplementation();
 
       new LLMStrategyBrain({
@@ -836,27 +816,42 @@ describe('LLMStrategyBrain', () => {
         maxRetries: 1,
       });
 
-      const apiKeyLogs = logSpy.mock.calls.filter(
-        (call) => typeof call[0] === 'string' && call[0].includes('api-key'),
+      const credLogs = logSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].includes('credential_mode=api-key'),
       );
-      expect(apiKeyLogs).toHaveLength(1);
-      expect(apiKeyLogs[0][0]).not.toContain('key-SECRET');
+      expect(credLogs).toHaveLength(1);
+      expect(credLogs[0][0]).not.toContain('key-SECRET');
 
       logSpy.mockRestore();
     });
 
-    // bearer mode → AnthropicAdapter called with third arg 'bearer'
-    it('authMode=bearer: AnthropicAdapter constructed with credential, timeout, and bearer mode', () => {
+    // subscription mode → ClaudeAgentSdkAdapter constructed; no AnthropicAdapter call
+    it('credentialMode=subscription: constructs ClaudeAgentSdkAdapter with timeoutMs, not AnthropicAdapter', () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      (AnthropicAdapter as jest.MockedClass<typeof AnthropicAdapter>).mockClear();
+      (ClaudeAgentSdkAdapter as jest.MockedClass<typeof ClaudeAgentSdkAdapter>).mockImplementation(
+        () => ({ chat: jest.fn() }) as unknown as ClaudeAgentSdkAdapter,
+      );
+
       new LLMStrategyBrain({
         skillLevel: BotSkillLevel.Medium,
         provider: LLMProvider.Anthropic,
-        apiKey: 'tok-XYZ',
-        authMode: 'bearer',
+        apiKey: '',
+        credentialMode: 'subscription',
         timeoutMs: 5000,
         maxRetries: 1,
       });
 
-      expect(AnthropicAdapter).toHaveBeenCalledWith('tok-XYZ', 5000, 'bearer');
+      const credLogs = logSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].includes('credential_mode=subscription'),
+      );
+      expect(credLogs).toHaveLength(1);
+      // ClaudeAgentSdkAdapter must be constructed with timeoutMs only (no apiKey)
+      expect(ClaudeAgentSdkAdapter).toHaveBeenCalledWith(5000);
+      // AnthropicAdapter must NOT be constructed in subscription mode
+      expect(AnthropicAdapter).not.toHaveBeenCalled();
+
+      logSpy.mockRestore();
     });
 
     it('should use correct default model per provider and skill level', () => {

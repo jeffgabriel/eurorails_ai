@@ -86,6 +86,11 @@ module.exports = {
         ],
       },
       transformIgnorePatterns: ['/node_modules/'],
+      // Map the ESM-only claude-agent-sdk to a CJS-compatible stub for Jest.
+      // Real usage is in production code; tests mock this at the module boundary.
+      moduleNameMapper: {
+        '^@anthropic-ai/claude-agent-sdk$': '<rootDir>/src/server/__tests__/mocks/claudeAgentSdk.mock.js',
+      },
     },
 
     // Skip integration tests in CI to avoid flaky database initialization issues
