@@ -117,7 +117,7 @@ describe('OpenAIAdapter', () => {
       });
     });
 
-    it('should not include response_format or reasoning when no optional params provided', async () => {
+    it('should not include response_format or reasoning_effort when no optional params provided', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse());
 
       await adapter.chat(makeRequest());
@@ -125,17 +125,19 @@ describe('OpenAIAdapter', () => {
       const [, options] = mockFetch.mock.calls[0];
       const body = JSON.parse(options.body);
       expect(body.response_format).toBeUndefined();
+      expect(body.reasoning_effort).toBeUndefined();
       expect(body.reasoning).toBeUndefined();
     });
 
-    it('should map effort to reasoning param', async () => {
+    it('should map effort to reasoning_effort param', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse());
 
       await adapter.chat({ ...makeRequest(), effort: 'high' });
 
       const [, options] = mockFetch.mock.calls[0];
       const body = JSON.parse(options.body);
-      expect(body.reasoning).toEqual({ effort: 'high' });
+      expect(body.reasoning_effort).toBe('high');
+      expect(body.reasoning).toBeUndefined();
     });
 
     it('should silently ignore thinking param (no OpenAI equivalent)', async () => {

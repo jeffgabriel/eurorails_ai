@@ -96,9 +96,11 @@ export class OpenAIAdapter implements ProviderAdapter {
       };
     }
 
-    // Map effort to OpenAI's reasoning parameter; ignore thinking (no OpenAI equivalent)
+    // Chat Completions API uses top-level `reasoning_effort` (string).
+    // The `reasoning: { effort }` object shape is for the Responses API only.
+    // Thinking has no OpenAI equivalent and is ignored.
     if (request.effort) {
-      body.reasoning = { effort: request.effort };
+      body.reasoning_effort = request.effort;
     }
 
     return body;
