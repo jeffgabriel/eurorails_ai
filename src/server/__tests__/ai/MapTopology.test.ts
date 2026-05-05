@@ -1,4 +1,6 @@
-import { estimateHopDistance, estimatePathCost, hexDistance, _resetCache } from '../../services/ai/MapTopology';
+import fs from 'fs';
+import path from 'path';
+import { estimateHopDistance, estimatePathCost, hexDistance, loadGridPoints, _resetCache } from '../../services/ai/MapTopology';
 import { getFerryEdges } from '../../../shared/services/majorCityGroups';
 
 describe('estimateHopDistance', () => {
@@ -129,6 +131,84 @@ describe('estimatePathCost', () => {
     const ruhrToManchester = estimatePathCost(26, 42, 13, 30);
     // At minimum: some terrain (10M) + ferry port build (4M)
     expect(ruhrToManchester).toBeGreaterThanOrEqual(14);
+  });
+});
+
+// MaxConnections override — AC2, AC3, AC4
+describe('loadGridPoints — MaxConnections override', () => {
+  afterEach(() => {
+    _resetCache();
+  });
+
+  // AC2: Kaliningrad (row=19, col=63) must have maxConnections === 1
+  it('returns maxConnections=1 for Kaliningrad (row=19, col=63)', () => {
+    const grid = loadGridPoints();
+    const kaliningrad = grid.get('19,63');
+    expect(kaliningrad).toBeDefined();
+    expect(kaliningrad!.maxConnections).toBe(1);
+  });
+
+  // AC3: Non-overridden small city must have maxConnections === undefined
+  it('returns maxConnections=undefined for a non-overridden small city', () => {
+    // Sevilla is a Small City at (row=54, col=7) — no MaxConnections in gridPoints.json
+    const grid = loadGridPoints();
+    const sevilla = grid.get('54,7');
+    expect(sevilla).toBeDefined();
+    expect(sevilla!.maxConnections).toBeUndefined();
+  });
+
+  // AC4: Malformed MaxConnections values — parsed from a synthetic fixture injected via cache bypass
+  it('emits console.warn and leaves maxConnections undefined for invalid MaxConnections values', () => {
+    // We parse a minimal synthetic JSON directly using a private test helper.
+    // Strategy: temporarily override readFileSync to return test fixture JSON,
+    // then call loadGridPoints() on a cleared cache.
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const testCases: Array<{ MaxConnections: unknown; description: string }> = [
+      { MaxConnections: 'two', description: 'string "two"' },
+      { MaxConnections: 0, description: 'integer 0' },
+      { MaxConnections: -1, description: 'integer -1' },
+    ];
+
+    for (const { MaxConnections, description } of testCases) {
+      warnSpy.mockClear();
+      _resetCache();
+
+      const fixtureData = [
+        // Invalid entry — should trigger warning and leave maxConnections unset
+        { Id: 'bad-1', Type: 'Small City', Name: 'BadCity', GridX: 5, GridY: 5, Ocean: null, MaxConnections },
+        // Valid entry — should parse normally without issue
+        { Id: 'ok-1', Type: 'Small City', Name: 'OkCity', GridX: 10, GridY: 10, Ocean: null },
+      ];
+
+      const originalReadFileSync = fs.readFileSync;
+      (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = (
+        (_filePath: unknown, _encoding: unknown) => JSON.stringify(fixtureData)
+      ) as typeof fs.readFileSync;
+
+      try {
+        const grid = loadGridPoints();
+
+        // (a) console.warn called once for the invalid entry
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toContain('[MapTopology]');
+
+        // (b) bad city has maxConnections === undefined
+        const badCity = grid.get('5,5');
+        expect(badCity).toBeDefined();
+        expect(badCity!.maxConnections).toBeUndefined();
+
+        // (c) valid entry parses normally
+        const okCity = grid.get('10,10');
+        expect(okCity).toBeDefined();
+        expect(okCity!.maxConnections).toBeUndefined();
+      } finally {
+        (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = originalReadFileSync;
+        _resetCache();
+      }
+    }
+
+    warnSpy.mockRestore();
   });
 });
 

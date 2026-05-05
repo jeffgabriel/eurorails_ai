@@ -15853,7 +15853,8 @@
     "Name": "Kaliningrad",
     "GridX": 63,
     "GridY": 19,
-    "Ocean": null
+    "Ocean": null,
+    "MaxConnections": 1
   },
   {
     "Id": "8fd39b9c-89d9-484a-a828-6c1299639d74",

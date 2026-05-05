@@ -19,6 +19,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { loadGridPoints } from './MapTopology';
 
 export interface HardGateResult {
   gate: string;
@@ -142,6 +143,21 @@ export class TurnValidator {
   }
 
   /**
+   * Returns the maximum number of players allowed to build track into the city at (row, col).
+   * Consults the gridpoint's maxConnections override first; falls back to terrain-based default.
+   * Returns null for terrain types that have no entry cap (Major City, Clear, Mountain, etc.).
+   */
+  private static cityEntryLimit(row: number, col: number, terrain: TerrainType): number | null {
+    if (terrain !== TerrainType.SmallCity && terrain !== TerrainType.MediumCity) return null;
+
+    const grid = loadGridPoints();
+    const gridPoint = grid?.get(`${row},${col}`);
+    if (gridPoint?.maxConnections !== undefined) return gridPoint.maxConnections;
+
+    return terrain === TerrainType.SmallCity ? 2 : 3;
+  }
+
+  /**
    * JIRA-203: Compute the set of grid keys ("row,col") for small and medium cities that are
    * at their player-entry cap for the given bot. Uses the same player-counting logic as
    * checkCityEntryLimit so the resolver and validator stay consistent.
@@ -149,6 +165,8 @@ export class TurnValidator {
    * A small city (limit 2) is saturated when OTHER players already have track there —
    * adding the bot would push the total above the limit.
    * A medium city (limit 3) is saturated when ≥2 other players already have track there.
+   * Cities with a per-city maxConnections override of 1 are saturated when ≥1 other player
+   * already has track there.
    *
    * This shared predicate is the single source of truth for saturation detection.
    * Call this from BuildRouteResolver/ActionResolver to pre-filter Dijkstra paths
@@ -193,9 +211,8 @@ export class TurnValidator {
       const terrain = terrainLookup.get(key);
       if (terrain === undefined) continue;
 
-      const limit = terrain === TerrainType.SmallCity ? 2
-        : terrain === TerrainType.MediumCity ? 3
-        : null;
+      const [rowStr, colStr] = key.split(',');
+      const limit = TurnValidator.cityEntryLimit(Number(rowStr), Number(colStr), terrain);
       if (limit === null) continue;
 
       // Adding the bot would make totalPlayers = playerIds.size + 1
@@ -209,17 +226,17 @@ export class TurnValidator {
     return saturated;
   }
 
-  /** Medium cities: 3 players max. Small cities: 2 players max. */
+  /** Medium cities: 3 players max. Small cities: 2 players max. Per-city override applies. */
   private static checkCityEntryLimit(steps: TurnPlan[], snapshot: WorldSnapshot): HardGateResult {
     for (const step of steps) {
       if (step.type === AIActionType.BuildTrack) {
         const buildStep = step as TurnPlanBuildTrack;
         for (const seg of buildStep.segments) {
           const terrain = seg.to.terrain;
-          if (terrain !== TerrainType.SmallCity && terrain !== TerrainType.MediumCity) continue;
+          const limit = TurnValidator.cityEntryLimit(seg.to.row, seg.to.col, terrain);
+          if (limit === null) continue;
 
           const toKey = `${seg.to.row},${seg.to.col}`;
-          const limit = terrain === TerrainType.SmallCity ? 2 : 3;
           const label = terrain === TerrainType.SmallCity ? 'small' : 'medium';
 
           // Count distinct players who already have track to this milepost
