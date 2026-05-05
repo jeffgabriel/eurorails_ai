@@ -245,4 +245,6 @@ export interface EventCardResult {
   floodSegmentsRemoved: Array<{ playerId: string; removedCount: number }>;
   /** Present for all event types that produce persistent effects */
   persistentEffectDescriptor?: ActiveEffectDescriptor;
+  /** Flood only — river name for addActiveEffect persistence */
+  floodedRiver?: string;
 }

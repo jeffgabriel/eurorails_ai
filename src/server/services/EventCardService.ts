@@ -408,6 +408,7 @@ export class EventCardService {
       perPlayerEffects,
       floodSegmentsRemoved,
       persistentEffectDescriptor: descriptor,
+      floodedRiver: effect.river,
     };
   }
 
