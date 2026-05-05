@@ -129,13 +129,18 @@ export interface BotTurnResult {
   trainCapacity?: number;
   demandCards?: Array<{ loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number }>;
   // JIRA-210B: Trip planning results — single-route shape
+  // JIRA-217: Extended with source/optimizer diagnostic fields
   tripPlanning?: {
     trigger: string;
     stops?: string[];
     llmLatencyMs: number;
     llmTokens: { input: number; output: number };
     llmReasoning: string;
-    fallbackReason?: 'no_actionable_options' | 'keep_current_plan';
+    fallbackReason?: 'no_actionable_options' | 'keep_current_plan' | 'invalid_id' | 'llm_failure' | 'single_candidate';
+    source?: 'selector' | 'single_candidate' | 'fallback_top_ev' | 'legacy_generator';
+    candidateCount?: number;
+    chosenCandidateId?: number;
+    rationale?: string;
   };
   // JIRA-126: Turn validation results
   turnValidation?: {
@@ -878,6 +883,7 @@ export class AIStrategyEngine {
         secondaryDelivery: secondaryDeliveryLog,
         activeRoute: activeRoute ?? null,
         // JIRA-210B: Trip planning result — single-route shape (no candidates[], no chosen)
+        // JIRA-217: Extended with source/optimizer diagnostic fields
         tripPlanning: tripPlanResult ? {
           trigger: 'no-active-route',
           stops: tripPlanResult.route?.stops.map(s => `${s.action}(${s.loadType}@${s.city})`),
@@ -886,6 +892,10 @@ export class AIStrategyEngine {
           llmReasoning: tripPlanResult.route?.reasoning ?? '',
           ...(tripPlanResult.selection ? {
             fallbackReason: tripPlanResult.selection.fallbackReason,
+            source: tripPlanResult.selection.source,
+            candidateCount: tripPlanResult.selection.candidateCount,
+            chosenCandidateId: tripPlanResult.selection.chosenCandidateId,
+            rationale: tripPlanResult.selection.rationale,
           } : {}),
         } : undefined,
         // JIRA-148: Initial build planner evaluated options for diagnostics

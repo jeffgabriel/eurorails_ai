@@ -113,7 +113,7 @@ export interface GameTurnLogEntry {
     deadLoadsDropped?: string[];
   };
 
-  // Trip Planning (JIRA-126, JIRA-210B: single-route shape)
+  // Trip Planning (JIRA-126, JIRA-210B: single-route shape, JIRA-217: optimizer+selector diagnostic)
   tripPlanning?: {
     trigger: string;
     /** Single-route stops rendered as action(load@city) strings. */
@@ -121,8 +121,16 @@ export interface GameTurnLogEntry {
     llmLatencyMs: number;
     llmTokens: { input: number; output: number };
     llmReasoning: string;
-    /** JIRA-210B: Why the short-circuit path was taken. Only present when no_actionable_options or keep_current_plan fired. */
-    fallbackReason?: 'no_actionable_options' | 'keep_current_plan';
+    /** JIRA-210B: Why the short-circuit path was taken. */
+    fallbackReason?: 'no_actionable_options' | 'keep_current_plan' | 'invalid_id' | 'llm_failure' | 'single_candidate';
+    /** JIRA-217: Which path produced the result. */
+    source?: 'selector' | 'single_candidate' | 'fallback_top_ev' | 'legacy_generator';
+    /** JIRA-217: Number of optimizer candidates. */
+    candidateCount?: number;
+    /** JIRA-217: ID of the chosen candidate. */
+    chosenCandidateId?: number;
+    /** JIRA-217: LLM rationale for the selection. */
+    rationale?: string;
   };
 
   // Turn Validation (JIRA-126)

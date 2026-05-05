@@ -287,12 +287,12 @@ describe('Bot Turn + Initial Build Flow (Integration)', () => {
       await jest.advanceTimersByTimeAsync(1500);
       await promise;
 
-      // Verify turn number increment (now at index 4, after stall guard query at index 2)
+      // Verify turn number increment (now at index 4, not 3)
       const incrementCall = mockQuery.mock.calls[4];
       expect(incrementCall[0]).toContain('current_turn_number');
       expect(incrementCall[1]).toEqual([bot1Id]);
 
-      // Verify build cost reset (now at index 5)
+      // Verify build cost reset (now at index 5, not 4)
       const resetCall = mockQuery.mock.calls[5];
       expect(resetCall[0]).toContain('turn_build_cost = 0');
       expect(resetCall[1]).toEqual([gameId, bot1Id]);

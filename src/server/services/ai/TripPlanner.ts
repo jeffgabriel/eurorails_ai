@@ -6,6 +6,8 @@
  * it into a StrategicRoute. Falls back to planRoute on repeated failure.
  *
  * JIRA-210B: Collapsed from multi-candidate selection to single-route output.
+ * JIRA-217: Layers MultiDemandTripOptimizer + TripCandidateSelector in front
+ *           of the existing LLM-as-generator path (now called legacyLLMGenerate).
  */
 
 import {
@@ -30,6 +32,8 @@ import { ResponseParser } from './ResponseParser';
 import { TRIP_PLAN_SCHEMA } from './schemas';
 import { getTripPlanningPrompt } from './prompts/systemPrompts';
 import type { TripPlannerSelectionDiagnostic } from './LLMTranscriptLogger';
+import { generateCandidates, OptimizerResult } from './MultiDemandTripOptimizer';
+import { TripCandidateSelector, SelectorResult } from './TripCandidateSelector';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -52,12 +56,21 @@ export interface TripPlanResult {
   systemPrompt?: string;
   userPrompt?: string;
   /**
-   * JIRA-210B: Present ONLY when one of the two JIRA-207B short-circuit paths fired.
-   * 'no_actionable_options' — no affordable demand options to plan from.
-   * 'keep_current_plan'     — existing plan is still valid; no replan needed.
+   * JIRA-210B: Short-circuit paths + JIRA-217: optimizer/selector diagnostic.
+   * - 'no_actionable_options' — no affordable demand options to plan from.
+   * - 'keep_current_plan'     — existing plan is still valid; no replan needed.
+   * - 'selector'              — JIRA-217: LLM selector picked among ≥2 optimizer candidates.
+   * - 'single_candidate'      — JIRA-217: only 1 optimizer candidate; returned directly.
+   * - 'fallback_top_ev'       — JIRA-217: selector returned top-by-EV due to fallback.
+   * - 'legacy_generator'      — JIRA-217: optimizer returned 0 candidates; legacy LLM path ran.
    */
   selection?: {
-    fallbackReason: 'no_actionable_options' | 'keep_current_plan';
+    fallbackReason?: 'no_actionable_options' | 'keep_current_plan' | SelectorResult['fallbackReason'];
+    source?: 'selector' | 'single_candidate' | 'fallback_top_ev' | 'legacy_generator';
+    optimizerStats?: OptimizerResult['enumerationStats'];
+    candidateCount?: number;
+    chosenCandidateId?: number;
+    rationale?: string;
   };
 }
 
@@ -106,6 +119,9 @@ export class TripPlanner {
   /**
    * Plan a multi-stop trip. On total failure (LLM + fallback both fail),
    * returns a failure result with route=null and the llmLog preserved for diagnostics.
+   *
+   * JIRA-217: Layers MultiDemandTripOptimizer + TripCandidateSelector in front of
+   * the existing LLM-as-generator path. Existing pre-LLM short-circuits unchanged.
    */
   async planTrip(
     snapshot: WorldSnapshot,
@@ -114,11 +130,6 @@ export class TripPlanner {
     memory: BotMemoryState,
     userPromptOverride?: string,
   ): Promise<TripPlanResult> {
-    const config = this.brain.strategyConfig;
-    const adapter = this.brain.providerAdapter;
-    const model = this.brain.modelName;
-    const skillLevel = config.skillLevel;
-
     // ── JIRA-207B (R10c): Pre-LLM short-circuit — evaluate NEW OPTIONS filter ──
     // If every demand card is either unaffordable or already a carry-load commitment, the
     // LLM has nothing to choose from. Skip the call and return a mechanically-determined result.
@@ -153,6 +164,71 @@ export class TripPlanner {
         }
       }
     }
+
+    // ── JIRA-217: Stage 1 — deterministic optimizer ───────────────────────────
+    const optimizerResult = generateCandidates(snapshot, context, gridPoints);
+
+    // ── JIRA-217: Stage 2 — selector (or legacy fallback) ────────────────────
+    if (optimizerResult.candidates.length >= 1) {
+      const selector = new TripCandidateSelector(this.brain);
+      const selectorResult = await selector.select(
+        optimizerResult.candidates,
+        snapshot,
+        context,
+        memory,
+      );
+
+      const source =
+        optimizerResult.candidates.length === 1 ? 'single_candidate' as const :
+        selectorResult.fallbackReason === 'invalid_id' || selectorResult.fallbackReason === 'llm_failure'
+          ? 'fallback_top_ev' as const
+          : 'selector' as const;
+
+      return {
+        route: selectorResult.chosenCandidate.route,
+        llmLatencyMs: selectorResult.llmLatencyMs,
+        llmTokens: selectorResult.llmTokens,
+        llmLog: selectorResult.llmLog,
+        selection: {
+          source,
+          optimizerStats: optimizerResult.enumerationStats,
+          candidateCount: optimizerResult.candidates.length,
+          chosenCandidateId: selectorResult.chosenCandidate.candidateId,
+          rationale: selectorResult.rationale,
+          fallbackReason: selectorResult.fallbackReason,
+        },
+      };
+    }
+
+    // Optimizer returned 0 candidates — fall through to legacy LLM-as-generator path.
+    const legacyResult = await this.legacyLLMGenerate(snapshot, context, gridPoints, memory, userPromptOverride);
+    return {
+      ...legacyResult,
+      selection: {
+        ...(legacyResult.selection ?? {}),
+        source: 'legacy_generator' as const,
+        optimizerStats: optimizerResult.enumerationStats,
+        candidateCount: 0,
+      },
+    };
+  }
+
+  /**
+   * JIRA-217: Extraction of original planTrip LLM-as-generator body.
+   * Unchanged behavior — single-route LLM call with retry loop.
+   * Called when the optimizer returns 0 candidates (rare safety-net path).
+   */
+  private async legacyLLMGenerate(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    gridPoints: GridPoint[],
+    memory: BotMemoryState,
+    userPromptOverride?: string,
+  ): Promise<TripPlanResult> {
+    const config = this.brain.strategyConfig;
+    const adapter = this.brain.providerAdapter;
+    const model = this.brain.modelName;
+    const skillLevel = config.skillLevel;
 
     const { system: systemPrompt, user: baseUserPrompt } = getTripPlanningPrompt(skillLevel, context, memory);
     const userPrompt = userPromptOverride ?? baseUserPrompt;

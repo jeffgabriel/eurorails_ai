@@ -250,6 +250,22 @@ export const TRIP_PLAN_SCHEMA = {
   required: ['stops', 'reasoning'],
 };
 
+/**
+ * JSON Schema for the TripCandidateSelector LLM response (JIRA-217).
+ * The selector picks one of the optimizer's top-N candidates by ID.
+ *
+ * Note: Anthropic requires additionalProperties: false on all object types.
+ */
+export const SELECTOR_SCHEMA = {
+  type: 'object' as const,
+  additionalProperties: false as const,
+  properties: {
+    chosenCandidateId: { type: 'number' as const },
+    rationale: { type: 'string' as const, maxLength: 200 },
+  },
+  required: ['chosenCandidateId', 'rationale'],
+} as const;
+
 // ── Stage3Result ──────────────────────────────────────────────────────────
 
 /**
