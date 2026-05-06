@@ -11,6 +11,9 @@ import { rateLimitService } from './rateLimitService';
 import { gameChatLimitService } from './gameChatLimitService';
 import { moderationService } from './moderationService';
 import { onTurnChange as triggerBotTurn, onHumanReconnect } from './ai/BotTurnTrigger';
+import { ActiveEffectManager } from './ActiveEffectManager';
+
+const activeEffectManagerInstance = new ActiveEffectManager();
 
 let io: SocketIOServer | null = null;
 let presenceSweepInterval: NodeJS.Timeout | null = null;
@@ -247,7 +250,17 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
           }
 
           const serverSeq = await getCurrentServerSeq(gameId);
-          socket.emit('state:init', { gameState, serverSeq });
+
+          // Fetch active event card effects for reconnection state restoration (SP-4 / AC18).
+          // If this fails, still emit state:init without activeEffects so the client can proceed.
+          let activeEffects: ActiveEffect[] = [];
+          try {
+            activeEffects = await activeEffectManagerInstance.getActiveEffects(gameId);
+          } catch (effectErr) {
+            console.error(`[socketService] Failed to fetch activeEffects for state:init gameId=${gameId}:`, effectErr);
+          }
+
+          socket.emit('state:init', { gameState, serverSeq, activeEffects });
         } catch (err) {
           console.error('Failed to emit state:init on join:', err);
           socket.emit('error', { code: 'STATE_INIT_FAILED', message: 'Failed to initialize game state' });

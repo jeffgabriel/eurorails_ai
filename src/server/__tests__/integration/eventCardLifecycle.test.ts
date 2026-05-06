@@ -35,8 +35,8 @@ import { Socket } from 'socket.io';
 
 // ─── Mock Socket.IO so socket functions work without a real server ─────────────
 
-const mockRoomEmit = jest.fn();
-const mockIoTo = jest.fn(() => ({ emit: mockRoomEmit }));
+const mockRoomEmit = jest.fn<void, [string, unknown]>();
+const mockIoTo = jest.fn<{ emit: typeof mockRoomEmit }, [string]>(() => ({ emit: mockRoomEmit }));
 const mockIoInstance = {
   use: jest.fn(),
   on: jest.fn(),
