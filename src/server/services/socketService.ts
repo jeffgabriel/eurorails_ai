@@ -2,6 +2,7 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import type { Server as HTTPServer } from 'http';
 import type { GameState } from '../../shared/types/GameTypes';
+import type { ActiveEffect, EventCard, PerPlayerEffect } from '../../shared/types/EventCard';
 import { AuthService } from './authService';
 import { db } from '../db';
 import { GameService } from './gameService';
@@ -675,5 +676,90 @@ export function emitTieExtended(
     newThreshold,
     timestamp: Date.now(),
   });
+}
+
+// ─── Event Card Broadcasting ──────────────────────────────────────────────────
+
+/** Payload for event:card-drawn — broadcast to all players when an event card is drawn */
+export interface EventCardDrawnPayload {
+  gameId: string;
+  card: EventCard;
+  drawingPlayerId: string;
+  drawingPlayerName: string;
+  affectedZone: string[];
+  affectedPlayerIds: string[];
+  effectSummary: string;
+  duration: 'immediate' | 'persistent';
+  timestamp: string;
+}
+
+/** Payload for event:effect-applied — broadcast after effect is persisted */
+export interface EventEffectAppliedPayload {
+  gameId: string;
+  cardId: number;
+  effects: PerPlayerEffect[];
+  timestamp: string;
+}
+
+/** Payload for event:effect-expired — broadcast when effect expires at turn end */
+export interface EventEffectExpiredPayload {
+  gameId: string;
+  cardId: number;
+  timestamp: string;
+}
+
+/**
+ * Broadcast to all players in game room when an event card is drawn.
+ * Emits after the DB transaction commits (effect is persisted).
+ * Socket failures are non-fatal: logged but do not propagate.
+ */
+export function emitEventCardDrawn(gameId: string, payload: EventCardDrawnPayload): void {
+  try {
+    emitToGame(gameId, 'event:card-drawn', payload);
+  } catch (err) {
+    console.error(`[socketService] Failed to emit event:card-drawn for game ${gameId}:`, err);
+  }
+}
+
+/**
+ * Broadcast to all players in game room after an effect is persisted.
+ * Emits after the DB transaction commits.
+ * Socket failures are non-fatal: logged but do not propagate.
+ */
+export function emitEventEffectApplied(gameId: string, payload: EventEffectAppliedPayload): void {
+  try {
+    emitToGame(gameId, 'event:effect-applied', payload);
+  } catch (err) {
+    console.error(`[socketService] Failed to emit event:effect-applied for game ${gameId}:`, err);
+  }
+}
+
+/**
+ * Broadcast to all players in game room when an effect expires at turn end.
+ * Socket failures are non-fatal: logged but do not propagate.
+ */
+export function emitEventEffectExpired(gameId: string, payload: EventEffectExpiredPayload): void {
+  try {
+    emitToGame(gameId, 'event:effect-expired', payload);
+  } catch (err) {
+    console.error(`[socketService] Failed to emit event:effect-expired for game ${gameId}:`, err);
+  }
+}
+
+/**
+ * Send current active effects to a single reconnecting socket.
+ * Used in the state:init handler to restore effect state for reconnecting clients.
+ * Socket failures are non-fatal: logged but do not propagate.
+ */
+export function emitActiveEffects(socket: Socket, gameId: string, activeEffects: ActiveEffect[]): void {
+  try {
+    socket.emit('event:active-effects', {
+      gameId,
+      activeEffects,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error(`[socketService] Failed to emit event:active-effects for game ${gameId}:`, err);
+  }
 }
 
