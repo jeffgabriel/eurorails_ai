@@ -15057,10 +15057,26 @@
   },
   {
     "Id": "d5c6a0bb-bc2d-48e7-9cee-591d3b8be702",
+    "Type": "Small City",
+    "Name": "Kaliningrad",
+    "GridX": 63,
+    "GridY": 20,
+    "Ocean": null
+  },
+  {
+    "Id": "70e764f5-f314-4645-8e0e-22557405c70f",
     "Type": "Milepost",
     "Name": null,
     "GridX": 61,
-    "GridY": 20,
+    "GridY": 22,
+    "Ocean": null
+  },
+  {
+    "Id": "239c0ba9-eb16-49e4-b067-8871d2a2bb66",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 63,
+    "GridY": 19,
     "Ocean": null
   },
   {
@@ -15068,7 +15084,7 @@
     "Type": "Milepost",
     "Name": null,
     "GridX": 61,
-    "GridY": 22,
+    "GridY": 20,
     "Ocean": null
   },
   {
@@ -15668,7 +15684,7 @@
     "Type": "Milepost",
     "Name": null,
     "GridX": 63,
-    "GridY": 20,
+    "GridY": 23,
     "Ocean": null
   },
   {
@@ -15832,27 +15848,11 @@
     "Ocean": null
   },
   {
-    "Id": "70e764f5-f314-4645-8e0e-22557405c70f",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 63,
-    "GridY": 23,
-    "Ocean": null
-  },
-  {
     "Id": "d0547c6f-6ccc-440d-8174-97e21ac6fdfa",
     "Type": "Milepost",
     "Name": null,
     "GridX": 63,
     "GridY": 48,
-    "Ocean": null
-  },
-  {
-    "Id": "239c0ba9-eb16-49e4-b067-8871d2a2bb66",
-    "Type": "Small City",
-    "Name": "Kaliningrad",
-    "GridX": 63,
-    "GridY": 19,
     "Ocean": null
   },
   {
