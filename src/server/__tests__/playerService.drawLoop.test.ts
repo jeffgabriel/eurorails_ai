@@ -16,6 +16,9 @@ jest.mock('../services/socketService', () => ({
   emitTurnChange: jest.fn(),
   emitStatePatch: jest.fn().mockResolvedValue(undefined),
   getSocketIO: jest.fn().mockReturnValue(null),
+  emitEventCardDrawn: jest.fn(),
+  emitEventEffectApplied: jest.fn(),
+  emitEventEffectExpired: jest.fn(),
 }));
 
 // Mock the database module

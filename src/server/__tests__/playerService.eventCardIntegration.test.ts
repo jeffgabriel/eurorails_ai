@@ -17,6 +17,9 @@ import { EventCardService } from '../services/EventCardService';
 jest.mock('../services/socketService', () => ({
   emitTurnChange: jest.fn(),
   emitStatePatch: jest.fn().mockResolvedValue(undefined),
+  emitEventCardDrawn: jest.fn(),
+  emitEventEffectApplied: jest.fn(),
+  emitEventEffectExpired: jest.fn(),
 }));
 
 // Mock the database module
