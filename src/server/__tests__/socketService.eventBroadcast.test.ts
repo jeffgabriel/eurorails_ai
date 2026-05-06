@@ -264,7 +264,10 @@ describe('SocketService event card broadcasting', () => {
       const [eventName, payload] = mockEmit.mock.calls[0] as [string, Record<string, unknown>];
       expect(eventName).toBe('event:active-effects');
       expect(payload.gameId).toBe(TEST_GAME_ID);
-      expect(payload.activeEffects).toBe(activeEffects);
+      // activeEffects are serialized (Set→Array) before emit
+      const serialized = (payload.activeEffects as any[]);
+      expect(serialized).toHaveLength(1);
+      expect(serialized[0].affectedZone).toEqual(['mp-50', 'mp-51']);
       expect(typeof payload.timestamp).toBe('string');
     });
 

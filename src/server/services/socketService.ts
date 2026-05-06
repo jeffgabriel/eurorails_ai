@@ -260,7 +260,13 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
             console.error(`[socketService] Failed to fetch activeEffects for state:init gameId=${gameId}:`, effectErr);
           }
 
-          socket.emit('state:init', { gameState, serverSeq, activeEffects });
+          // Serialize Set fields to arrays for JSON-safe socket transport.
+          const serializableEffects = activeEffects.map(e => ({
+            ...e,
+            affectedZone: Array.from(e.affectedZone),
+          }));
+
+          socket.emit('state:init', { gameState, serverSeq, activeEffects: serializableEffects });
         } catch (err) {
           console.error('Failed to emit state:init on join:', err);
           socket.emit('error', { code: 'STATE_INIT_FAILED', message: 'Failed to initialize game state' });
@@ -766,9 +772,13 @@ export function emitEventEffectExpired(gameId: string, payload: EventEffectExpir
  */
 export function emitActiveEffects(socket: Socket, gameId: string, activeEffects: ActiveEffect[]): void {
   try {
+    const serializableEffects = activeEffects.map(e => ({
+      ...e,
+      affectedZone: Array.from(e.affectedZone),
+    }));
     socket.emit('event:active-effects', {
       gameId,
-      activeEffects,
+      activeEffects: serializableEffects,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
