@@ -14,7 +14,7 @@ import { getFerryEdges } from "../../shared/services/majorCityGroups";
 import { TrackSegment } from "../../shared/types/TrackTypes";
 import { EventCardService } from "./EventCardService";
 import { activeEffectManager } from "./ActiveEffectManager";
-import { EventCardType, EventCardResult } from "../../shared/types/EventCard";
+import { EventCardType, EventCardResult, EventCard } from "../../shared/types/EventCard";
 
 type TurnActionDeliver = {
   kind: "deliver";
@@ -59,6 +59,7 @@ export class PlayerService {
     eventResult: EventCardResult,
     client: import('pg').PoolClient,
     logPrefix: string,
+    card?: EventCard,
   ): Promise<void> {
     if (eventResult.persistentEffectDescriptor) {
       console.info(`[${logPrefix}] Persisting active effect: cardId=${eventResult.cardId} gameId=${gameId}`);
@@ -70,6 +71,54 @@ export class PlayerService {
         client,
         eventResult.floodedRiver,
       );
+    }
+
+    // Emit socket events after persistence (SP-4). Non-fatal — game state is source of truth.
+    if (card) {
+      try {
+        const { emitEventCardDrawn, emitEventEffectApplied } = await import('./socketService');
+
+        // Look up the drawing player's name for the broadcast payload.
+        let drawingPlayerName = 'Unknown Player';
+        try {
+          const nameRow = await client.query(
+            'SELECT name FROM players WHERE id = $1 LIMIT 1',
+            [eventResult.drawingPlayerId],
+          );
+          if (nameRow.rows[0]?.name) {
+            drawingPlayerName = nameRow.rows[0].name as string;
+          }
+        } catch (nameErr) {
+          console.warn(`[${logPrefix}] Could not look up player name for socket emit: ${nameErr}`);
+        }
+
+        const affectedPlayerIds = eventResult.perPlayerEffects.map((e) => e.playerId);
+        const duration = eventResult.persistentEffectDescriptor ? 'persistent' : 'immediate';
+        const effectSummary = `${card.type} affecting ${eventResult.affectedZone.length} mileposts`;
+
+        emitEventCardDrawn(gameId, {
+          gameId,
+          card,
+          drawingPlayerId: eventResult.drawingPlayerId,
+          drawingPlayerName,
+          affectedZone: eventResult.affectedZone,
+          affectedPlayerIds,
+          effectSummary,
+          duration,
+          timestamp: new Date().toISOString(),
+        });
+
+        if (eventResult.perPlayerEffects.length > 0) {
+          emitEventEffectApplied(gameId, {
+            gameId,
+            cardId: eventResult.cardId,
+            effects: eventResult.perPlayerEffects,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (emitErr) {
+        console.error(`[${logPrefix}] Failed to emit socket event for cardId=${eventResult.cardId} gameId=${gameId}:`, emitErr);
+      }
     }
   }
 
@@ -702,10 +751,19 @@ export class PlayerService {
         client,
       );
       if (expiredCardIds.length > 0) {
-        // SP-4 will broadcast socket events; for now log for observability.
         console.info(
           `[PlayerService] Effects expired on turn end: cardIds=${expiredCardIds.join(',')} prevPlayerIndex=${prevPlayerIndex} gameId=${gameId}`,
         );
+        // Emit expiry notifications (SP-4). Non-fatal — game state is source of truth.
+        try {
+          const { emitEventEffectExpired } = await import('./socketService');
+          const expiredAt = new Date().toISOString();
+          for (const cardId of expiredCardIds) {
+            emitEventEffectExpired(gameId, { gameId, cardId, timestamp: expiredAt });
+          }
+        } catch (emitErr) {
+          console.error(`[PlayerService] Failed to emit effect-expired for gameId=${gameId}:`, emitErr);
+        }
       }
 
       // Step 2: Determine total player count so we can guard against infinite skips.
@@ -915,7 +973,7 @@ export class PlayerService {
       while (drawResult !== null && drawResult.type === 'event') {
         console.info(`[fulfillDemand] Drew event card ${drawResult.card.id} — processing via EventCardService`);
         const eventResult = await EventCardService.processEventCard(gameId, drawResult.card, playerId, client);
-        await PlayerService.persistEventEffect(gameId, eventResult, client, 'fulfillDemand');
+        await PlayerService.persistEventEffect(gameId, eventResult, client, 'fulfillDemand', drawResult.card);
         demandDeckService.discardEventCard(drawResult.card.id);
         drawResult = demandDeckService.drawCard();
       }
@@ -1077,7 +1135,7 @@ export class PlayerService {
         discardedEventCardIds.push(eventCardId);
         console.info(`[deliverLoad] Drew event card ${eventCardId} — processing via EventCardService`);
         const deliverEventResult = await EventCardService.processEventCard(gameId, newDrawResult.card, playerId, client);
-        await PlayerService.persistEventEffect(gameId, deliverEventResult, client, 'deliverLoad');
+        await PlayerService.persistEventEffect(gameId, deliverEventResult, client, 'deliverLoad', newDrawResult.card);
         demandDeckService.discardEventCard(eventCardId);
         newDrawResult = demandDeckService.drawCard();
       }
@@ -1886,7 +1944,7 @@ export class PlayerService {
         // Process the event card via EventCardService (replaces Project 1 discard stub)
         console.info(`[discardHandCore] Drew event card ${result.card.id} — processing via EventCardService`);
         const discardEventResult = await EventCardService.processEventCard(gameId, result.card, playerId, client);
-        await PlayerService.persistEventEffect(gameId, discardEventResult, client, 'discardHandCore');
+        await PlayerService.persistEventEffect(gameId, discardEventResult, client, 'discardHandCore', result.card);
         demandDeckService.discardEventCard(result.card.id);
         discardedEventIds.push(result.card.id);
         continue;

@@ -13,6 +13,9 @@ import { activeEffectManager } from '../services/ActiveEffectManager';
 jest.mock('../services/socketService', () => ({
   emitTurnChange: jest.fn(),
   getSocketIO: jest.fn().mockReturnValue(null),
+  emitEventCardDrawn: jest.fn(),
+  emitEventEffectApplied: jest.fn(),
+  emitEventEffectExpired: jest.fn(),
 }));
 
 // Mock the database module
