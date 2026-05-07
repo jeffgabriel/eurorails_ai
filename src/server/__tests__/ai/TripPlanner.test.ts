@@ -7,6 +7,7 @@
 
 import { TripPlanner, TripPlanResult } from '../../services/ai/TripPlanner';
 import { RouteValidator } from '../../services/ai/RouteValidator';
+import { RouteOptimizer } from '../../services/ai/RouteOptimizer';
 import { estimateHopDistance } from '../../services/ai/MapTopology';
 import {
   UPGRADE_OPERATING_BUFFER,
@@ -1451,20 +1452,43 @@ describe('JIRA-190: getTripPlanningPrompt — prompt shape and content (AC1–AC
     expect(result.user).not.toContain('Wine');
   });
 
-  it('AC11: OPTIONS filters out isLoadOnTrain carry-load cards (R10b, AC10)', () => {
+  it('AC11: OPTIONS filters out isLoadOnTrain carry-load cards when active route still covers them (R10b, AC10)', () => {
     const ctx = makeMinimalContext();
     (ctx as GameContext).demands = [
       makeDemand({ cardIndex: 7, loadType: 'Hops', supplyCity: 'Cardiff', deliveryCity: 'Ruhr', payout: 16, isAffordable: true, isLoadOnTrain: true }),
       makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: true, isLoadOnTrain: false }),
     ];
     (ctx as GameContext).loads = ['Hops'];
-    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx as GameContext, makeMinimalMemory());
+    // Active route is delivering the carried Hops — that's a real commitment, so it stays out of OPTIONS.
+    const memWithRoute = {
+      ...makeMinimalMemory(),
+      activeRoute: {
+        stops: [{ action: 'deliver', loadType: 'Hops', city: 'Ruhr', demandCardId: 7, payment: 16 }],
+        currentStopIndex: 0,
+        phase: 'build',
+        createdAtTurn: 3,
+        reasoning: 'Hops delivery in flight',
+      },
+    } as BotMemoryState;
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx as GameContext, memWithRoute);
     // Coal (not on train) should appear in OPTIONS
     expect(result.user).toContain('Coal');
-    // Hops (on train) should NOT appear in OPTIONS — only in CURRENT PLAN
-    // (Note: carried load may appear in CURRENT PLAN section only)
+    // Hops (on train, active route covers it) should NOT appear in OPTIONS — only in CURRENT PLAN
     const optionsSection = result.user.split('OPTIONS')[1] ?? '';
     expect(optionsSection).not.toContain('Hops');
+  });
+
+  it('carry-load with no active route surfaces in OPTIONS so LLM can plan delivery', () => {
+    const ctx = makeMinimalContext();
+    (ctx as GameContext).demands = [
+      makeDemand({ cardIndex: 46, loadType: 'Flowers', supplyCity: null, deliveryCity: 'Paris', payout: 8, isAffordable: true, isLoadOnTrain: true }),
+    ];
+    (ctx as GameContext).loads = ['Flowers'];
+    // No active route — carrying Flowers but nothing planned. The bug-stuck case.
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx as GameContext, makeMinimalMemory());
+    const optionsSection = result.user.split('OPTIONS')[1] ?? '';
+    expect(optionsSection).toContain('Flowers');
+    expect(optionsSection).toContain('Paris');
   });
 
   it('JIRA-207B: [FERRY] tag does NOT appear in user prompt (R11, AC11)', () => {
@@ -2761,11 +2785,10 @@ describe('JIRA-207B: TripPlanner pre-LLM short-circuit (R10c)', () => {
     expect(result.llmLog).toHaveLength(0);
   });
 
-  // AC10a-bis variant: commitment via carried loads → keep_current_plan
-  it('AC10a-bis: all demands isLoadOnTrain AND no new affordable options → keep_current_plan, zero LLM calls', async () => {
+  // AC10a-bis variant: carry-load with active route still covering it → keep_current_plan
+  it('AC10a-bis: all demands isLoadOnTrain AND active route still covers delivery → keep_current_plan, zero LLM calls', async () => {
     const { brain, chatFn } = makeMockBrain();
 
-    // All demands are carry-load commitments
     const context = makeContext({
       loads: ['Hops'],
       demands: [
@@ -2773,7 +2796,16 @@ describe('JIRA-207B: TripPlanner pre-LLM short-circuit (R10c)', () => {
       ],
     });
 
-    const memory = makeMemory({ activeRoute: null });
+    const activeRoute: StrategicRoute = {
+      stops: [
+        { action: 'deliver', loadType: 'Hops', city: 'Ruhr', demandCardId: 7, payment: 16 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 3,
+      reasoning: 'Existing hops route',
+    };
+    const memory = makeMemory({ activeRoute });
 
     const planner = new TripPlanner(brain);
     const result = await planner.planTrip(makeSnapshot(), context, [], memory);
@@ -2782,6 +2814,39 @@ describe('JIRA-207B: TripPlanner pre-LLM short-circuit (R10c)', () => {
     expect(chatFn).not.toHaveBeenCalled();
 
     expect(result.selection?.fallbackReason).toBe('keep_current_plan');
+  });
+
+  // Regression: game 0c6f0fb6 t57+ — carry-load with NO active route must call LLM, not keep_current_plan.
+  // The bot was stuck at Bruxelles for 45 turns carrying Flowers with a Flowers→Paris card, network
+  // connected to Paris, because the planner short-circuited on hasCarriedLoads alone.
+  it('carry-load with no active route → LLM called (must plan delivery, not keep_current_plan)', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    const context = makeContext({
+      loads: ['Flowers'],
+      demands: [
+        makeDemand({ cardIndex: 46, loadType: 'Flowers', supplyCity: null, deliveryCity: 'Paris', payout: 8, isAffordable: true, isLoadOnTrain: true }),
+      ],
+    });
+
+    const llmResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'deliver', load: 'Flowers', city: 'Paris', demandCardId: 46, payment: 8 },
+        ],
+        reasoning: 'Deliver carried Flowers to Paris',
+      },
+    ], 0);
+    chatFn.mockResolvedValue({ text: llmResponse, usage: { input: 50, output: 30 } });
+
+    const memory = makeMemory({ activeRoute: null });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], memory);
+
+    expect(chatFn).toHaveBeenCalledTimes(1);
+    expect(result.selection?.fallbackReason).not.toBe('keep_current_plan');
+    expect(result.route).not.toBeNull();
   });
 
   // AC10c: no commitment but at least one affordable card → LLM IS called (no short-circuit)
@@ -3000,5 +3065,69 @@ describe('JIRA-207B: Game 5302ee21 reproduction tests (TEST-002)', () => {
     expect(stops.length).toBeGreaterThan(0);
     expect(stops.some(s => s.action === 'pickup' && s.loadType === 'Hops')).toBe(true);
     expect(stops.some(s => s.action === 'deliver' && s.city === 'Ruhr')).toBe(true);
+  });
+});
+
+describe('TripPlanner — RouteOptimizer reorder is preserved when validation passes (Nano T51 repro)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // Repro: game-0c6f0fb6 turn 51 (Nano).
+  // LLM emitted Flowers/Cheese stops in pickup-deliver-pickup-deliver order. The optimizer
+  // SHOULD batch the same-city Holland pickups so the bot picks up both loads on one
+  // visit. The bug: scoreCandidates writes the reordered stops into tempRoute.stops but
+  // then `finalStops = validation.prunedRoute?.stops ?? stops` falls back to the ORIGINAL
+  // unreordered `stops` when validation passes cleanly with no prunedRoute.
+  it('returns the optimizer-reordered stops, not the original LLM order, when validation passes without pruning', async () => {
+    // LLM order: PICKUP Flowers @ Holland → DELIVER Flowers @ Paris → PICKUP Cheese @ Holland → DELIVER Cheese @ Bruxelles
+    const llmResponseJson = JSON.stringify({
+      stops: [
+        { action: 'PICKUP',  load: 'Flowers', supplyCity:   'Holland'   },
+        { action: 'DELIVER', load: 'Flowers', deliveryCity: 'Paris',     demandCardId: 46,  payment: 8 },
+        { action: 'PICKUP',  load: 'Cheese',  supplyCity:   'Holland'   },
+        { action: 'DELIVER', load: 'Cheese',  deliveryCity: 'Bruxelles', demandCardId: 114, payment: 5 },
+      ],
+      reasoning: 'Two on-network Holland corridors combined into one trip.',
+    });
+
+    // Optimizer reorders to batch the same-city pickups: P-P-D-D.
+    (RouteOptimizer.orderStopsByProximity as jest.Mock).mockImplementation((stops: any[]) => {
+      const pickups  = stops.filter(s => s.action === 'pickup');
+      const delivers = stops.filter(s => s.action === 'deliver');
+      return [...pickups, ...delivers];
+    });
+
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 46,  loadType: 'Flowers', supplyCity: 'Holland', deliveryCity: 'Paris',     payout: 8 }),
+        makeDemand({ cardIndex: 114, loadType: 'Cheese',  supplyCity: 'Holland', deliveryCity: 'Bruxelles', payout: 5 }),
+      ],
+    });
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: llmResponseJson, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    expect(result.route).not.toBeNull();
+    const sig = result.route!.stops.map(s => `${s.action}(${s.loadType}@${s.city})`);
+
+    // Bug-fix assertion: the persisted route must reflect the optimizer's reordered output
+    // (both pickups before any deliveries), NOT the LLM's literal P-D-P-D order.
+    expect(sig).toEqual([
+      'pickup(Flowers@Holland)',
+      'pickup(Cheese@Holland)',
+      'deliver(Flowers@Paris)',
+      'deliver(Cheese@Bruxelles)',
+    ]);
   });
 });

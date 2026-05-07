@@ -123,10 +123,12 @@ export class TripPlanner {
     // If every demand card is either unaffordable or already a carry-load commitment, the
     // LLM has nothing to choose from. Skip the call and return a mechanically-determined result.
     if (!userPromptOverride) {
-      const hasNewOptions = context.demands.some(d => d.isAffordable && !d.isLoadOnTrain);
+      const activeRoute = memory.activeRoute;
+      const hasRemainingStops = activeRoute != null && activeRoute.currentStopIndex < activeRoute.stops.length;
+      // A carry-load demand is only a "commitment" when an active route is already delivering it.
+      // Without a route, the carry-load is an undischarged obligation that needs a fresh plan.
+      const hasNewOptions = context.demands.some(d => d.isAffordable && (!d.isLoadOnTrain || !hasRemainingStops));
       if (!hasNewOptions) {
-        const activeRoute = memory.activeRoute;
-        const hasRemainingStops = activeRoute != null && activeRoute.currentStopIndex < activeRoute.stops.length;
         const hasCarriedLoads = context.loads.length > 0;
         const commitmentExists = hasRemainingStops || hasCarriedLoads;
 
@@ -447,8 +449,10 @@ export class TripPlanner {
       return { validCandidates, rejections };
     }
 
-    // Use pruned route if available
-    const finalStops = validation.prunedRoute?.stops ?? stops;
+    // Use pruned route if available; otherwise the optimizer-reordered stops on tempRoute.
+    // Falling back to `stops` here would discard RouteOptimizer.orderStopsByProximity's reordering
+    // whenever validation passes cleanly without pruning (game-0c6f0fb6 Nano T51 repro).
+    const finalStops = validation.prunedRoute?.stops ?? tempRoute.stops;
 
     // Track if the route survived validation but was pruned to zero stops
     if (finalStops.length === 0) {
