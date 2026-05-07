@@ -17,26 +17,17 @@ function ensureDir(): void {
 
 /**
  * JIRA-210B: TripPlanner selection diagnostic for short-circuit paths only.
- * JIRA-217: Extended with optimizer/selector diagnostic fields.
- *
- * Fires when short-circuit paths fire:
+ * The multi-candidate selection branches (chosen_*, llm_rejected_validated,
+ * no_affordable_candidate) were removed by JIRA-210B. This diagnostic now fires
+ * ONLY when one of the two JIRA-207B short-circuit paths is taken:
  *   - 'no_actionable_options': no affordable demand options to plan from.
  *   - 'keep_current_plan': existing plan is still valid; no replan needed.
- * Also populated by JIRA-217 optimizer+selector path with source/candidateCount etc.
  */
 export interface TripPlannerSelectionDiagnostic {
   /**
-   * Short-circuit or selector fallback reason (JIRA-207B R10c + JIRA-217).
+   * Why the short-circuit path was taken (JIRA-207B R10c values, narrowed by JIRA-210B).
    */
-  fallbackReason?: 'no_actionable_options' | 'keep_current_plan' | 'invalid_id' | 'llm_failure' | 'single_candidate';
-  /** JIRA-217: Which path produced the result. */
-  source?: 'selector' | 'single_candidate' | 'fallback_top_ev' | 'legacy_generator';
-  /** JIRA-217: Number of optimizer candidates. */
-  candidateCount?: number;
-  /** JIRA-217: ID of the chosen candidate. */
-  chosenCandidateId?: number;
-  /** JIRA-217: LLM rationale for the selection. */
-  rationale?: string;
+  fallbackReason: 'no_actionable_options' | 'keep_current_plan';
 }
 
 /** Shape of a single LLM call transcript entry. */

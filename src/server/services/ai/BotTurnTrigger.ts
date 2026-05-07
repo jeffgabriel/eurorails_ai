@@ -125,16 +125,6 @@ export async function onTurnChange(
     if (victoryState?.triggered) {
       const gameCurrentIndex = gameResult.rows[0]?.current_player_index ?? currentPlayerIndex;
       const finalTurnIndex = victoryState.finalTurnPlayerIndex;
-      // The stall is detected when we have cycled back to (or past) the trigger player after
-      // final_turn_player_index. This means the trigger player would execute again without
-      // resolution having fired — indicating a stall.
-      // Detection: current player has wrapped back to the trigger player index, i.e.
-      // currentPlayerIndex === victoryState.triggerPlayerIndex, and we are past finalTurnIndex.
-      // A simpler proxy: the game's current_player_index is at or before triggerPlayerIndex but
-      // we know triggered is true, meaning at least one full round elapsed without resolution.
-      // Use the most conservative signal: if current_player_index === triggerPlayerIndex
-      // and final_turn_player_index !== triggerPlayerIndex (meaning final turn player already
-      // had their turn), resolution has stalled.
       const triggerIndex = victoryState.triggerPlayerIndex;
       // Guard fires if: victory is triggered AND this is the trigger player's next turn
       // AND final_turn_player_index is different from triggerPlayerIndex (non-trivial round).

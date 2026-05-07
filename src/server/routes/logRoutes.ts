@@ -727,9 +727,8 @@ function renderLLMCallCards(entries: LLMTranscriptEntry[], gameId: string): stri
     // JIRA-210B: TripPlanner short-circuit diagnostic (narrowed to two values)
     if (entry.tripPlannerSelection) {
       const sel = entry.tripPlannerSelection;
-      const reasonLabel = sel.fallbackReason ?? sel.source ?? 'unknown';
-      sections += `<details><summary>TripPlanner Short-circuit (${escapeHtml(reasonLabel)})</summary><div class="section">`;
-      sections += `Reason: ${escapeHtml(reasonLabel)}\n`;
+      sections += `<details><summary>TripPlanner Short-circuit (${escapeHtml(sel.fallbackReason)})</summary><div class="section">`;
+      sections += `Reason: ${escapeHtml(sel.fallbackReason)}\n`;
       sections += `</div></details>`;
     }
 

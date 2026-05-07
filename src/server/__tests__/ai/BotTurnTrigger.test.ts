@@ -622,7 +622,7 @@ describe('BotTurnTrigger — JIRA-212: victoryCheck in appendTurn payload', () =
     mockQuery.mockImplementation(async (sql: string) => {
       if (typeof sql === 'string') {
         if (sql.includes('SELECT is_bot')) return mockResult([{ is_bot: true, name: 'Flash' }]);
-        if (sql.includes('SELECT status FROM games') || sql.includes('status, current_player_index')) {
+        if (sql.includes('status, current_player_index') || sql.includes('SELECT status FROM games')) {
           return mockResult([{ status: 'active', current_player_index: 1 }]);
         }
         if (sql.includes('SELECT current_turn_number')) return mockResult([{ current_turn_number: 5 }]);
@@ -754,15 +754,11 @@ describe('BotTurnTrigger — JIRA-212: stalled-victory backstop guard', () => {
   });
 
   it('does NOT fire stall guard when final-turn player has not yet taken their turn (AC4)', async () => {
-    // triggerPlayerIndex = 1, finalTurnPlayerIndex = 0, current = 1 (same as trigger)
-    // BUT: finalTurnIndex === triggerIndex is false, so...
-    // Actually per the guard: fires when gameCurrentIndex === triggerIndex AND finalTurnIndex !== triggerIndex.
-    // Here we test that when current player != triggerPlayerIndex, guard does NOT fire.
+    // current_player_index = 0 (NOT trigger player 1) → guard does NOT fire
     mockQuery.mockImplementation(async (sql: string) => {
       if (typeof sql === 'string') {
         if (sql.includes('SELECT is_bot')) return mockResult([{ is_bot: true, name: 'Flash' }]);
         if (sql.includes('status, current_player_index') || sql.includes('SELECT status FROM games')) {
-          // current_player_index = 0 (NOT trigger player 1)
           return mockResult([{ status: 'active', current_player_index: 0 }]);
         }
         if (sql.includes('SELECT current_turn_number')) return mockResult([{ current_turn_number: 5 }]);

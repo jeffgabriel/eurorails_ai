@@ -45,7 +45,6 @@ jest.mock('../../services/ai/RouteOptimizer', () => ({
 }));
 jest.mock('../../services/ai/schemas', () => ({
   TRIP_PLAN_SCHEMA: { type: 'object' },
-  SELECTOR_SCHEMA: { type: 'object' },
 }));
 jest.mock('../../services/ai/prompts/systemPrompts', () => ({
   // JIRA-190: getTripPlanningPrompt returns { system, user } not a string
@@ -62,23 +61,6 @@ jest.mock('../../services/ai/MapTopology', () => ({
 // JIRA-187: mock computeTrackUsageFees — returns 0 by default (no fees)
 jest.mock('../../../shared/services/computeTrackUsageFees', () => ({
   computeTrackUsageFees: jest.fn(() => 0),
-}));
-
-// JIRA-217: mock MultiDemandTripOptimizer and TripCandidateSelector
-// Default: optimizer returns 0 candidates → legacy LLM path runs (existing test behaviour preserved)
-const mockGenerateCandidates = jest.fn(() => ({
-  candidates: [],
-  enumerationStats: { patternsDetected: 0, candidatesGenerated: 0, candidatesFeasible: 0, orderingsEvaluated: 0, durationMs: 0 },
-}));
-jest.mock('../../services/ai/MultiDemandTripOptimizer', () => ({
-  generateCandidates: (...args: unknown[]) => mockGenerateCandidates(...args),
-}));
-
-const mockSelectorSelect = jest.fn();
-jest.mock('../../services/ai/TripCandidateSelector', () => ({
-  TripCandidateSelector: jest.fn().mockImplementation(() => ({
-    select: mockSelectorSelect,
-  })),
 }));
 
 // ── Fixtures ────────────────────────────────────────────────────────────
@@ -244,12 +226,6 @@ describe('TripPlanner', () => {
     (RouteValidator.validate as jest.Mock).mockReturnValue({
       valid: true,
       errors: [],
-    });
-
-    // JIRA-217: Default optimizer returns 0 candidates → legacy LLM path (existing test behaviour)
-    mockGenerateCandidates.mockReturnValue({
-      candidates: [],
-      enumerationStats: { patternsDetected: 0, candidatesGenerated: 0, candidatesFeasible: 0, orderingsEvaluated: 0, durationMs: 0 },
     });
   });
 
@@ -1298,8 +1274,8 @@ describe('TripPlanner', () => {
 
       expect(result.route).not.toBeNull();
       expect(result.route!.stops[0].loadType).toBe('Coal');
-      // JIRA-217: selection always populated; legacy path sets source='legacy_generator'
-      expect(result.selection?.source).toBe('legacy_generator');
+      // No selection diagnostic on happy path
+      expect(result.selection).toBeUndefined();
     });
 
     it('AC18: single route fails validation → retries → null after all retries (planRoute fallback fires)', async () => {
@@ -1944,9 +1920,9 @@ describe('TripPlanner — JIRA-210B single-route selection (replaces JIRA-194 di
     expect(result).toBeDefined();
     expect(result.route).not.toBeNull();
     expect(result.route!.stops[0].loadType).toBe('Oil');
-    // JIRA-217: selection always populated; legacy path sets source='legacy_generator'
-    expect(result.selection?.source).toBe('legacy_generator');
-    // Also no tripPlannerSelection in the success llmLog entry (that's on the transcript logger)
+    // JIRA-210B: no selection diagnostic on happy path (only fires for short-circuit)
+    expect(result.selection).toBeUndefined();
+    // Also no tripPlannerSelection in the success llmLog entry
     const successEntry = result.llmLog.find(a => a.status === 'success');
     expect((successEntry as any)?.tripPlannerSelection).toBeUndefined();
     const serialized = JSON.stringify(successEntry);
@@ -2488,9 +2464,9 @@ describe('TripPlanner — JIRA-206 affordability filter and LLM-rejection no-rou
     const planner = new TripPlanner(brain);
     const result = await planner.planTrip(snapshot, context, [], makeMemory());
 
-    // JIRA-210B: route returned. JIRA-217: selection always populated with legacy_generator source.
+    // JIRA-210B: route returned, no selection diagnostic on happy path
     expect(result.route).not.toBeNull();
-    expect(result.selection?.source).toBe('legacy_generator');
+    expect(result.selection).toBeUndefined();
     expect(chatFn).toHaveBeenCalledTimes(1);
   });
 
@@ -3015,223 +2991,14 @@ describe('JIRA-207B: Game 5302ee21 reproduction tests (TEST-002)', () => {
     const planner = new TripPlanner(brain);
     const result = await planner.planTrip(makeSnapshot(37), context, [], makeMemory());
 
-    // JIRA-210B: retry succeeded. JIRA-217: selection always populated.
+    // JIRA-210B: retry succeeded
     expect(result.route).not.toBeNull();
-    expect(result.selection?.source).toBe('legacy_generator');
+    expect(result.selection).toBeUndefined();
 
     // Route stops should match the valid route: PICKUP Hops Cardiff, DELIVER Hops Ruhr
     const stops = result.route!.stops;
     expect(stops.length).toBeGreaterThan(0);
     expect(stops.some(s => s.action === 'pickup' && s.loadType === 'Hops')).toBe(true);
     expect(stops.some(s => s.action === 'deliver' && s.city === 'Ruhr')).toBe(true);
-  });
-});
-
-// ── JIRA-217: Optimizer/Selector integration in TripPlanner ──────────────────
-
-describe('JIRA-217: TripPlanner optimizer/selector integration', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(console, 'warn').mockImplementation(() => {});
-
-    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
-  });
-
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  // Helper: make a mock TripCandidate-shaped object
-  function makeMockCandidate(id: number, score: number = 10) {
-    return {
-      candidateId: id,
-      route: {
-        stops: [
-          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
-          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 20 },
-        ],
-        currentStopIndex: 0,
-        phase: 'build',
-        createdAtTurn: 5,
-        reasoning: `optimizer candidate ${id}`,
-      },
-      score,
-      payoutTotal: 20,
-      buildCost: 5,
-      turns: 3,
-      demandsCovered: [{ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 20 }],
-      patterns: [],
-    };
-  }
-
-  const mockOptimizerStats = {
-    patternsDetected: 1,
-    candidatesGenerated: 2,
-    candidatesFeasible: 2,
-    orderingsEvaluated: 4,
-    durationMs: 50,
-  };
-
-  // AC9: Optimizer returns 0 → legacy LLM path
-  it('AC9: optimizer returns 0 candidates → legacy LLM path runs, selection.source = legacy_generator', async () => {
-    mockGenerateCandidates.mockReturnValue({
-      candidates: [],
-      enumerationStats: mockOptimizerStats,
-    });
-
-    const response = buildLlmResponse([
-      {
-        stops: [
-          { action: 'pickup', load: 'Coal', city: 'Essen' },
-          { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
-        ],
-        reasoning: 'legacy path',
-      },
-    ]);
-
-    const { brain, chatFn } = makeMockBrain();
-    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
-
-    const planner = new TripPlanner(brain);
-    const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
-
-    expect(result.route).not.toBeNull();
-    expect(result.selection?.source).toBe('legacy_generator');
-    expect(result.selection?.candidateCount).toBe(0);
-    expect(result.selection?.optimizerStats).toBeDefined();
-    // Legacy LLM should have been called
-    expect(chatFn).toHaveBeenCalledTimes(1);
-    // Selector NOT called
-    expect(mockSelectorSelect).not.toHaveBeenCalled();
-  });
-
-  // AC10: Optimizer returns ≥1 → selector path runs
-  it('AC10: optimizer returns 1 candidate → single_candidate path (no LLM call, no legacy)', async () => {
-    const candidate = makeMockCandidate(0);
-    mockGenerateCandidates.mockReturnValue({
-      candidates: [candidate],
-      enumerationStats: mockOptimizerStats,
-    });
-
-    mockSelectorSelect.mockResolvedValue({
-      chosenCandidate: candidate,
-      rationale: 'Only option',
-      llmLatencyMs: 0,
-      llmTokens: { input: 0, output: 0 },
-      llmLog: [],
-      fallbackReason: 'single_candidate',
-    });
-
-    const { brain, chatFn } = makeMockBrain();
-
-    const planner = new TripPlanner(brain);
-    const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
-
-    expect(result.route).not.toBeNull();
-    expect(result.route?.reasoning).toContain('optimizer candidate 0');
-    expect(result.selection?.source).toBe('single_candidate');
-    expect(result.selection?.candidateCount).toBe(1);
-    expect(result.selection?.fallbackReason).toBe('single_candidate');
-    // Legacy LLM (chatFn) should NOT have been called
-    expect(chatFn).not.toHaveBeenCalled();
-    // Selector WAS called
-    expect(mockSelectorSelect).toHaveBeenCalledTimes(1);
-  });
-
-  it('AC10: optimizer returns 2 candidates → selector path runs, source = selector', async () => {
-    const candidates = [makeMockCandidate(0, 15), makeMockCandidate(1, 10)];
-    mockGenerateCandidates.mockReturnValue({
-      candidates,
-      enumerationStats: mockOptimizerStats,
-    });
-
-    mockSelectorSelect.mockResolvedValue({
-      chosenCandidate: candidates[1],
-      rationale: 'Second is better velocity',
-      llmLatencyMs: 120,
-      llmTokens: { input: 200, output: 30 },
-      llmLog: [{ attemptNumber: 1, status: 'success', responseText: '{}', latencyMs: 120 }],
-      fallbackReason: undefined,
-    });
-
-    const { brain, chatFn } = makeMockBrain();
-
-    const planner = new TripPlanner(brain);
-    const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
-
-    expect(result.route).not.toBeNull();
-    expect(result.route?.reasoning).toContain('optimizer candidate 1');
-    expect(result.selection?.source).toBe('selector');
-    expect(result.selection?.candidateCount).toBe(2);
-    expect(result.selection?.chosenCandidateId).toBe(1);
-    expect(result.selection?.rationale).toBe('Second is better velocity');
-    // Legacy LLM NOT called
-    expect(chatFn).not.toHaveBeenCalled();
-  });
-
-  // AC11: Pre-LLM short-circuits unchanged
-  it('AC11: no_actionable_options short-circuit still fires before optimizer', async () => {
-    // Override mockGenerateCandidates to detect if it gets called
-    mockGenerateCandidates.mockReturnValue({ candidates: [], enumerationStats: mockOptimizerStats });
-
-    const context = makeContext({
-      demands: [makeDemand({ isAffordable: false, isLoadOnTrain: false })],
-    });
-    const memory = makeMemory(); // no activeRoute, no loads
-
-    const { brain, chatFn } = makeMockBrain();
-    const planner = new TripPlanner(brain);
-    const result = await planner.planTrip(makeSnapshot(), context, [], memory);
-
-    expect(result.selection?.fallbackReason).toBe('no_actionable_options');
-    expect(result.route).toBeNull();
-    // Optimizer and LLM should NOT be called (short-circuit fires first)
-    expect(mockGenerateCandidates).not.toHaveBeenCalled();
-    expect(chatFn).not.toHaveBeenCalled();
-  });
-
-  it('AC11: keep_current_plan short-circuit still fires before optimizer', async () => {
-    mockGenerateCandidates.mockReturnValue({ candidates: [], enumerationStats: mockOptimizerStats });
-
-    const context = makeContext({
-      demands: [makeDemand({ isAffordable: false, isLoadOnTrain: false })],
-      loads: ['Coal'], // carried loads exist
-    });
-    const memory = makeMemory();
-
-    const { brain, chatFn } = makeMockBrain();
-    const planner = new TripPlanner(brain);
-    const result = await planner.planTrip(makeSnapshot(), context, [], memory);
-
-    expect(result.selection?.fallbackReason).toBe('keep_current_plan');
-    expect(result.route).toBeNull();
-    expect(mockGenerateCandidates).not.toHaveBeenCalled();
-    expect(chatFn).not.toHaveBeenCalled();
-  });
-
-  // selection.source = fallback_top_ev when selector falls back
-  it('selector falls back to top-EV → source = fallback_top_ev', async () => {
-    const candidates = [makeMockCandidate(0, 15), makeMockCandidate(1, 10)];
-    mockGenerateCandidates.mockReturnValue({
-      candidates,
-      enumerationStats: mockOptimizerStats,
-    });
-
-    mockSelectorSelect.mockResolvedValue({
-      chosenCandidate: candidates[0],
-      rationale: '',
-      llmLatencyMs: 50,
-      llmTokens: { input: 0, output: 0 },
-      llmLog: [],
-      fallbackReason: 'llm_failure' as const,
-    });
-
-    const { brain, chatFn } = makeMockBrain();
-    const planner = new TripPlanner(brain);
-    const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
-
-    expect(result.selection?.source).toBe('fallback_top_ev');
-    expect(chatFn).not.toHaveBeenCalled();
   });
 });
