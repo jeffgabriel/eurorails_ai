@@ -683,7 +683,10 @@ describe('TurnExecutorPlanner.execute — pickup at current city', () => {
     expect(result.compositionTrace.pickups).toContainEqual({ load: 'Coal', city: 'Paris' });
   });
 
-  it('abandons route when pickup action fails', async () => {
+  it('preserves route (does NOT abandon) when pickup action fails — retries next turn', async () => {
+    // Single-failure replan was the dominant cause of pure abandonments in the 7-day log
+    // analysis. Persistent failures are abandoned by ActiveRouteContinuer's stuck-route
+    // detector after 3 no-progress turns.
     mockResolve.mockResolvedValue({ success: false, error: 'Train is full' });
 
     const route = makeRoute({
@@ -695,7 +698,8 @@ describe('TurnExecutorPlanner.execute — pickup at current city', () => {
 
     const result = await TurnExecutorPlanner.execute(route, snapshot, context);
 
-    expect(result.routeAbandoned).toBe(true);
+    expect(result.routeAbandoned).toBe(false);
+    expect(result.compositionTrace.a2.terminationReason).toBe('action_failed');
   });
 });
 
@@ -3969,6 +3973,36 @@ describe('TurnExecutorPlanner.isCappedCityBlocked', () => {
 
     // Medium city cap = 3, only 2 opponents — not yet full
     expect(TurnExecutorPlanner.isCappedCityBlocked(snapshot, 'Bristol')).toBe(false);
+  });
+
+  // Repro: game-490c8c47 Nano stuck building toward Kaliningrad after Flash takes the
+  // only allowed connection. The data patch (e0e4a99) added MaxConnections=1 to
+  // gridPoints.json and wired it through TurnValidator.cityEntryLimit() and
+  // computeSaturatedCityKeys(). But isCappedCityBlocked() hardcodes its own
+  // SMALL_CITY_CAP=2 / MEDIUM_CITY_CAP=3 and ignores the per-city override —
+  // so the JIRA-187 capped-city abandonment policy never fires for these cities.
+  it('returns true for a small city with maxConnections=1 and 1 opponent (mirrors standard 2/3 saturation)', () => {
+    const grid = new Map<string, { row: number; col: number; terrain: TerrainType; name: string; maxConnections?: number }>();
+    grid.set('19,63', { row: 19, col: 63, terrain: TerrainType.SmallCity, name: 'Kaliningrad', maxConnections: 1 });
+    (loadGridPoints as jest.Mock).mockReturnValue(grid);
+
+    const snapshot = makeSnapshotWithTracks(
+      'bot-1',
+      { row: 20, col: 63 }, // bot adjacent to Kaliningrad, no track in
+      [],
+      [
+        {
+          playerId: 'opp-1',
+          segments: [{ from: { row: 19, col: 63 }, to: { row: 18, col: 63 } }],
+        },
+      ],
+    );
+
+    // With maxConnections=1, one opponent already at the city → saturated for the bot.
+    // isCappedCityBlocked should report true so JIRA-187 2a/2b/2c policy fires
+    // (route abandonment via BuildPhasePlanner) instead of letting the bot grind
+    // approach segments forever via the closest-to-target Dijkstra fallback.
+    expect(TurnExecutorPlanner.isCappedCityBlocked(snapshot, 'Kaliningrad')).toBe(true);
   });
 });
 

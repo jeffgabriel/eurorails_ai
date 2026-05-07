@@ -977,7 +977,7 @@ export class TurnExecutorPlanner {
       const MEDIUM_CITY_CAP = 3;
 
       const grid = loadGridPoints();
-      const cityGridPoints: Array<{ row: number; col: number; terrain: TerrainType; name?: string }> = [];
+      const cityGridPoints: Array<{ row: number; col: number; terrain: TerrainType; name?: string; maxConnections?: number }> = [];
       for (const [, gp] of grid) {
         if (gp.name === deliveryCity) {
           cityGridPoints.push(gp);
@@ -987,14 +987,20 @@ export class TurnExecutorPlanner {
       if (cityGridPoints.length === 0) return false;
 
       const cityTerrain = cityGridPoints[0].terrain;
-      const cap =
+      const terrainCap =
         cityTerrain === TerrainType.SmallCity
           ? SMALL_CITY_CAP
           : cityTerrain === TerrainType.MediumCity
             ? MEDIUM_CITY_CAP
             : 0;
 
-      if (cap === 0) return false;
+      if (terrainCap === 0) return false;
+
+      // Honor per-city maxConnections override (e.g., Kaliningrad MaxConnections=1)
+      // so the JIRA-187 capped-city policy fires uniformly with TurnValidator.cityEntryLimit
+      // and computeSaturatedCityKeys.
+      const overrideCap = cityGridPoints[0].maxConnections;
+      const cap = overrideCap !== undefined ? overrideCap : terrainCap;
 
       const cityCoordSet = new Set<string>(
         cityGridPoints.map(gp => makeKey(gp.row, gp.col)),
