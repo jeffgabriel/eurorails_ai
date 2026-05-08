@@ -60,7 +60,7 @@ export interface TripPlanResult {
    * 'keep_current_plan'     — existing plan is still valid; no replan needed.
    */
   selection?: {
-    fallbackReason: 'no_actionable_options' | 'keep_current_plan';
+    fallbackReason: 'no_actionable_options' | 'keep_current_plan' | 'single_option_shortcircuit';
   };
 }
 
@@ -201,7 +201,7 @@ export class TripPlanner {
           systemPrompt,
           userPrompt: promptWithError,
           outputSchema,
-          timeoutMs: 60000,
+          timeoutMs: 120000,
           ...(skillLevel !== BotSkillLevel.Easy && {
             thinking: { type: 'adaptive' },
             effort: TRIP_EFFORT[skillLevel],
@@ -454,7 +454,9 @@ export class TripPlanner {
     // Single-route: treat as llmIdx=0
     const llmIdx = 0;
     const rawStops = parsed.stops;
-    const rawReasoning = parsed.reasoning;
+    const rawReasoning = typeof parsed.reasoning === 'string'
+      ? parsed.reasoning
+      : JSON.stringify(parsed.reasoning);
 
     // Convert LLM stops to RouteStop format
     // JIRA-164: Filter out sentinel city names that LLMs may hallucinate from context serialization

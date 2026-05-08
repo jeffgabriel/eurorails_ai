@@ -136,7 +136,7 @@ export interface BotTurnResult {
     llmLatencyMs: number;
     llmTokens: { input: number; output: number };
     llmReasoning: string;
-    fallbackReason?: 'no_actionable_options' | 'keep_current_plan';
+    fallbackReason?: 'no_actionable_options' | 'keep_current_plan' | 'single_option_shortcircuit';
   };
   // JIRA-126: Turn validation results
   turnValidation?: {

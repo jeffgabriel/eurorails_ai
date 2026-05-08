@@ -27,7 +27,7 @@ export interface TripPlannerSelectionDiagnostic {
   /**
    * Why the short-circuit path was taken (JIRA-207B R10c values, narrowed by JIRA-210B).
    */
-  fallbackReason: 'no_actionable_options' | 'keep_current_plan';
+  fallbackReason: 'no_actionable_options' | 'keep_current_plan' | 'single_option_shortcircuit';
 }
 
 /** Shape of a single LLM call transcript entry. */

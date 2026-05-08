@@ -122,7 +122,7 @@ export interface GameTurnLogEntry {
     llmTokens: { input: number; output: number };
     llmReasoning: string;
     /** JIRA-210B: Why the short-circuit path was taken. Only present when no_actionable_options or keep_current_plan fired. */
-    fallbackReason?: 'no_actionable_options' | 'keep_current_plan';
+    fallbackReason?: 'no_actionable_options' | 'keep_current_plan' | 'single_option_shortcircuit';
   };
 
   // Turn Validation (JIRA-126)
