@@ -1,4 +1,5 @@
 import { TurnValidator } from '../../services/ai/TurnValidator';
+import * as MapTopology from '../../services/ai/MapTopology';
 import {
   AIActionType,
   WorldSnapshot,
@@ -434,6 +435,361 @@ describe('TurnValidator', () => {
       const saturated = TurnValidator.computeSaturatedCityKeys(snapshot);
       expect(saturated.has('10,11')).toBe(true);
     });
+
+    // AC5a: computeSaturatedCityKeys includes a medium city when the bot adding 1 entry would violate reservation
+    it('AC5a: should include a 4-edge medium city key when 1 opponent has 3 edges leaving only 1, and bot entry would leave 0 (reservedFor=1)', () => {
+      // Medium city at (20, 20), cap=3. 1 opponent has track there.
+      // We mock getHexNeighbors to return exactly 4 neighbors.
+      // 3 of those neighbor edges are occupied by the opponent → remaining = 1.
+      // Bot adding 1 → remainingAfterBotEntry = 0 < reservedFor = max(0, 3 - (1+1)) = 1 → saturated.
+      const cityRow = 20;
+      const cityCol = 20;
+      const cityKey = `${cityRow},${cityCol}`;
+      const neighbors = [
+        { row: 19, col: 20 },
+        { row: 19, col: 21 },
+        { row: 20, col: 19 },
+        { row: 20, col: 21 },
+      ];
+
+      const spy = jest.spyOn(MapTopology, 'getHexNeighbors').mockImplementation((r, c) => {
+        if (r === cityRow && c === cityCol) return neighbors;
+        return [];
+      });
+
+      try {
+        const snapshot = makeSnapshot();
+        // Opponent occupies 3 of the 4 entry edges
+        snapshot.allPlayerTracks = [
+          {
+            playerId: 'p1',
+            segments: [
+              makeSegment(19, 20, cityRow, cityCol, 1, TerrainType.MediumCity),
+              makeSegment(19, 21, cityRow, cityCol, 1, TerrainType.MediumCity),
+              makeSegment(20, 19, cityRow, cityCol, 1, TerrainType.MediumCity),
+            ],
+          },
+        ];
+        snapshot.bot.existingSegments = [];
+        // terrainLookup must know about this city — add a fake bot segment elsewhere with this city as endpoint
+        // Instead, use allPlayerTracks to populate terrain. The track segments above have toTerrain=MediumCity.
+
+        const saturated = TurnValidator.computeSaturatedCityKeys(snapshot);
+        expect(saturated.has(cityKey)).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    // AC5b: computeSaturatedCityKeys does NOT include a city the bot already touches due to edge exhaustion alone
+    it('AC5b: should NOT include a 3-edge small city when the bot already has 2 entry segments (R5 — bot-already-touches keeps player-count semantics)', () => {
+      // Small city at (30, 30), cap=2. Bot already has 2 entry edges.
+      // Even though 0 edges remain, R5 says cities the bot already touches are governed
+      // by player-count semantics only — the reservation logic is skipped for them.
+      const cityRow = 30;
+      const cityCol = 30;
+      const cityKey = `${cityRow},${cityCol}`;
+      const neighbors = [
+        { row: 29, col: 30 },
+        { row: 29, col: 31 },
+        { row: 30, col: 29 },
+      ];
+
+      const spy = jest.spyOn(MapTopology, 'getHexNeighbors').mockImplementation((r, c) => {
+        if (r === cityRow && c === cityCol) return neighbors;
+        return [];
+      });
+
+      try {
+        const snapshot = makeSnapshot();
+        snapshot.allPlayerTracks = [];
+        // Bot has 2 entry segments to this city
+        snapshot.bot.existingSegments = [
+          makeSegment(29, 30, cityRow, cityCol, 1, TerrainType.SmallCity),
+          makeSegment(29, 31, cityRow, cityCol, 1, TerrainType.SmallCity),
+        ];
+
+        const saturated = TurnValidator.computeSaturatedCityKeys(snapshot);
+        // Should NOT be saturated: bot already touches, so player-count semantics apply.
+        // otherPlayers = 0, bot touches, total = 1, limit = 2 → 1 <= 2 → NOT saturated by player-count.
+        // R5: edge-reservation logic skipped for bot-already-touching cities.
+        expect(saturated.has(cityKey)).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  describe('CITY_ENTRY_RESERVATION', () => {
+    // Helper: spy on getHexNeighbors to return a fixed neighbor set for a city
+    function mockNeighbors(cityRow: number, cityCol: number, neighbors: Array<{ row: number; col: number }>) {
+      return jest.spyOn(MapTopology, 'getHexNeighbors').mockImplementation((r, c) => {
+        if (r === cityRow && c === cityCol) return neighbors;
+        return [];
+      });
+    }
+
+    // AC1a: Solo bot, 3-edge small city, bot builds 1st entry → PASS
+    it('AC1a: should PASS when solo bot builds 1st entry into a 3-edge small city (2 edges remain after)', () => {
+      const cityRow = 40;
+      const cityCol = 40;
+      const neighbors = [
+        { row: 39, col: 40 },
+        { row: 39, col: 41 },
+        { row: 40, col: 39 },
+      ];
+
+      const spy = mockNeighbors(cityRow, cityCol, neighbors);
+      try {
+        const snapshot = makeSnapshot();
+        snapshot.allPlayerTracks = [];
+        snapshot.bot.existingSegments = [];
+
+        // Bot builds 1st entry
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(39, 40, cityRow, cityCol, 3, TerrainType.SmallCity)],
+        };
+        const result = TurnValidator.validate(plan, makeContext(), snapshot);
+        expect(result.hardGates.find(g => g.gate === 'CITY_ENTRY_RESERVATION')?.passed).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    // AC1b: Solo bot, 3-edge small city, 2 entry edges already built, plan adds 3rd → REJECT
+    it('AC1b: should REJECT when solo bot tries to build 3rd entry into 3-edge small city (0 edges would remain, 1 reserved)', () => {
+      const cityRow = 40;
+      const cityCol = 40;
+      const neighbors = [
+        { row: 39, col: 40 },
+        { row: 39, col: 41 },
+        { row: 40, col: 39 },
+      ];
+
+      const spy = mockNeighbors(cityRow, cityCol, neighbors);
+      try {
+        const snapshot = makeSnapshot();
+        snapshot.allPlayerTracks = [];
+        // Bot already has 2 entry edges via existingSegments
+        snapshot.bot.existingSegments = [
+          makeSegment(39, 40, cityRow, cityCol, 3, TerrainType.SmallCity),
+          makeSegment(39, 41, cityRow, cityCol, 3, TerrainType.SmallCity),
+        ];
+
+        // Bot tries to build the 3rd entry
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(40, 39, cityRow, cityCol, 3, TerrainType.SmallCity)],
+        };
+        const result = TurnValidator.validate(plan, makeContext(), snapshot);
+        expect(result.valid).toBe(false);
+        expect(result.hardGates.find(g => g.gate === 'CITY_ENTRY_RESERVATION')?.passed).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    // AC2a: Bot + 1 opponent at 4-edge medium city, plan adds 1 segment, 2+ remaining post-build → PASS
+    it('AC2a: should PASS when bot + 1 opponent at 4-edge medium city and 2 edges remain post-build', () => {
+      const cityRow = 50;
+      const cityCol = 50;
+      const neighbors = [
+        { row: 49, col: 50 },
+        { row: 49, col: 51 },
+        { row: 50, col: 49 },
+        { row: 50, col: 51 },
+      ];
+
+      const spy = mockNeighbors(cityRow, cityCol, neighbors);
+      try {
+        const snapshot = makeSnapshot();
+        // Opponent has 1 entry edge
+        snapshot.allPlayerTracks = [
+          {
+            playerId: 'p1',
+            segments: [makeSegment(49, 50, cityRow, cityCol, 1, TerrainType.MediumCity)],
+          },
+        ];
+        snapshot.bot.existingSegments = [];
+
+        // Bot builds 1 entry; remaining before = 3, after = 2, reservedFor = max(0, 3 - (1+1)) = 1 → 2 >= 1 → PASS
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(49, 51, cityRow, cityCol, 3, TerrainType.MediumCity)],
+        };
+        const result = TurnValidator.validate(plan, makeContext(), snapshot);
+        expect(result.hardGates.find(g => g.gate === 'CITY_ENTRY_RESERVATION')?.passed).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    // AC2b: 3-edge medium city, 1 opponent + bot already has 1 segment, plan adds 1 more → REJECT
+    it('AC2b: should REJECT when 3-edge medium city has 1 opponent + bot already has 1 entry and plan adds 1 more (0 edges remain, reservation=1)', () => {
+      const cityRow = 50;
+      const cityCol = 50;
+      const neighbors = [
+        { row: 49, col: 50 },
+        { row: 49, col: 51 },
+        { row: 50, col: 49 },
+      ];
+
+      const spy = mockNeighbors(cityRow, cityCol, neighbors);
+      try {
+        const snapshot = makeSnapshot();
+        // 1 opponent has 1 entry
+        snapshot.allPlayerTracks = [
+          {
+            playerId: 'p1',
+            segments: [makeSegment(49, 50, cityRow, cityCol, 1, TerrainType.MediumCity)],
+          },
+        ];
+        // Bot already has 1 entry
+        snapshot.bot.existingSegments = [
+          makeSegment(49, 51, cityRow, cityCol, 3, TerrainType.MediumCity),
+        ];
+
+        // Bot tries to add another entry. remaining = 1 (only (50,49) edge free).
+        // After build: remaining = 0. playersAfter = 1(opponent) + 1(bot) = 2.
+        // reservedFor = max(0, 3 - 2) = 1. 0 < 1 → REJECT.
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(50, 49, cityRow, cityCol, 3, TerrainType.MediumCity)],
+        };
+        const result = TurnValidator.validate(plan, makeContext(), snapshot);
+        expect(result.valid).toBe(false);
+        expect(result.hardGates.find(g => g.gate === 'CITY_ENTRY_RESERVATION')?.passed).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    // AC3: Kaliningrad (maxConnections=1), no other players, bot builds → PASS (reservation = 0)
+    it('AC3: should PASS for Kaliningrad (maxConnections=1) with no other players — no edges owed to future players', () => {
+      const snapshot = makeSnapshot();
+      snapshot.allPlayerTracks = [];
+      snapshot.bot.existingSegments = [];
+
+      const plan: TurnPlan = {
+        type: AIActionType.BuildTrack,
+        segments: [makeSegment(18, 63, 19, 63, 3, TerrainType.SmallCity)],
+      };
+      const result = TurnValidator.validate(plan, makeContext(), snapshot);
+      expect(result.hardGates.find(g => g.gate === 'CITY_ENTRY_RESERVATION')?.passed).toBe(true);
+    });
+
+    // AC4a: Multi-segment turn, 3 segments to same 3-edge small city → 3rd segment REJECTS
+    it('AC4a: should REJECT 3rd segment in a multi-segment plan that builds all 3 entries to a 3-edge small city', () => {
+      const cityRow = 60;
+      const cityCol = 60;
+      const neighbors = [
+        { row: 59, col: 60 },
+        { row: 59, col: 61 },
+        { row: 60, col: 59 },
+      ];
+
+      const spy = mockNeighbors(cityRow, cityCol, neighbors);
+      try {
+        const snapshot = makeSnapshot();
+        snapshot.allPlayerTracks = [];
+        snapshot.bot.existingSegments = [];
+
+        // Plan: 3 segments, all building into the small city
+        const plan = multiAction([
+          {
+            type: AIActionType.BuildTrack,
+            segments: [makeSegment(59, 60, cityRow, cityCol, 1, TerrainType.SmallCity)],
+          },
+          {
+            type: AIActionType.BuildTrack,
+            segments: [makeSegment(59, 61, cityRow, cityCol, 1, TerrainType.SmallCity)],
+          },
+          {
+            type: AIActionType.BuildTrack,
+            segments: [makeSegment(60, 59, cityRow, cityCol, 1, TerrainType.SmallCity)],
+          },
+        ]);
+        const result = TurnValidator.validate(plan, makeContext(), snapshot);
+        // The 3rd segment takes remaining from 1 to 0 with reservedFor=1 → REJECT
+        expect(result.valid).toBe(false);
+        expect(result.hardGates.find(g => g.gate === 'CITY_ENTRY_RESERVATION')?.passed).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    // AC4b: 3-edge small city, 1 prior bot entry, plan has 2 more segments → 2nd plan segment REJECTS
+    it('AC4b: should REJECT 2nd plan segment when bot already has 1 entry edge and plan adds 2 more to 3-edge small city', () => {
+      const cityRow = 60;
+      const cityCol = 60;
+      const neighbors = [
+        { row: 59, col: 60 },
+        { row: 59, col: 61 },
+        { row: 60, col: 59 },
+      ];
+
+      const spy = mockNeighbors(cityRow, cityCol, neighbors);
+      try {
+        const snapshot = makeSnapshot();
+        snapshot.allPlayerTracks = [];
+        // Bot already has 1 entry
+        snapshot.bot.existingSegments = [
+          makeSegment(59, 60, cityRow, cityCol, 1, TerrainType.SmallCity),
+        ];
+
+        // Plan: 2 more segments to the city. 1st plan: remaining = 2-1 = 1 ≥ reservedFor=1 → PASS.
+        // 2nd plan: remaining before = 1, after = 0 < reservedFor=1 → REJECT.
+        const plan = multiAction([
+          {
+            type: AIActionType.BuildTrack,
+            segments: [makeSegment(59, 61, cityRow, cityCol, 1, TerrainType.SmallCity)],
+          },
+          {
+            type: AIActionType.BuildTrack,
+            segments: [makeSegment(60, 59, cityRow, cityCol, 1, TerrainType.SmallCity)],
+          },
+        ]);
+        const result = TurnValidator.validate(plan, makeContext(), snapshot);
+        expect(result.valid).toBe(false);
+        expect(result.hardGates.find(g => g.gate === 'CITY_ENTRY_RESERVATION')?.passed).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    // R6 sanity: Plan builds segment ending at Major City → new gate ignores it, passes
+    it('R6: should PASS for a segment ending at a MajorCity milepost — gate ignores non-small/medium cities', () => {
+      const snapshot = makeSnapshot();
+      snapshot.allPlayerTracks = [];
+      snapshot.bot.existingSegments = [];
+
+      const plan: TurnPlan = {
+        type: AIActionType.BuildTrack,
+        segments: [makeSegment(10, 20, 10, 21, 5, TerrainType.MajorCity)],
+      };
+      const result = TurnValidator.validate(plan, makeContext(), snapshot);
+      expect(result.hardGates.find(g => g.gate === 'CITY_ENTRY_RESERVATION')?.passed).toBe(true);
+    });
+
+    // AC6: validate() always emits a HardGateResult with gate === 'CITY_ENTRY_RESERVATION'
+    it('AC6: validate() hardGates array always contains an entry with gate CITY_ENTRY_RESERVATION', () => {
+      const plan: TurnPlan = { type: AIActionType.PassTurn };
+      const result = TurnValidator.validate(plan, makeContext(), makeSnapshot());
+      const gate = result.hardGates.find(g => g.gate === 'CITY_ENTRY_RESERVATION');
+      expect(gate).toBeDefined();
+      expect(gate?.passed).toBe(true);
+    });
+
+    // AC6 ordering: CITY_ENTRY_RESERVATION appears immediately after CITY_ENTRY_LIMIT
+    it('AC6 ordering: CITY_ENTRY_RESERVATION gate appears immediately after CITY_ENTRY_LIMIT in hardGates', () => {
+      const plan: TurnPlan = { type: AIActionType.PassTurn };
+      const result = TurnValidator.validate(plan, makeContext(), makeSnapshot());
+      const limitIdx = result.hardGates.findIndex(g => g.gate === 'CITY_ENTRY_LIMIT');
+      const reservationIdx = result.hardGates.findIndex(g => g.gate === 'CITY_ENTRY_RESERVATION');
+      expect(limitIdx).toBeGreaterThanOrEqual(0);
+      expect(reservationIdx).toBe(limitIdx + 1);
+    });
   });
 
   describe('MAJOR_CITY_BUILD_LIMIT', () => {
@@ -476,7 +832,7 @@ describe('TurnValidator', () => {
       const result = TurnValidator.validate(plan, makeContext(), makeSnapshot());
       expect(result.valid).toBe(true);
       expect(result.violation).toBeUndefined();
-      expect(result.hardGates).toHaveLength(7);
+      expect(result.hardGates).toHaveLength(8);
       expect(result.hardGates.every(g => g.passed)).toBe(true);
     });
 

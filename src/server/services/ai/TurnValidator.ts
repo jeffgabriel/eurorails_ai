@@ -19,7 +19,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
-import { loadGridPoints } from './MapTopology';
+import { loadGridPoints, getHexNeighbors } from './MapTopology';
 
 export interface HardGateResult {
   gate: string;
@@ -50,6 +50,7 @@ export class TurnValidator {
       TurnValidator.checkPhaseBBudgetCap(steps),
       TurnValidator.checkMajorCityBuildLimit(steps),
       TurnValidator.checkCityEntryLimit(steps, snapshot),
+      TurnValidator.checkCityEntryReservation(steps, snapshot),
       TurnValidator.checkFerryStopRule(steps, snapshot),
       TurnValidator.checkSameCardDoubleDelivery(steps),
       TurnValidator.checkCashSufficiency(steps, context, snapshot),
@@ -207,6 +208,13 @@ export class TurnValidator {
       terrainLookup.set(`${seg.to.row},${seg.to.col}`, seg.to.terrain);
     }
 
+    // Collect cities the bot already touches
+    const botTouchedCities = new Set<string>();
+    for (const seg of snapshot.bot.existingSegments) {
+      botTouchedCities.add(`${seg.from.row},${seg.from.col}`);
+      botTouchedCities.add(`${seg.to.row},${seg.to.col}`);
+    }
+
     for (const [key, playerIds] of otherPlayersAtCity) {
       const terrain = terrainLookup.get(key);
       if (terrain === undefined) continue;
@@ -219,6 +227,42 @@ export class TurnValidator {
       // It's saturated (for the bot) when playerIds.size + 1 > limit,
       // i.e. playerIds.size >= limit
       if (playerIds.size >= limit) {
+        saturated.add(key);
+      }
+    }
+
+    // R4: Also mark cities saturated when the bot adding one more entry edge would violate
+    // the reservation — even if the bot is not yet touching the city.
+    // R5: Cities the bot already touches retain player-count semantics only (skip here).
+    for (const [key, terrain] of terrainLookup) {
+      if (saturated.has(key)) continue; // already saturated by player-count
+      if (botTouchedCities.has(key)) continue; // R5: bot already touches — player-count semantics govern
+
+      const [rowStr, colStr] = key.split(',');
+      const row = Number(rowStr);
+      const col = Number(colStr);
+      const limit = TurnValidator.cityEntryLimit(row, col, terrain);
+      if (limit === null) continue;
+
+      const otherPlayers = otherPlayersAtCity.get(key);
+      const otherCount = otherPlayers ? otherPlayers.size : 0;
+
+      // If bot were to build one entry edge, playersAfter = otherCount + 1
+      const playersAfter = otherCount + 1;
+      const reservedFor = Math.max(0, limit - playersAfter);
+
+      // How many entry edges remain right now?
+      const remaining = TurnValidator.entryEdgesRemaining(row, col, snapshot);
+
+      // Skip cities that have no real entry edges on the map (synthetic/nonexistent cities)
+      // or are already fully occupied — bot can't build there regardless.
+      if (remaining <= 0) continue;
+
+      // After bot builds one entry, remainingAfterBotEntry = remaining - 1
+      const remainingAfterBotEntry = remaining - 1;
+
+      // If the remaining after bot entry is less than what must be reserved, mark saturated
+      if (remainingAfterBotEntry < reservedFor) {
         saturated.add(key);
       }
     }
@@ -266,6 +310,164 @@ export class TurnValidator {
       }
     }
     return { gate: 'CITY_ENTRY_LIMIT', passed: true };
+  }
+
+  /**
+   * Count the physical entry edges to the city at (row, col) that no player has yet built.
+   * Iterates getHexNeighbors(row, col) and counts neighbors n such that no segment
+   * (row,col)↔n exists across snapshot.allPlayerTracks or snapshot.bot.existingSegments.
+   */
+  private static entryEdgesRemaining(
+    row: number,
+    col: number,
+    snapshot: WorldSnapshot,
+    additionalOccupiedEdges?: Set<string>,
+  ): number {
+    const neighbors = getHexNeighbors(row, col);
+    const cityKey = `${row},${col}`;
+
+    // Build a set of occupied edge keys (canonical unordered pair: smaller first)
+    const occupiedEdges = new Set<string>();
+
+    const addEdge = (r1: number, c1: number, r2: number, c2: number): void => {
+      const k1 = `${r1},${c1}`;
+      const k2 = `${r2},${c2}`;
+      const edgeKey = k1 <= k2 ? `${k1}|${k2}` : `${k2}|${k1}`;
+      occupiedEdges.add(edgeKey);
+    };
+
+    for (const playerTrack of snapshot.allPlayerTracks) {
+      for (const seg of playerTrack.segments) {
+        const fromKey = `${seg.from.row},${seg.from.col}`;
+        const toKey = `${seg.to.row},${seg.to.col}`;
+        if (fromKey === cityKey || toKey === cityKey) {
+          addEdge(seg.from.row, seg.from.col, seg.to.row, seg.to.col);
+        }
+      }
+    }
+
+    for (const seg of snapshot.bot.existingSegments) {
+      const fromKey = `${seg.from.row},${seg.from.col}`;
+      const toKey = `${seg.to.row},${seg.to.col}`;
+      if (fromKey === cityKey || toKey === cityKey) {
+        addEdge(seg.from.row, seg.from.col, seg.to.row, seg.to.col);
+      }
+    }
+
+    // Also include edges accumulated during this plan's earlier segments
+    if (additionalOccupiedEdges) {
+      for (const ek of additionalOccupiedEdges) {
+        occupiedEdges.add(ek);
+      }
+    }
+
+    let remaining = 0;
+    for (const nb of neighbors) {
+      const k1 = `${row},${col}`;
+      const k2 = `${nb.row},${nb.col}`;
+      const edgeKey = k1 <= k2 ? `${k1}|${k2}` : `${k2}|${k1}`;
+      if (!occupiedEdges.has(edgeKey)) {
+        remaining++;
+      }
+    }
+    return remaining;
+  }
+
+  /**
+   * JIRA-219: Reject a BuildTrack segment into a small/medium city if completing the build
+   * would leave fewer remaining entry edges than the number of additional players still
+   * allowed to enter that city (the "reservation" for future players).
+   *
+   * Multi-segment plans are evaluated cumulatively: later segments see the post-earlier-segment
+   * edge state.
+   */
+  private static checkCityEntryReservation(
+    steps: TurnPlan[],
+    snapshot: WorldSnapshot,
+  ): HardGateResult {
+    // Track edges consumed within this plan (canonical key → count not needed, just presence)
+    const planConsumedEdges = new Set<string>();
+    // Track which cities the bot will touch as a result of earlier segments in this plan
+    const botWillTouchCity = new Set<string>();
+
+    // Pre-populate botWillTouchCity from existing segments
+    for (const seg of snapshot.bot.existingSegments) {
+      const fromKey = `${seg.from.row},${seg.from.col}`;
+      const toKey = `${seg.to.row},${seg.to.col}`;
+      botWillTouchCity.add(fromKey);
+      botWillTouchCity.add(toKey);
+    }
+
+    for (const step of steps) {
+      if (step.type !== AIActionType.BuildTrack) continue;
+      const buildStep = step as TurnPlanBuildTrack;
+
+      for (const seg of buildStep.segments) {
+        const terrain = seg.to.terrain;
+        const limit = TurnValidator.cityEntryLimit(seg.to.row, seg.to.col, terrain);
+        if (limit === null) {
+          // Not a small/medium city — record the edge and move on
+          const k1 = `${seg.from.row},${seg.from.col}`;
+          const k2 = `${seg.to.row},${seg.to.col}`;
+          const edgeKey = k1 <= k2 ? `${k1}|${k2}` : `${k2}|${k1}`;
+          planConsumedEdges.add(edgeKey);
+          botWillTouchCity.add(`${seg.to.row},${seg.to.col}`);
+          continue;
+        }
+
+        const toKey = `${seg.to.row},${seg.to.col}`;
+
+        // Count distinct other players currently at this city
+        const otherPlayersAtCity = new Set<string>();
+        for (const playerTrack of snapshot.allPlayerTracks) {
+          if (playerTrack.playerId === snapshot.bot.playerId) continue;
+          for (const existingSeg of playerTrack.segments) {
+            const eFromKey = `${existingSeg.from.row},${existingSeg.from.col}`;
+            const eToKey = `${existingSeg.to.row},${existingSeg.to.col}`;
+            if (eFromKey === toKey || eToKey === toKey) {
+              otherPlayersAtCity.add(playerTrack.playerId);
+              break;
+            }
+          }
+        }
+
+        // Will the bot touch this city after this segment?
+        const botTouchesAfter = true; // the bot is building to it right now
+
+        // How many distinct players will be at the city after this build?
+        const playersAfter = otherPlayersAtCity.size + (botTouchesAfter ? 1 : 0);
+        // How many more players are still allowed? (reservation for future players)
+        const reservedFor = Math.max(0, limit - playersAfter);
+
+        // How many entry edges remain BEFORE this segment is built?
+        const remainingBeforeBuild = TurnValidator.entryEdgesRemaining(
+          seg.to.row,
+          seg.to.col,
+          snapshot,
+          planConsumedEdges,
+        );
+
+        // After we build this segment, one more edge becomes occupied
+        const remainingAfterBuild = remainingBeforeBuild - 1;
+
+        if (remainingAfterBuild < reservedFor) {
+          return {
+            gate: 'CITY_ENTRY_RESERVATION',
+            passed: false,
+            detail: `Cannot build into ${terrain === TerrainType.SmallCity ? 'small' : 'medium'} city at (${seg.to.row},${seg.to.col}) — would leave ${remainingAfterBuild} entry edge(s) but ${reservedFor} must be reserved for future player(s)`,
+          };
+        }
+
+        // Record this edge as consumed for later segments in this plan
+        const k1 = `${seg.from.row},${seg.from.col}`;
+        const k2 = `${seg.to.row},${seg.to.col}`;
+        const edgeKey = k1 <= k2 ? `${k1}|${k2}` : `${k2}|${k1}`;
+        planConsumedEdges.add(edgeKey);
+        botWillTouchCity.add(toKey);
+      }
+    }
+
+    return { gate: 'CITY_ENTRY_RESERVATION', passed: true };
   }
 
   /** Must stop at ferry port; cannot move through it in the same turn. */
