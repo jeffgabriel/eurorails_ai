@@ -13,6 +13,8 @@
 
 import { BotSkillLevel, GameContext, BotMemoryState, StrategicRoute, CorridorMap, FerryConnection, TrackSegment, GridPoint } from '../../../../shared/types/GameTypes';
 import { UPGRADE_DELIVERY_THRESHOLD, UPGRADE_OPERATING_BUFFER } from '../context/UpgradeGatingConstants';
+import type { StrategicContext } from '../StrategicContextBuilder';
+import { renderStrategicContext } from '../StrategicContextBuilder';
 
 // ── Common Suffix ─────────────────────────────────────────────────────
 
@@ -171,7 +173,7 @@ export function getPlanSelectionPrompt(skillLevel: BotSkillLevel): string {
 
 // ── Trip Planning Prompt (JIRA-126, JIRA-207B, JIRA-210B) ──
 
-const TRIP_PLANNING_SYSTEM_SUFFIX = `
+export const TRIP_PLANNING_SYSTEM_SUFFIX = `
 Plan one route — the best multi-stop trip for this turn.
 Your route should consider all OPTIONS simultaneously.
 
@@ -224,6 +226,36 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
   "upgradeOnRoute": "<FastFreight|HeavyFreight|Superfreight — ONLY if upgrading, omit if not>"
 }`;
 
+// ── Medium-skill Strategic Reasoning Blocks ───────────────────────────────
+
+/**
+ * Instructs Medium-skill (Sonnet) to produce structured counterfactual reasoning.
+ * Extends the standard TRIP_PLANNING_SYSTEM_SUFFIX with a reasoning contract.
+ */
+export const TRIP_REASONING_STRUCTURE = `STRUCTURED REASONING REQUIRED:
+Your response must include a "reasoning" object with these fields:
+- "chosen": identifier of the plan you selected (e.g. "Card 2 Coal→Berlin")
+- "chosenOver": array of alternatives you explicitly considered and rejected (at least 1 entry when multiple viable options exist)
+- "chosenOverWhy": justification citing NET value, estimated turns, or strategic context data from the prompt
+- "riskIfWrong": what you would do if your top pick turns out to be wrong
+- "followUpTrip": a brief sketch of the next likely trip after this one completes
+
+When ≥2 viable options exist, "chosenOver" MUST be non-empty. Qualitative descriptions without citing specific M figures are not allowed.`;
+
+/**
+ * Grants Medium-skill (Sonnet) permission to propose a trip outside the helper-generated options.
+ * The proposed trip is validated by the simulator before acceptance.
+ */
+export const TRIP_PROPOSE_LATITUDE = `PROPOSE LATITUDE:
+If you believe a trip not listed in OPTIONS would outperform all listed options, include a "propose" field:
+{
+  "propose": {
+    "stops": [ ... same stop format as the main stops array ... ],
+    "rationale": "why this unlisted trip beats all OPTIONS"
+  }
+}
+Your main "stops" must still be a valid status-quo plan from OPTIONS. The "propose" field is evaluated independently — if the simulator confirms it scores higher, it will be accepted instead.`;
+
 /**
  * JIRA-207B: Evaluate the upgrade gate — must pass ALL three conditions.
  * Lives in the user-prompt builder so the system prompt stays byte-stable (R17).
@@ -242,8 +274,11 @@ function canUpgradeThisTurn(context: GameContext, memory: BotMemoryState): boole
  * OPTIONS filters out unaffordable cards and carry-load cards (commitments).
  * Upgrade prose is suppressed (with hard-suppression rule) when gate fails (Pattern B / R14-R17).
  * JIRA-210B: Renamed NEW OPTIONS → OPTIONS; fixed count semantics; removed chosenIndex guidance.
+ *
+ * When strategicContext is provided (Medium skill only), the rendered strategic
+ * context block is injected between CURRENT PLAN and OPTIONS.
  */
-function buildTripPlanningContext(context: GameContext, memory: BotMemoryState): string {
+function buildTripPlanningContext(context: GameContext, memory: BotMemoryState, strategicContext?: StrategicContext): string {
   const lines: string[] = [];
 
   // ── Upgrade gate (Pattern B — resolves here, not in system prompt) ──
@@ -338,11 +373,19 @@ function buildTripPlanningContext(context: GameContext, memory: BotMemoryState):
   }
   lines.push('');
 
+  // ── Strategic context injection (Medium skill only) ──
+  if (strategicContext) {
+    lines.push(renderStrategicContext(strategicContext));
+  }
+
   // ── OPTIONS block (JIRA-207B R10b, JIRA-210B: renamed from NEW OPTIONS) ──
   // Filter: include only cards that are (a) affordable AND (b) not already a carry-load commitment.
+  // A carry-load is only a "commitment" when the active route still covers its delivery — without
+  // a route the carry-load is an undischarged obligation and must surface as an actionable option.
+  const hasActiveRouteRemaining = activeRoute != null && activeRoute.stops.length > activeRoute.currentStopIndex;
   const newOptionCards = context.demands.filter(d => {
     if (!d.isAffordable) return false;
-    if (d.isLoadOnTrain) return false;
+    if (d.isLoadOnTrain && hasActiveRouteRemaining) return false;
     return true;
   });
 
@@ -407,13 +450,26 @@ function buildTripPlanningContext(context: GameContext, memory: BotMemoryState):
  * System prompt: static rules only (JIRA-210B: persona block removed; byte-stable across all skill levels)
  * User prompt: dynamic context built from current game state, including CURRENT PLAN + OPTIONS (R10),
  *              and conditional upgrade suppression rule when gate fails (R15, Pattern B).
+ *
+ * When skillLevel is Medium and strategicContext is provided, the system prompt is composed
+ * as [TRIP_PLANNING_SYSTEM_SUFFIX, TRIP_REASONING_STRUCTURE, TRIP_PROPOSE_LATITUDE].join('\n\n')
+ * and the user prompt includes the rendered strategic context block. Easy and Hard use the
+ * existing byte-stable suffix unchanged.
  */
 export function getTripPlanningPrompt(
-  _skillLevel: BotSkillLevel,
+  skillLevel: BotSkillLevel,
   context: GameContext,
   memory: BotMemoryState,
+  strategicContext?: StrategicContext,
 ): { system: string; user: string } {
-  // JIRA-210B: persona block removed — system prompt is now byte-stable regardless of skill level.
+  if (skillLevel === BotSkillLevel.Medium && strategicContext) {
+    const system = [TRIP_PLANNING_SYSTEM_SUFFIX, TRIP_REASONING_STRUCTURE, TRIP_PROPOSE_LATITUDE].join('\n\n');
+    const dynamicContext = buildTripPlanningContext(context, memory, strategicContext);
+    const user = `${dynamicContext}\n\nReview your CURRENT PLAN and OPTIONS. Keep the current plan if it is still optimal, or propose a replan using one or more cards from OPTIONS. Your response must include a structured "reasoning" object as described in the system prompt.`;
+    return { system, user };
+  }
+
+  // Easy and Hard: byte-stable system prompt unchanged
   const system = TRIP_PLANNING_SYSTEM_SUFFIX;
   const dynamicContext = buildTripPlanningContext(context, memory);
   const user = `${dynamicContext}\n\nReview your CURRENT PLAN and OPTIONS. Keep the current plan if it is still optimal, or propose a replan using one or more cards from OPTIONS.`;

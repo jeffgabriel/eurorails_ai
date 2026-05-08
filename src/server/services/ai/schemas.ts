@@ -250,6 +250,79 @@ export const TRIP_PLAN_SCHEMA = {
   required: ['stops', 'reasoning'],
 };
 
+/**
+ * JSON Schema for the Medium-skill LLM trip planning response.
+ * Extends TRIP_PLAN_SCHEMA with a structured `reasoning` object and an optional
+ * `propose` field that lets the LLM suggest a trip outside the helper-generated options.
+ *
+ * Kept as a separate constant — TRIP_PLAN_SCHEMA is byte-stable for Easy/Hard.
+ *
+ * Note: Anthropic requires additionalProperties: false on all object types.
+ */
+export const TRIP_PLAN_SCHEMA_MEDIUM = {
+  type: 'object' as const,
+  additionalProperties: false as const,
+  properties: {
+    stops: {
+      type: 'array' as const,
+      items: {
+        type: 'object' as const,
+        additionalProperties: false as const,
+        properties: {
+          action: { type: 'string' as const, enum: ['PICKUP', 'DELIVER'] },
+          load: { type: 'string' as const },
+          supplyCity: { type: 'string' as const },
+          deliveryCity: { type: 'string' as const },
+          demandCardId: { type: 'number' as const },
+          payment: { type: 'number' as const },
+        },
+        required: ['action', 'load'],
+      },
+    },
+    reasoning: {
+      type: 'object' as const,
+      additionalProperties: false as const,
+      properties: {
+        chosen: { type: 'string' as const },
+        chosenOver: {
+          type: 'array' as const,
+          items: { type: 'string' as const },
+        },
+        chosenOverWhy: { type: 'string' as const },
+        riskIfWrong: { type: 'string' as const },
+        followUpTrip: { type: 'string' as const },
+      },
+      required: ['chosen', 'chosenOver', 'chosenOverWhy', 'riskIfWrong', 'followUpTrip'],
+    },
+    upgradeOnRoute: { type: 'string' as const, enum: ['FastFreight', 'HeavyFreight', 'Superfreight'] },
+    propose: {
+      type: 'object' as const,
+      additionalProperties: false as const,
+      properties: {
+        stops: {
+          type: 'array' as const,
+          items: {
+            type: 'object' as const,
+            additionalProperties: false as const,
+            properties: {
+              action: { type: 'string' as const, enum: ['PICKUP', 'DELIVER'] },
+              load: { type: 'string' as const },
+              supplyCity: { type: 'string' as const },
+              deliveryCity: { type: 'string' as const },
+              demandCardId: { type: 'number' as const },
+              payment: { type: 'number' as const },
+            },
+            required: ['action', 'load'],
+          },
+        },
+        rationale: { type: 'string' as const },
+      },
+      required: ['stops', 'rationale'],
+    },
+  },
+  required: ['stops', 'reasoning'],
+};
+
 // ── Stage3Result ──────────────────────────────────────────────────────────
 
 /**

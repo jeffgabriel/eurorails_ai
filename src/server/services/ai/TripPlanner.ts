@@ -27,9 +27,12 @@ import { computeTrackUsageFees } from '../../../shared/services/computeTrackUsag
 import { RouteValidator } from './RouteValidator';
 import { RouteOptimizer } from './RouteOptimizer';
 import { ResponseParser } from './ResponseParser';
-import { TRIP_PLAN_SCHEMA } from './schemas';
+import { TRIP_PLAN_SCHEMA, TRIP_PLAN_SCHEMA_MEDIUM } from './schemas';
 import { getTripPlanningPrompt } from './prompts/systemPrompts';
 import type { TripPlannerSelectionDiagnostic } from './LLMTranscriptLogger';
+import { build as buildStrategicContext } from './StrategicContextBuilder';
+import { simulateTrip } from './RouteDetourEstimator';
+import { PROPOSE_MIN_SCORE_DELTA } from './StrategicConstants';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -68,8 +71,19 @@ type LLMTripPlanStop =
 
 interface LLMTripPlanResponse {
   stops: Array<LLMTripPlanStop>;
-  reasoning: string;
+  reasoning: string | {
+    chosen: string;
+    chosenOver: string[];
+    chosenOverWhy: string;
+    riskIfWrong: string;
+    followUpTrip: string;
+  };
   upgradeOnRoute?: string;
+  /** Medium-skill only: proposed trip outside the helper-generated options */
+  propose?: {
+    stops: Array<LLMTripPlanStop>;
+    rationale: string;
+  };
 }
 
 // ── Token budgets (same scale as route planning) ─────────────────────
@@ -156,7 +170,12 @@ export class TripPlanner {
       }
     }
 
-    const { system: systemPrompt, user: baseUserPrompt } = getTripPlanningPrompt(skillLevel, context, memory);
+    // Build strategic context for Medium skill (Task 1 foundation)
+    const strategicContext = skillLevel === BotSkillLevel.Medium
+      ? buildStrategicContext(snapshot, context, memory)
+      : undefined;
+
+    const { system: systemPrompt, user: baseUserPrompt } = getTripPlanningPrompt(skillLevel, context, memory, strategicContext);
     const userPrompt = userPromptOverride ?? baseUserPrompt;
 
     const llmLog: LlmAttempt[] = [];
@@ -171,13 +190,17 @@ export class TripPlanner {
       const startMs = Date.now();
       try {
         adapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, playerName: snapshot.bot.botConfig?.name, turn: snapshot.turnNumber, caller: 'trip-planner', method: 'planTrip' });
+        const outputSchema = skillLevel === BotSkillLevel.Medium
+          ? TRIP_PLAN_SCHEMA_MEDIUM
+          : TRIP_PLAN_SCHEMA;
+
         const response = await adapter.chat({
           model,
           maxTokens: TRIP_MAX_TOKENS[skillLevel],
           temperature: TEMPERATURE_BY_SKILL[skillLevel],
           systemPrompt,
           userPrompt: promptWithError,
-          outputSchema: TRIP_PLAN_SCHEMA,
+          outputSchema,
           timeoutMs: 60000,
           ...(skillLevel !== BotSkillLevel.Easy && {
             thinking: { type: 'adaptive' },
@@ -238,6 +261,63 @@ export class TripPlanner {
           continue;
         }
 
+        // ── Medium-skill: chosenOver-empty retry rule (R7) ──
+        // When Medium skill has ≥2 viable alternatives (status-quo + a propose), require
+        // that reasoning.chosenOver is non-empty. Trigger retry if empty.
+        const hasPropose = skillLevel === BotSkillLevel.Medium && parsed.propose != null;
+        if (skillLevel === BotSkillLevel.Medium && hasPropose) {
+          const reasoning = parsed.reasoning;
+          if (typeof reasoning === 'object' && reasoning !== null && Array.isArray(reasoning.chosenOver) && reasoning.chosenOver.length === 0) {
+            const err = 'Your reasoning.chosenOver was empty. Identify at least one alternative you considered.';
+            llmLog.push({ attemptNumber: attempt + 1, status: 'validation_error', responseText: response.text.substring(0, 500), error: err, latencyMs });
+            lastError = err;
+            continue;
+          }
+        }
+
+        // ── Medium-skill: propose-acceptance gate (R5/R6) ──
+        // Single new code path: post-parse, post-validation, before affordability check.
+        let finalCandidateStops = candidates[0].stops;
+        let finalCandidateScore = candidates[0].score;
+
+        if (skillLevel === BotSkillLevel.Medium && parsed.propose && parsed.propose.stops.length > 0 && snapshot.bot.position) {
+          const proposeStops = this.convertLLMStopsToRouteStops(parsed.propose.stops);
+          const tempPropose: StrategicRoute = {
+            stops: proposeStops,
+            currentStopIndex: 0,
+            phase: 'build',
+            createdAtTurn: context.turnNumber,
+            reasoning: 'propose',
+          };
+
+          const proposeValidation = RouteValidator.validate(tempPropose, context, snapshot);
+          if (!proposeValidation.valid && !proposeValidation.prunedRoute) {
+            console.warn(`[TripPlanner.propose] rejected: validation_failed (skill=Medium, gameId=${snapshot.gameId})`);
+          } else {
+            const proposeSimulation = simulateTrip(snapshot.bot.position, proposeStops, snapshot);
+            if (!proposeSimulation.feasible) {
+              console.warn(`[TripPlanner.propose] rejected: infeasible (skill=Medium, gameId=${snapshot.gameId})`);
+            } else {
+              // Compute a simple score for propose based on simulator output
+              const proposePayout = proposeStops
+                .filter(s => s.action === 'deliver' && s.payment)
+                .reduce((sum, s) => sum + (s.payment ?? 0), 0);
+              const proposeBuildCost = proposeSimulation.totalBuildCost;
+              const proposeTurns = Math.max(proposeSimulation.turnsToComplete, 1);
+              const proposeNetValue = proposePayout - proposeBuildCost;
+              const proposeScore = proposeNetValue / proposeTurns;
+
+              if (proposeScore > finalCandidateScore + PROPOSE_MIN_SCORE_DELTA) {
+                console.log(`[TripPlanner.propose] accepted: score ${proposeScore.toFixed(2)} > status-quo ${finalCandidateScore.toFixed(2)} (skill=Medium, gameId=${snapshot.gameId})`);
+                finalCandidateStops = proposeValidation.prunedRoute?.stops ?? proposeStops;
+                finalCandidateScore = proposeScore;
+              } else {
+                console.warn(`[TripPlanner.propose] rejected: worse_score (propose=${proposeScore.toFixed(2)}, status-quo=${finalCandidateScore.toFixed(2)}, skill=Medium, gameId=${snapshot.gameId})`);
+              }
+            }
+          }
+        }
+
         // Normalize upgrade label and compute upgrade cost for affordability check
         const UPGRADE_LABEL_TO_TRAIN: Record<string, TrainType> = {
           FastFreight: TrainType.FastFreight,
@@ -264,13 +344,18 @@ export class TripPlanner {
           continue;
         }
 
+        // Serialize reasoning for StrategicRoute storage
+        const reasoningText = typeof parsed.reasoning === 'string'
+          ? parsed.reasoning
+          : JSON.stringify(parsed.reasoning);
+
         // Convert validated route to StrategicRoute
         const route: StrategicRoute = {
-          stops: validatedRoute.stops,
+          stops: finalCandidateStops,
           currentStopIndex: 0,
           phase: 'build',
           createdAtTurn: context.turnNumber,
-          reasoning: validatedRoute.reasoning,
+          reasoning: reasoningText,
           upgradeOnRoute: normalizedUpgrade,
         };
 
@@ -696,5 +781,38 @@ export class TripPlanner {
       if (pickupMatch) return pickupMatch[1];
     }
     return null;
+  }
+
+  /**
+   * Convert raw LLM stop array (PICKUP/DELIVER format) to RouteStop format.
+   * Applies the same sentinel-city filter used in scoreCandidates.
+   */
+  private convertLLMStopsToRouteStops(rawStops: Array<LLMTripPlanStop>): RouteStop[] {
+    return rawStops
+      .filter(s => {
+        const actionUpper = s.action.toUpperCase();
+        if (actionUpper !== 'PICKUP' && actionUpper !== 'DELIVER') return false;
+        const cityField = actionUpper === 'PICKUP'
+          ? (s as { action: string; load: string; supplyCity?: string }).supplyCity
+          : (s as { action: string; load: string; deliveryCity?: string }).deliveryCity;
+        return !!cityField && cityField !== 'OnTrain' && cityField !== '(already carried)';
+      })
+      .map(s => {
+        const actionUpper = s.action.toUpperCase();
+        const cityField = actionUpper === 'PICKUP'
+          ? (s as { action: string; load: string; supplyCity?: string }).supplyCity!
+          : (s as { action: string; load: string; deliveryCity?: string }).deliveryCity!;
+        const deliverStop = actionUpper === 'DELIVER'
+          ? s as { action: string; load: string; deliveryCity?: string; demandCardId?: number; payment?: number }
+          : null;
+
+        return {
+          action: s.action.toLowerCase() as 'pickup' | 'deliver',
+          loadType: s.load,
+          city: cityField,
+          demandCardId: deliverStop?.demandCardId,
+          payment: deliverStop?.payment,
+        };
+      });
   }
 }
