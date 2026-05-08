@@ -126,6 +126,51 @@ describe('LobbyBotRoutes', () => {
         });
       });
 
+      it('should add a bot with a caller-supplied color', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        // Use #0000ff — the creator auto-picks #ff0000 so blue is available
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'medium', color: '#0000ff' })
+          .expect(201);
+
+        expect(response.body.success).toBe(true);
+        expect(response.body.data.color).toBe('#0000ff');
+      });
+
+      it('should normalize uppercase hex to lowercase', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        // Use #0000FF uppercase — normalized to #0000ff; creator has #ff0000
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'medium', color: '#0000FF' })
+          .expect(201);
+
+        expect(response.body.data.color).toBe('#0000ff');
+      });
+
+      it('should auto-assign color when color is omitted', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'easy' })
+          .expect(201);
+
+        expect(response.body.data.color).toBeDefined();
+        expect(response.body.data.color).toMatch(/^#[0-9a-f]{6}$/);
+        const palette = ['#ff0000', '#0000ff', '#008000', '#ffd700', '#000000', '#8b4513'];
+        expect(palette).toContain(response.body.data.color);
+      });
+
       it('should accept a custom bot name', async () => {
         const game = await createTestGame();
         mockAuthForUser(creatorUserId, 'botroute_creator');
@@ -250,6 +295,62 @@ describe('LobbyBotRoutes', () => {
         expect(response.body.error).toBe('VALIDATION_ERROR');
         expect(response.body.message).toContain('model');
       });
+
+      it('should return 400 for color not matching hex format (plain name)', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'medium', color: 'red' })
+          .expect(400);
+
+        expect(response.body.error).toBe('VALIDATION_ERROR');
+        expect(response.body.details).toBe('color must be a 6-digit hex code');
+      });
+
+      it('should return 400 for color with wrong hex length', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'medium', color: '#abc' })
+          .expect(400);
+
+        expect(response.body.error).toBe('VALIDATION_ERROR');
+        expect(response.body.details).toBe('color must be a 6-digit hex code');
+      });
+
+      it('should return 400 for color with invalid hex characters', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'medium', color: '#GG0000' })
+          .expect(400);
+
+        expect(response.body.error).toBe('VALIDATION_ERROR');
+        expect(response.body.details).toBe('color must be a 6-digit hex code');
+      });
+
+      it('should return 400 for valid hex but not in canonical palette', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'medium', color: '#abcdef' })
+          .expect(400);
+
+        expect(response.body.error).toBe('VALIDATION_ERROR');
+        expect(response.body.details).toBe('color is not an allowed player color');
+      });
     });
 
     describe('provider and model passthrough', () => {
@@ -361,6 +462,27 @@ describe('LobbyBotRoutes', () => {
           .expect(400);
 
         expect(response.body.error).toBe('GAME_ALREADY_STARTED');
+      });
+
+      it('should return 400 COLOR_TAKEN when the chosen color is already used', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        // Add first bot with blue (creator already has red, so blue is free)
+        await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'easy', color: '#0000ff' })
+          .expect(201);
+
+        // Attempt second bot with the same color — should conflict
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'medium', color: '#0000ff' })
+          .expect(400);
+
+        expect(response.body.error).toBe('COLOR_TAKEN');
       });
     });
   });

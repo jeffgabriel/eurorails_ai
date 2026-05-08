@@ -150,6 +150,22 @@ describe('LobbyService Bot Management', () => {
         const creatorPlayer = players.find(p => p.userId === creatorUserId);
         expect(bot.color).not.toBe(creatorPlayer?.color);
       });
+
+      it('should use the caller-supplied color when provided', async () => {
+        const game = await createTestGame();
+        // Creator auto-picks #ff0000; use #0000ff which is free in the bot palette
+        const bot = await LobbyService.addBot(game.id, creatorUserId, defaultBotConfig, '#0000ff');
+
+        expect(bot.color).toBe('#0000ff');
+      });
+
+      it('should preserve auto-pick behavior when color is omitted', async () => {
+        const game = await createTestGame();
+        const bot = await LobbyService.addBot(game.id, creatorUserId, defaultBotConfig);
+
+        const palette = ['#ff0000', '#0000ff', '#008000', '#ffd700', '#000000', '#8b4513'];
+        expect(palette).toContain(bot.color);
+      });
     });
 
     describe('error paths', () => {
@@ -194,6 +210,18 @@ describe('LobbyService Bot Management', () => {
         await expect(
           LobbyService.addBot(game.id, creatorUserId, badConfig)
         ).rejects.toThrow('Invalid skill level');
+      });
+
+      it('should throw LobbyError COLOR_TAKEN when the requested color is already used', async () => {
+        const game = await createTestGame();
+
+        // Creator auto-picks #ff0000; add a bot with #0000ff (free in bot palette)
+        await LobbyService.addBot(game.id, creatorUserId, defaultBotConfig, '#0000ff');
+
+        // Attempt to add a second bot with the same color — should conflict
+        await expect(
+          LobbyService.addBot(game.id, creatorUserId, defaultBotConfig, '#0000ff')
+        ).rejects.toMatchObject({ code: 'COLOR_TAKEN' });
       });
 
     });
