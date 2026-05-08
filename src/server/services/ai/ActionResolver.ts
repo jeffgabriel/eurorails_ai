@@ -492,6 +492,10 @@ export class ActionResolver {
     }
 
     let targetDescription: string;
+    // Track whether the move was issued with a city name (vs. coordinates).
+    // Used downstream by the major-city path-truncation block.
+    const isCityNameTarget = !(toRow !== undefined && toCol !== undefined);
+    let targetCity: string | undefined;
 
     if (toRow !== undefined && toCol !== undefined) {
       // Coordinate-based path: target is a specific milepost by row/col
@@ -507,21 +511,22 @@ export class ActionResolver {
       }
     } else {
       // City-name path (existing behavior)
-      const targetCity = details.to ?? details.toward ?? details.city;
-      if (!targetCity) {
+      const resolvedCity = details.to ?? details.toward ?? details.city;
+      if (!resolvedCity) {
         return { success: false, error: 'MOVE requires details.to specifying the destination city name.' };
       }
+      targetCity = String(resolvedCity);
 
-      targetPositions = ActionResolver.findCityMilepost(String(targetCity), snapshot);
+      targetPositions = ActionResolver.findCityMilepost(targetCity, snapshot);
       if (targetPositions.length === 0) {
         return { success: false, error: `Destination city "${targetCity}" not found on the map.` };
       }
 
       // Check if already at the target city
-      if (ActionResolver.isBotAtCity(snapshot, String(targetCity))) {
+      if (ActionResolver.isBotAtCity(snapshot, targetCity)) {
         return { success: false, error: `Bot is already at "${targetCity}".` };
       }
-      targetDescription = String(targetCity);
+      targetDescription = targetCity;
     }
 
     // Ferry crossing: if bot is at a ferry port, teleport to paired port
@@ -617,6 +622,29 @@ export class ActionResolver {
         );
       }
       let truncatedPath = fullPath.slice(0, pathLength + 1); // +1 for the start node
+
+      // Major-city truncation: stop at the first milepost belonging to the destination
+      // major-city group. Applies only for city-name targets that resolve to a major city.
+      // Runs AFTER speed-budget truncation (above) and BEFORE ferry-port truncation (below).
+      // R5: fire only when isCityNameTarget is true and the city maps to a major-city group.
+      if (isCityNameTarget && targetCity !== undefined) {
+        const targetMajorCityGroup = majorCityLookup.get(
+          `${targetPositions[0].row},${targetPositions[0].col}`,
+        );
+        if (targetMajorCityGroup !== undefined) {
+          for (let i = 1; i < truncatedPath.length; i++) {
+            const nodeKey = `${truncatedPath[i].row},${truncatedPath[i].col}`;
+            if (majorCityLookup.get(nodeKey) === targetMajorCityGroup) {
+              console.warn(
+                `[Movement Budget] Path truncated at major-city entry: ${targetCity} (step ${i}/${rawPathLength})`,
+              );
+              pathLength = i;
+              truncatedPath = fullPath.slice(0, i + 1);
+              break;
+            }
+          }
+        }
+      }
 
       // Ferry detection: if path passes through a FerryPort, truncate at the port.
       // The bot must stop at the ferry port for this turn (game rule).
