@@ -141,7 +141,8 @@ export class TripPlanner {
       const hasRemainingStops = activeRoute != null && activeRoute.currentStopIndex < activeRoute.stops.length;
       // A carry-load demand is only a "commitment" when an active route is already delivering it.
       // Without a route, the carry-load is an undischarged obligation that needs a fresh plan.
-      const hasNewOptions = context.demands.some(d => d.isAffordable && (!d.isLoadOnTrain || !hasRemainingStops));
+      const actionableDemands = context.demands.filter(d => d.isAffordable && (!d.isLoadOnTrain || !hasRemainingStops));
+      const hasNewOptions = actionableDemands.length > 0;
       if (!hasNewOptions) {
         const hasCarriedLoads = context.loads.length > 0;
         const commitmentExists = hasRemainingStops || hasCarriedLoads;
@@ -149,24 +150,50 @@ export class TripPlanner {
         if (commitmentExists) {
           // Keep current plan — no new options available but bot has existing commitment
           console.log(`[TripPlanner] keep_current_plan: no OPTIONS available; existing route/loads preserved`);
-          return {
-            route: null,
-            llmLatencyMs: 0,
-            llmTokens: { input: 0, output: 0 },
-            llmLog: [],
-            selection: { fallbackReason: 'keep_current_plan' },
-          };
+          return this.makeShortCircuitResult('keep_current_plan');
         } else {
           // No options, no commitment — let heuristic fallback produce DiscardHand
           console.log(`[TripPlanner] no_actionable_options: no OPTIONS and no current plan; heuristic fallback`);
-          return {
-            route: null,
-            llmLatencyMs: 0,
-            llmTokens: { input: 0, output: 0 },
-            llmLog: [],
-            selection: { fallbackReason: 'no_actionable_options' },
-          };
+          return this.makeShortCircuitResult('no_actionable_options');
         }
+      }
+
+      // ── Single-option short-circuit ──────────────────────────────────────
+      // When exactly one actionable demand exists, synthesize the trip plan directly
+      // without calling the LLM — there is nothing for the LLM to choose from.
+      if (actionableDemands.length === 1) {
+        const demand = actionableDemands[0];
+        const synthesized: LLMTripPlanResponse = {
+          stops: [
+            { action: 'PICKUP', supplyCity: demand.supplyCity ?? demand.deliveryCity, load: demand.loadType },
+            { action: 'DELIVER', deliveryCity: demand.deliveryCity, load: demand.loadType, demandCardId: demand.cardIndex, payment: demand.payout },
+          ],
+          reasoning: 'single_option_shortcircuit: only one actionable demand available',
+        };
+
+        const { validCandidates } = this.scoreCandidates(synthesized, context, snapshot, gridPoints);
+
+        if (validCandidates.length > 0 && validCandidates[0].stops.length > 0) {
+          // Reuse the same affordability check as the LLM path
+          const upgradeCost = 0; // short-circuit never emits upgradeOnRoute
+          const availableCash = snapshot.bot.money - upgradeCost;
+          const validatedRoute = validCandidates[0];
+          const totalCost = validatedRoute.buildCostEstimate + validatedRoute.usageFeeEstimate;
+
+          if (totalCost <= availableCash) {
+            console.log(`[TripPlanner] single_option_shortcircuit: only ${demand.loadType}@${demand.supplyCity}→${demand.deliveryCity} available; skipping LLM`);
+            const route: StrategicRoute = {
+              stops: validatedRoute.stops,
+              currentStopIndex: 0,
+              phase: 'build',
+              createdAtTurn: context.turnNumber,
+              reasoning: 'single_option_shortcircuit: only one actionable demand available',
+            };
+            return this.makeShortCircuitResult('single_option_shortcircuit', route);
+          }
+          // Falls through if unaffordable — continue to LLM path
+        }
+        // Falls through if validation failed — continue to LLM path
       }
     }
 
@@ -413,6 +440,24 @@ export class TripPlanner {
 
     // Return failure with preserved llmLog for diagnostics
     return { route: null, llmLatencyMs: 0, llmTokens: { input: 0, output: 0 }, llmLog };
+  }
+
+  /**
+   * Build a short-circuit TripPlanResult for pre-LLM early-return branches.
+   * All short-circuit paths share the same shape: zero latency/tokens, empty llmLog.
+   * When route is provided (single_option_shortcircuit), it is included in the result.
+   */
+  private makeShortCircuitResult(
+    fallbackReason: 'keep_current_plan' | 'no_actionable_options' | 'single_option_shortcircuit',
+    route: StrategicRoute | null = null,
+  ): TripPlanResult {
+    return {
+      route,
+      llmLatencyMs: 0,
+      llmTokens: { input: 0, output: 0 },
+      llmLog: [],
+      selection: { fallbackReason },
+    };
   }
 
   /**

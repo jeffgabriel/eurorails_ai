@@ -267,8 +267,12 @@ describe('TripPlanner.planTrip — propose acceptance (AC9)', () => {
     // Simulator: propose has lower build cost and turns → higher score
     (simulateTrip as jest.Mock).mockReturnValue({ feasible: true, turnsToComplete: 2, totalBuildCost: 3 });
 
+    // Two demands to prevent single-option short-circuit
     const context = makeContext({
-      demands: [makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 10, estimatedTurns: 4, estimatedTrackCostToDelivery: 8 })],
+      demands: [
+        makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 10, estimatedTurns: 4, estimatedTrackCostToDelivery: 8 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
+      ],
     });
     const snapshot = makeSnapshot(BotSkillLevel.Medium);
     const memory = makeMemory();
@@ -327,8 +331,12 @@ describe('TripPlanner.planTrip — propose rejection (AC10)', () => {
     const brain = makeBrain(BotSkillLevel.Medium, chatFn);
     const planner = new TripPlanner(brain);
 
+    // Two demands to prevent single-option short-circuit
     const context = makeContext({
-      demands: [makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 15 })],
+      demands: [
+        makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 15 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
+      ],
     });
     const snapshot = makeSnapshot(BotSkillLevel.Medium);
     const memory = makeMemory();
@@ -380,8 +388,12 @@ describe('TripPlanner.planTrip — propose rejection (AC10)', () => {
     const brain = makeBrain(BotSkillLevel.Medium, chatFn);
     const planner = new TripPlanner(brain);
 
+    // Two demands to prevent single-option short-circuit
     const context = makeContext({
-      demands: [makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 15 })],
+      demands: [
+        makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 15 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
+      ],
     });
     const snapshot = makeSnapshot(BotSkillLevel.Medium);
     const memory = makeMemory();
@@ -429,8 +441,12 @@ describe('TripPlanner.planTrip — propose rejection (AC10)', () => {
     const brain = makeBrain(BotSkillLevel.Medium, chatFn);
     const planner = new TripPlanner(brain);
 
+    // Two demands to prevent single-option short-circuit
     const context = makeContext({
-      demands: [makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 15, estimatedTurns: 2, estimatedTrackCostToDelivery: 2 })],
+      demands: [
+        makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 15, estimatedTurns: 2, estimatedTrackCostToDelivery: 2 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
+      ],
     });
     const snapshot = makeSnapshot(BotSkillLevel.Medium);
     const memory = makeMemory();
@@ -472,8 +488,12 @@ describe('TripPlanner.planTrip — propose rejection (AC10)', () => {
     const brain = makeBrain(BotSkillLevel.Medium, chatFn);
     const planner = new TripPlanner(brain);
 
+    // Two demands to prevent single-option short-circuit
     const context = makeContext({
-      demands: [makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 15 })],
+      demands: [
+        makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 15 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
+      ],
     });
     const snapshot = makeSnapshot(BotSkillLevel.Medium);
     const memory = makeMemory();
@@ -539,8 +559,12 @@ describe('TripPlanner.planTrip — chosenOver-empty retry (AC11)', () => {
     const brain = makeBrain(BotSkillLevel.Medium, chatFn);
     const planner = new TripPlanner(brain);
 
+    // Two demands to prevent single-option short-circuit
     const context = makeContext({
-      demands: [makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 15 })],
+      demands: [
+        makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 15 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
+      ],
     });
     const snapshot = makeSnapshot(BotSkillLevel.Medium);
     const memory = makeMemory();
@@ -568,28 +592,12 @@ describe('TripPlanner.planTrip — no chosenOver retry when 1 option (AC12)', ()
     jest.clearAllMocks();
   });
 
-  it('AC12: does NOT retry on empty chosenOver when propose is absent (single-option)', async () => {
-    const statusQuoStops = [
-      { action: 'PICKUP', load: 'Coal', supplyCity: 'Essen' },
-      { action: 'DELIVER', load: 'Coal', deliveryCity: 'Berlin', demandCardId: 1, payment: 15 },
-    ];
-
-    // No propose field — only 1 viable option
-    const response = JSON.stringify({
-      stops: statusQuoStops,
-      reasoning: {
-        chosen: 'Card 1',
-        chosenOver: [],  // empty but no propose → no retry
-        chosenOverWhy: 'Only option',
-        riskIfWrong: 'N/A',
-        followUpTrip: 'Next',
-      },
-    });
-
-    const chatFn = jest.fn().mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+  it('AC12: does NOT retry when propose is absent — single-option short-circuit fires instead', async () => {
+    const chatFn = jest.fn();
     const brain = makeBrain(BotSkillLevel.Medium, chatFn);
     const planner = new TripPlanner(brain);
 
+    // Single demand → single-option short-circuit fires (no LLM call at all)
     const context = makeContext({
       demands: [makeDemand({ cardIndex: 1, deliveryCity: 'Berlin', payout: 15 })],
     });
@@ -599,8 +607,9 @@ describe('TripPlanner.planTrip — no chosenOver retry when 1 option (AC12)', ()
     const result = await planner.planTrip(snapshot, context, [], memory);
 
     expect(result.route).not.toBeNull();
-    // Only 1 LLM call — no retry triggered
-    expect(chatFn).toHaveBeenCalledTimes(1);
+    // LLM is NOT called — single_option_shortcircuit fires before LLM
+    expect(chatFn).not.toHaveBeenCalled();
+    expect(result.selection?.fallbackReason).toBe('single_option_shortcircuit');
   });
 });
 

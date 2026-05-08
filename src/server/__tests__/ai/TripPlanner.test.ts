@@ -299,7 +299,8 @@ describe('TripPlanner', () => {
       chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      const result = await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(result).not.toBeNull();
       expect(result!.llmTokens).toEqual({ input: 100, output: 50 });
@@ -416,7 +417,8 @@ describe('TripPlanner', () => {
       chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      const result = await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(result).not.toBeNull();
       const route = result.route;
@@ -443,7 +445,8 @@ describe('TripPlanner', () => {
       chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      const result = await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(result).not.toBeNull();
       expect(result.route).not.toBeNull();
@@ -530,7 +533,8 @@ describe('TripPlanner', () => {
         .mockResolvedValueOnce({ text: successResponse, usage: { input: 100, output: 50 } });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      const result = await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(result).not.toBeNull();
       expect(chatFn).toHaveBeenCalledTimes(2);
@@ -566,7 +570,8 @@ describe('TripPlanner', () => {
         .mockResolvedValueOnce({ text: successResponse, usage: { input: 100, output: 50 } });
 
       const planner = new TripPlanner(brain);
-      await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       // The retry call's user prompt should contain the single-route error feedback
       const retryUserPrompt = chatFn.mock.calls[1]?.[0]?.userPrompt as string;
@@ -602,7 +607,8 @@ describe('TripPlanner', () => {
       });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      const result = await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(result).not.toBeNull();
       expect(result.route).not.toBeNull();
@@ -635,7 +641,8 @@ describe('TripPlanner', () => {
       });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      const result = await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(result).not.toBeNull();
       expect(result.route).not.toBeNull();
@@ -673,7 +680,8 @@ describe('TripPlanner', () => {
       });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      const result = await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(result).not.toBeNull();
       expect(planRouteFn).toHaveBeenCalled();
@@ -689,7 +697,8 @@ describe('TripPlanner', () => {
       planRouteFn.mockRejectedValue(new Error('Fallback also failed'));
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      const result = await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(result.route).toBeNull();
       expect(result.llmLog).toHaveLength(3);
@@ -705,7 +714,8 @@ describe('TripPlanner', () => {
       planRouteFn.mockResolvedValue({ route: null, llmLog: [] });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      const result = await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(result.route).toBeNull();
       expect(result.llmLog).toHaveLength(3);
@@ -759,7 +769,8 @@ describe('TripPlanner', () => {
         .mockResolvedValueOnce({ text: validResponse, usage: { input: 100, output: 50 } });
 
       const planner = new TripPlanner(brain);
-      await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       // Second call should include error context in the prompt
       const secondCall = chatFn.mock.calls[1][0];
@@ -803,7 +814,8 @@ describe('TripPlanner', () => {
       chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit (upgradeOnRoute only processed in LLM path)
+      const result = await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(result).not.toBeNull();
       expect(result.route).not.toBeNull();
@@ -845,7 +857,8 @@ describe('TripPlanner', () => {
       });
 
       const planner = new TripPlanner(brain);
-      await planner.planTrip(makeSnapshot(), makeContext(), [], memory);
+      // Two demands to prevent single-option short-circuit
+      await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], memory);
 
       expect(planRouteFn).toHaveBeenCalledWith(
         expect.anything(),
@@ -900,7 +913,8 @@ describe('TripPlanner', () => {
       });
 
       const planner = new TripPlanner(brain);
-      await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(chatFn).toHaveBeenCalledTimes(1);
       const chatArgs = chatFn.mock.calls[0][0];
@@ -1197,7 +1211,8 @@ describe('TripPlanner', () => {
       chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
 
       const planner = new TripPlanner(brain);
-      await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       expect(setContextFn).toHaveBeenCalledWith({
         gameId: 'g1',
@@ -1231,7 +1246,8 @@ describe('TripPlanner', () => {
         });
 
       const planner = new TripPlanner(brain);
-      await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       // setContext should be called before each chat attempt
       expect(setContextFn).toHaveBeenCalledTimes(2);
@@ -1263,8 +1279,12 @@ describe('TripPlanner', () => {
         },
       ]);
 
+      // Two demands to prevent single-option short-circuit (no selection diagnostic on LLM path)
       const context = makeContext({
-        demands: [makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, estimatedTurns: 2 })],
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, estimatedTurns: 2 }),
+          makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
+        ],
       });
 
       const { brain, chatFn } = makeMockBrain();
@@ -1275,7 +1295,7 @@ describe('TripPlanner', () => {
 
       expect(result.route).not.toBeNull();
       expect(result.route!.stops[0].loadType).toBe('Coal');
-      // No selection diagnostic on happy path
+      // No selection diagnostic on happy path (LLM path)
       expect(result.selection).toBeUndefined();
     });
 
@@ -1691,7 +1711,8 @@ describe('JIRA-190: retry path — system prompt byte-stable across retries (AC9
       .mockResolvedValueOnce({ text: validResponse, usage: { input: 100, output: 50 } });
 
     const planner = new TripPlanner(brain);
-    await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+    // Two demands to prevent single-option short-circuit
+    await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
     expect(chatFn).toHaveBeenCalledTimes(2);
 
@@ -1919,9 +1940,11 @@ describe('TripPlanner — JIRA-210B single-route selection (replaces JIRA-194 di
   it('AC18: single-route validates → route returned, no selection diagnostic', async () => {
     const { brain, chatFn } = makeMockBrain();
 
+    // Two demands to prevent single-option short-circuit (no selection diagnostic on LLM path)
     const context = makeContext({
       demands: [
         makeDemand({ loadType: 'Oil', deliveryCity: 'Zurich', supplyCity: 'Beograd', payout: 18 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
       ],
     });
 
@@ -2076,10 +2099,11 @@ describe('TripPlanner — JIRA-193 demandCardId fill-in (AC4)', () => {
       },
     ]);
 
-    // No demand for Coal→Paris in context
+    // No demand for Coal→Paris in context; two demands to prevent single-option short-circuit
     const context = makeContext({
       demands: [
         makeDemand({ cardIndex: 10, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Paris', payout: 15 }),
+        makeDemand({ cardIndex: 11, loadType: 'Steel', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 20 }),
       ],
     });
 
@@ -2138,9 +2162,11 @@ describe('TripPlanner — JIRA-193 demandCardId fill-in (AC4)', () => {
       },
     ]);
 
+    // Two demands to prevent single-option short-circuit
     const context = makeContext({
       demands: [
         makeDemand({ cardIndex: 42, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 20 }),
+        makeDemand({ cardIndex: 43, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
       ],
     });
 
@@ -2222,7 +2248,8 @@ describe('TripPlanner — JIRA-193 demandCardId fill-in (AC4)', () => {
       });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+      // Two demands to prevent single-option short-circuit
+      const result = await planner.planTrip(makeSnapshot(), makeContext({ demands: [makeDemand(), makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 })] }), [], makeMemory());
 
       // All 3 attempts exhaust (MAX_RETRIES=2, so 3 total)
       expect(chatFn).toHaveBeenCalledTimes(3);
@@ -2244,9 +2271,11 @@ describe('TripPlanner — JIRA-193 demandCardId fill-in (AC4)', () => {
         '{"action":"DELIVER","load":"Steel","deliveryCity":"Berlin","demandCardId":1,"payment":15}' +
         '],"reason';
 
+      // Two demands to prevent single-option short-circuit
       const context = makeContext({
         demands: [
           makeDemand({ cardIndex: 1, loadType: 'Steel', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 }),
+          makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
         ],
       });
 
@@ -2435,10 +2464,12 @@ describe('TripPlanner — JIRA-206 affordability filter and LLM-rejection no-rou
       },
     ], 0, 'FastFreight'); // upgradeOnRoute = FastFreight (costs 20M)
 
+    // Two demands to prevent single-option short-circuit (upgrade cost only checked in LLM path)
     const context = makeContext({
       money: 32,
       demands: [
         makeDemand({ cardIndex: 89, loadType: 'Oil', supplyCity: 'Newcastle', deliveryCity: 'Zurich', payout: 25, estimatedTrackCostToSupply: 7, estimatedTrackCostToDelivery: 17 }),
+        makeDemand({ cardIndex: 88, loadType: 'Cheese', supplyCity: 'Holland', deliveryCity: 'Cardiff', payout: 15 }),
       ],
     });
 
@@ -2473,10 +2504,12 @@ describe('TripPlanner — JIRA-206 affordability filter and LLM-rejection no-rou
       },
     ]);
 
+    // Two demands to prevent single-option short-circuit (no selection diagnostic on LLM path)
     const context = makeContext({
       money: 50,
       demands: [
         makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
       ],
     });
 
@@ -2691,8 +2724,12 @@ describe('JIRA-210B: single-route retry feedback (R7)', () => {
       .mockResolvedValueOnce({ text: failResponse, usage: { input: 100, output: 50 } })
       .mockResolvedValueOnce({ text: validResponse, usage: { input: 100, output: 50 } });
 
+    // Two demands to prevent single-option short-circuit
     const context = makeContext({
-      demands: [makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 })],
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
+      ],
     });
 
     const planner = new TripPlanner(brain);
@@ -2816,10 +2853,12 @@ describe('JIRA-207B: TripPlanner pre-LLM short-circuit (R10c)', () => {
     expect(result.selection?.fallbackReason).toBe('keep_current_plan');
   });
 
-  // Regression: game 0c6f0fb6 t57+ — carry-load with NO active route must call LLM, not keep_current_plan.
+  // Regression: game 0c6f0fb6 t57+ — carry-load with NO active route must NOT return keep_current_plan.
   // The bot was stuck at Bruxelles for 45 turns carrying Flowers with a Flowers→Paris card, network
   // connected to Paris, because the planner short-circuited on hasCarriedLoads alone.
-  it('carry-load with no active route → LLM called (must plan delivery, not keep_current_plan)', async () => {
+  // With the single-option short-circuit, a single carry-load demand now fires single_option_shortcircuit
+  // (which also produces a valid route — NOT keep_current_plan).
+  it('carry-load with no active route → route planned (must NOT be keep_current_plan)', async () => {
     const { brain, chatFn } = makeMockBrain();
 
     const context = makeContext({
@@ -2829,34 +2868,29 @@ describe('JIRA-207B: TripPlanner pre-LLM short-circuit (R10c)', () => {
       ],
     });
 
-    const llmResponse = buildLlmResponse([
-      {
-        stops: [
-          { action: 'deliver', load: 'Flowers', city: 'Paris', demandCardId: 46, payment: 8 },
-        ],
-        reasoning: 'Deliver carried Flowers to Paris',
-      },
-    ], 0);
-    chatFn.mockResolvedValue({ text: llmResponse, usage: { input: 50, output: 30 } });
-
     const memory = makeMemory({ activeRoute: null });
 
     const planner = new TripPlanner(brain);
     const result = await planner.planTrip(makeSnapshot(), context, [], memory);
 
-    expect(chatFn).toHaveBeenCalledTimes(1);
+    // Must NOT return keep_current_plan — a route must be returned via short-circuit or LLM
     expect(result.selection?.fallbackReason).not.toBe('keep_current_plan');
     expect(result.route).not.toBeNull();
+    // LLM is NOT called — single_option_shortcircuit fires instead
+    expect(chatFn).not.toHaveBeenCalled();
+    expect(result.selection?.fallbackReason).toBe('single_option_shortcircuit');
   });
 
-  // AC10c: no commitment but at least one affordable card → LLM IS called (no short-circuit)
-  it('AC10c: no activeRoute but at least one affordable card → LLM called normally (no short-circuit)', async () => {
+  // AC10c: no commitment but ≥2 affordable cards → LLM IS called (single-option short-circuit bypassed)
+  it('AC10c: no activeRoute but ≥2 affordable cards → LLM called normally (single-option short-circuit bypassed)', async () => {
     const { brain, chatFn } = makeMockBrain();
 
+    // Two demands → actionableDemands.length = 2 → single-option short-circuit does NOT fire
     const context = makeContext({
       loads: [],
       demands: [
         makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: true }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12, isAffordable: true }),
       ],
     });
 
@@ -2876,7 +2910,7 @@ describe('JIRA-207B: TripPlanner pre-LLM short-circuit (R10c)', () => {
     const planner = new TripPlanner(brain);
     const result = await planner.planTrip(makeSnapshot(), context, [], memory);
 
-    // LLM should have been called (no short-circuit)
+    // LLM should have been called (≥2 demands bypass single-option short-circuit)
     expect(chatFn).toHaveBeenCalledTimes(1);
     expect(result.route).not.toBeNull();
   });
@@ -3129,5 +3163,180 @@ describe('TripPlanner — RouteOptimizer reorder is preserved when validation pa
       'deliver(Flowers@Paris)',
       'deliver(Cheese@Bruxelles)',
     ]);
+  });
+});
+
+// ── TripPlanner single_option_shortcircuit (R4, AC1, AC2, AC3, AC4 boundary) ──
+
+describe('TripPlanner.planTrip — single_option_shortcircuit (R4)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // AC1: single-option short-circuit fires — no LLM call, valid route returned
+  it('AC1: skips LLM and returns single_option_shortcircuit when exactly one actionable demand exists', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: true, isLoadOnTrain: false }),
+      ],
+    });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    // AC1: fallbackReason is single_option_shortcircuit
+    expect(result.selection?.fallbackReason).toBe('single_option_shortcircuit');
+    // AC1: route is non-null with at least one stop
+    expect(result.route).not.toBeNull();
+    expect(result.route!.stops.length).toBeGreaterThan(0);
+    // AC1: llmLog is empty (no LLM call)
+    expect(result.llmLog).toHaveLength(0);
+    // AC1: chatFn was NOT called
+    expect(chatFn).not.toHaveBeenCalled();
+    // AC1: zero latency/tokens
+    expect(result.llmLatencyMs).toBe(0);
+    expect(result.llmTokens).toEqual({ input: 0, output: 0 });
+  });
+
+  // AC3: ≥2 actionable demands → LLM IS called (single-option short-circuit bypassed)
+  it('AC3: falls through to LLM when two actionable demands are present', async () => {
+    const llmResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Coal', city: 'Essen' },
+          { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+        reasoning: 'Coal route',
+      },
+    ]);
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: llmResponse, usage: { input: 100, output: 50 } });
+
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: true }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12, isAffordable: true }),
+      ],
+    });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    // AC3: LLM was called (two affordable demands bypass short-circuit)
+    expect(chatFn).toHaveBeenCalled();
+    // No single_option_shortcircuit on LLM path
+    expect(result.selection?.fallbackReason).not.toBe('single_option_shortcircuit');
+    expect(result.route).not.toBeNull();
+  });
+
+  // AC2: single demand fails affordability after scoreCandidates — falls through (no single_option_shortcircuit)
+  it('AC2: falls through when single demand scoreCandidates returns zero valid candidates (validation failure)', async () => {
+    // Make scoreCandidates return zero valid candidates (route is invalid)
+    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: false, errors: ['All stops infeasible'] });
+
+    const llmResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Coal', city: 'Essen' },
+          { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+        reasoning: 'Fallback',
+      },
+    ]);
+
+    const { brain, chatFn, planRouteFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: llmResponse, usage: { input: 100, output: 50 } });
+    planRouteFn.mockResolvedValue({ route: null, llmLog: [] });
+
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: true }),
+      ],
+    });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    // AC2: short-circuit did NOT fire (validation failure → falls through to LLM path)
+    expect(result.selection?.fallbackReason).not.toBe('single_option_shortcircuit');
+    // LLM path was taken (all retries exhausted, then planRoute fallback)
+    expect(chatFn).toHaveBeenCalled();
+  });
+
+  // AC2: single demand with high build cost → affordability check fails → falls through
+  it('AC2: falls through when single demand total build cost exceeds available cash', async () => {
+    const llmResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Coal', city: 'Essen' },
+          { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+        reasoning: 'Expensive route',
+      },
+    ]);
+
+    const { brain, chatFn, planRouteFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: llmResponse, usage: { input: 100, output: 50 } });
+    planRouteFn.mockResolvedValue({ route: null, llmLog: [] });
+
+    // Single demand with cost > available cash: supply 200M + delivery 200M = 400M > 50M cash
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: true,
+          estimatedTrackCostToSupply: 200, estimatedTrackCostToDelivery: 200 }),
+      ],
+    });
+    const snapshot = makeSnapshot(50); // only $50M
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(snapshot, context, [], makeMemory());
+
+    // AC2: short-circuit did NOT fire (unaffordable → falls through to LLM path)
+    expect(result.selection?.fallbackReason).not.toBe('single_option_shortcircuit');
+    // LLM path was taken
+    expect(chatFn).toHaveBeenCalled();
+  });
+
+  // AC1 (boundary): userPromptOverride bypasses single-option short-circuit
+  it('AC1 boundary: userPromptOverride bypasses single-option short-circuit — LLM called', async () => {
+    const llmResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Coal', city: 'Essen' },
+          { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+        reasoning: 'Override route',
+      },
+    ]);
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: llmResponse, usage: { input: 100, output: 50 } });
+
+    // Single demand — would trigger short-circuit BUT userPromptOverride bypasses it
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: true }),
+      ],
+    });
+
+    const planner = new TripPlanner(brain);
+    // Pass userPromptOverride — this should bypass the single-option short-circuit entirely
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory(), 'override-prompt');
+
+    // AC1 boundary: LLM was called (override bypasses short-circuit)
+    expect(chatFn).toHaveBeenCalledTimes(1);
+    // No single_option_shortcircuit on LLM path
+    expect(result.selection?.fallbackReason).not.toBe('single_option_shortcircuit');
+    expect(result.route).not.toBeNull();
   });
 });
