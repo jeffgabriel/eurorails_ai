@@ -470,12 +470,268 @@ describe('MovementPhasePlanner.run — delivery + PostDeliveryReplanner', () => 
     // so it stays null from initialization
     expect(result.hasDelivery).toBe(true);
   });
+
+  // REGRESSION GUARD: The following two tests pin the remainingBudget invariant
+  // across delivery + post-delivery replan boundaries.
+  //
+  // Invariant: `remainingBudget` is owned by MovementPhasePlanner and is
+  // initialized ONCE at turn start (`= context.speed`). PostDeliveryReplanner
+  // returns no budget signal — it has no knowledge of remaining movement.
+  // After a replan, the loop resumes with whatever budget was left at the
+  // moment the delivery fired.
+  //
+  // If a future patch resets `remainingBudget = context.speed` after
+  // `PostDeliveryReplanner.replan` returns, BOTH tests below will FAIL:
+  //   - Test 1 will fail because `mockResolveMove.mock.calls[1][2]` will equal
+  //     9 (full speed) instead of 6 (leftover after the 3-mp first move).
+  //   - Test 2 will fail because `trace.moveBudget.used` will equal 4
+  //     (post-replan move only) instead of 7 (3 + 4, cumulative).
+  //
+  // This is the budget-axis analogue of JIRA-194 (stale `lastMoveTargetCity`).
+
+  it('preserves remainingBudget across post-delivery replan and uses leftover budget for next move', async () => {
+    // Arrange
+    const { computeEffectivePathLength } = jest.requireMock('../../../shared/services/majorCityGroups');
+    // First move consumes 3 of 9 mileposts → leftover = 6
+    (computeEffectivePathLength as jest.Mock).mockReturnValueOnce(3).mockReturnValueOnce(3);
+
+    // Route: bot is not at Berlin (must move first), then after delivery the
+    // replanned route has another move stop (Wien) so the second resolveMove fires.
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Wine')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 1, col: 1, city: 'Paris' },
+      citiesOnNetwork: ['Berlin'],
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+
+    // First resolveMove: move toward Berlin, consuming 3 miles (budget 9→6)
+    // Second resolveMove: move toward Wien on the post-replan route
+    mockResolveMove
+      .mockResolvedValueOnce({
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 1, col: 1 }, { row: 5, col: 5 }],
+          milesUsed: 3,
+          cost: 0,
+          trackUsageFees: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 5, col: 5 }, { row: 8, col: 8 }],
+          milesUsed: 3,
+          cost: 0,
+          trackUsageFees: [],
+        },
+      });
+
+    // Bot moves to Paris → 5,5; not Berlin → no stop action fires on first iteration.
+    // Then second iteration: still not at Berlin (city stays Paris from makeContext).
+    // We need the bot to arrive at Berlin on the second move iteration — simplest
+    // approach: first call moves to a non-Berlin city, second moves to Berlin.
+    // But for AC9 we only need to assert what budget the second resolveMove receives.
+    // We'll let the delivery happen via the position-at-city branch by starting AT Berlin.
+    //
+    // Revised setup: bot starts at Berlin → delivery fires immediately (no pre-delivery move).
+    // Then replan returns a route with Wien stop, second resolveMove fires with full budget (9).
+    // That would NOT test budget carry-over. So we need a move BEFORE the delivery.
+    //
+    // Correct setup: bot starts NOT at Berlin but Berlin is on network.
+    //   Iteration 1: resolveMove called (budget=9) → move to intermediate city (3 miles, budget→6)
+    //   But now bot is NOT at Berlin and budget > 0, so loop continues.
+    //   Iteration 2: resolveMove called again (budget=6) → arrives at Berlin (milesConsumed=3, budget→3)
+    //   Now position.city = Berlin → stop action (delivery) fires → replan.
+    //   Post-replan route has Wien stop → resolveMove called (budget=3).
+    //
+    // Let's use gridPoints to place Berlin at the second move destination.
+
+    // Reset and redo mock sequence with 3 resolveMove calls:
+    mockResolveMove.mockReset();
+    (computeEffectivePathLength as jest.Mock).mockReset();
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(3); // default for all calls
+
+    mockResolveMove
+      .mockResolvedValueOnce({
+        // Move 1: toward Berlin, lands at intermediate (row=5,col=5, city not Berlin)
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 1, col: 1 }, { row: 5, col: 5 }],
+          milesUsed: 3,
+          cost: 0,
+          trackUsageFees: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        // Move 2: toward Berlin, lands at Berlin (row=10,col=10)
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 5, col: 5 }, { row: 10, col: 10 }],
+          milesUsed: 3,
+          cost: 0,
+          trackUsageFees: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        // Move 3 (post-replan): toward Wien
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 10, col: 10 }, { row: 14, col: 14 }],
+          milesUsed: 3,
+          cost: 0,
+          trackUsageFees: [],
+        },
+      });
+
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin' },
+    });
+
+    // Post-replan route: one more move stop (Wien) so the loop continues
+    const replanRoute = makeRoute({
+      stops: [makeStop('pickup', 'Wien', 'Coal')],
+      currentStopIndex: 0,
+      reasoning: 'replanned',
+    });
+    // Wien is on network so the move branch fires
+    context.citiesOnNetwork = ['Berlin', 'Wien'];
+    mockPostDeliveryReplan.mockResolvedValue({
+      route: replanRoute,
+      moveTargetInvalidated: true,
+    });
+
+    // gridPoints: row=10,col=10 → Berlin so delivery fires on move-2 arrival
+    const gridPoints = makeGridPointsForCity(10, 10, 'Berlin');
+    const trace = makeTrace();
+
+    // Act
+    const result = await MovementPhasePlanner.run(route, snapshot, context, trace, undefined, gridPoints);
+
+    // Assert — budget-carry-over invariant
+    // resolveMove was called 3 times (move→intermediate, move→Berlin, move→Wien)
+    expect(mockResolveMove).toHaveBeenCalledTimes(3);
+    // First call: full budget (9)
+    expect(mockResolveMove.mock.calls[0][2]).toBe(9);
+    // Second call: leftover after first 3-mp move (6)
+    expect(mockResolveMove.mock.calls[1][2]).toBe(6);
+    // Third call (post-replan): leftover after first two 3-mp moves (3), NOT 9
+    expect(mockResolveMove.mock.calls[2][2]).toBe(3);
+    expect(mockResolveMove.mock.calls[2][2]).not.toBe(9); // counter-assertion: budget was NOT reset
+
+    expect(result.hasDelivery).toBe(true);
+    expect(result.deliveriesThisTurn).toBe(1);
+
+    // Restore default mock
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(3);
+  });
+
+  it('records moveBudget.used as cumulative consumption across pre- and post-replan moves', async () => {
+    // Arrange: bot at Paris, Berlin on network. First move 3 miles, second move (post-replan) 4 miles.
+    // Expected: trace.moveBudget.used = 7 (not 4 = "only last move", not 3 = "only first move").
+    const { computeEffectivePathLength } = jest.requireMock('../../../shared/services/majorCityGroups');
+
+    mockResolveMove.mockReset();
+    (computeEffectivePathLength as jest.Mock).mockReset();
+
+    // First move: 3 miles. Second move: 4 miles. Third call (if any): fallback 3.
+    (computeEffectivePathLength as jest.Mock)
+      .mockReturnValueOnce(3)  // move 1 (pre-delivery): remainingBudget 9→6, used=3
+      .mockReturnValueOnce(4)  // move 2 (delivery arrival): remainingBudget 6→2, used=7
+      .mockReturnValue(3);     // fallback (should not be reached in this test)
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Wine')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 1, col: 1, city: 'Paris' },
+      citiesOnNetwork: ['Berlin', 'Wien'],
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+
+    mockResolveMove
+      .mockResolvedValueOnce({
+        // Move 1: 3 miles toward Berlin, lands at intermediate row=5,col=5 (not Berlin yet)
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 1, col: 1 }, { row: 5, col: 5 }],
+          milesUsed: 3,
+          cost: 0,
+          trackUsageFees: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        // Move 2: 4 miles to Berlin (row=10,col=10) — budget 6→2
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 5, col: 5 }, { row: 10, col: 10 }],
+          milesUsed: 4,
+          cost: 0,
+          trackUsageFees: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        // Move 3 (post-replan): toward Wien, fails — loop breaks without updating budget
+        success: false,
+        error: 'no path to Wien',
+      });
+
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin' },
+    });
+
+    const replanRoute = makeRoute({
+      stops: [makeStop('pickup', 'Wien', 'Coal')],
+      currentStopIndex: 0,
+      reasoning: 'replanned-cumulative',
+    });
+    mockPostDeliveryReplan.mockResolvedValue({
+      route: replanRoute,
+      moveTargetInvalidated: true,
+    });
+
+    // gridPoints: row=10,col=10 → Berlin so delivery fires after move-2 arrival
+    const gridPoints = makeGridPointsForCity(10, 10, 'Berlin');
+    const trace = makeTrace();
+
+    // Act
+    const result = await MovementPhasePlanner.run(route, snapshot, context, trace, undefined, gridPoints);
+
+    // Assert — cumulative trace.moveBudget.used
+    // After move 1 (3 miles): remainingBudget=6, used=3.
+    // After move 2 (4 miles): remainingBudget=2, used=7.
+    // Move 3 fails → no budget update → used remains 7.
+    expect(trace.moveBudget.used).toBe(7);
+    expect(trace.moveBudget.used).not.toBe(4); // guard: not "only move-2 consumption"
+    expect(trace.moveBudget.used).not.toBe(3); // guard: not "only move-1 consumption"
+
+    expect(result.hasDelivery).toBe(true);
+
+    // Restore default mock
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(3);
+  });
 });
 
 // ── Action failure → routeAbandoned ───────────────────────────────────────
 
 describe('MovementPhasePlanner.run — action failure', () => {
-  it('returns routeAbandoned=true and PassTurn when stop action fails', async () => {
+  it('preserves route (NOT abandoned) when stop action fails — retries next turn instead of replanning', async () => {
+    // Single action_failed must not trigger replan; ActiveRouteContinuer's stuck-route
+    // detector handles persistent failures after 3 no-progress turns.
     mockIsStopComplete.mockReturnValue(false);
 
     const context = makeContext({
@@ -493,8 +749,10 @@ describe('MovementPhasePlanner.run — action failure', () => {
       makeTrace(),
     );
 
-    expect(result.routeAbandoned).toBe(true);
-    expect(result.accumulatedPlans.some(p => p.type === AIActionType.PassTurn)).toBe(true);
+    expect(result.routeAbandoned).toBe(false);
+    // No PassTurn pushed — accumulatedPlans is empty so TurnExecutorPlanner falls back
+    // to the default [PassTurn], and ActiveRouteContinuer's noProgress check fires.
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.PassTurn)).toBe(false);
   });
 });
 
@@ -761,7 +1019,10 @@ describe('JIRA-202: arrival on last milepost executes stop action', () => {
     (computeEffectivePathLength as jest.Mock).mockReturnValue(3);
   });
 
-  it('stop action failure on arrival path — route abandoned, action_failed termination', async () => {
+  it('stop action failure on arrival path — route preserved (NOT abandoned), action_failed termination', async () => {
+    // 7-day log analysis: 7/15 pure-abandonment episodes were caused by a single stop-action
+    // failure triggering immediate route abandonment + replan. The fix: preserve the route
+    // and let ActiveRouteContinuer's stuck-route detector abandon after 3 no-progress turns.
     const { computeEffectivePathLength } = jest.requireMock('../../../shared/services/majorCityGroups');
     (computeEffectivePathLength as jest.Mock).mockReturnValue(9);
 
@@ -797,8 +1058,11 @@ describe('JIRA-202: arrival on last milepost executes stop action', () => {
     const trace = makeTrace();
     const result = await MovementPhasePlanner.run(route, snapshot, context, trace, undefined, gridPoints);
 
-    expect(result.routeAbandoned).toBe(true);
+    expect(result.routeAbandoned).toBe(false);
+    expect(result.routeComplete).toBe(false);
     expect(trace.a2.terminationReason).toBe('action_failed');
+    // Route preserved with same currentStopIndex so next turn retries the same pickup
+    expect(result.activeRoute.currentStopIndex).toBe(0);
 
     (computeEffectivePathLength as jest.Mock).mockReturnValue(3);
   });
