@@ -58,6 +58,7 @@ import { ActiveRouteContinuer } from './ActiveRouteContinuer';
 import { InitialBuildRunner } from './InitialBuildRunner';
 import { NewRoutePlanner } from './NewRoutePlanner';
 import { UPGRADE_DELIVERY_THRESHOLD } from './context/UpgradeGatingConstants';
+import { RECENT_DELIVERIES_WINDOW } from './StrategicConstants';
 
 /**
  * @deprecated Use UPGRADE_DELIVERY_THRESHOLD from UpgradeGatingConstants instead.
@@ -270,7 +271,7 @@ export class AIStrategyEngine {
         initialBuildEvaluatedPairings = partial.evaluatedPairings;
       } else if (activeRoute) {
         // ── Auto-execute from active route (delegated to ActiveRouteContinuer) ──
-        const partial = await ActiveRouteContinuer.run(activeRoute, snapshot, context, brain, gridPoints, tag);
+        const partial = await ActiveRouteContinuer.run(activeRoute, snapshot, context, brain, gridPoints, tag, memory);
         ({ decision, activeRoute, routeWasCompleted, routeWasAbandoned, hasDelivery, execCompositionTrace, pendingUpgradeAction, upgradeSuppressionReason } = partial);
       } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
         // ── No active route, LLM available — delegated to NewRoutePlanner (JIRA-195b sub-slice D) ──
@@ -628,6 +629,16 @@ export class AIStrategyEngine {
         memoryPatch.previousRouteStops = null;
       }
 
+      // Update recentDeliveries rolling window when a delivery occurred this turn
+      if (hasDelivery && (result.payment ?? 0) > 0) {
+        const existing = memory.recentDeliveries ?? [];
+        const updated = [
+          ...existing,
+          { turn: snapshot.turnNumber, payout: result.payment ?? 0 },
+        ].slice(-RECENT_DELIVERIES_WINDOW);
+        memoryPatch.recentDeliveries = updated;
+      }
+
       await updateMemory(gameId, botPlayerId, memoryPatch);
 
       flushTurnLog();
@@ -645,6 +656,7 @@ export class AIStrategyEngine {
 
       // JIRA-56: After DiscardHand, refresh context.demands from new cards
       if (executedAction === AIActionType.DiscardHand) {
+        const preDiscardCardIndices = new Set((context.demands ?? []).map(d => d.cardIndex));
         const freshSnapshot = await capture(gameId, botPlayerId);
         context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
         context.canDeliver = ContextBuilder.rebuildCanDeliver(freshSnapshot, gridPoints);
@@ -652,6 +664,20 @@ export class AIStrategyEngine {
           `${tag} JIRA-165: Refreshed canDeliver after DiscardHand — ` +
           `${context.canDeliver.length} opportunit(ies) now in context`,
         );
+        // Track newly acquired card indices for hand staleness calculation
+        const updatedCardAcquisitionTurn = { ...(memory.cardAcquisitionTurn ?? {}) };
+        for (const d of context.demands) {
+          if (!preDiscardCardIndices.has(d.cardIndex)) {
+            updatedCardAcquisitionTurn[d.cardIndex] = snapshot.turnNumber;
+          }
+        }
+        // Remove stale entries for discarded cards
+        for (const oldIdx of preDiscardCardIndices) {
+          if (!context.demands.some(d => d.cardIndex === oldIdx)) {
+            delete updatedCardAcquisitionTurn[oldIdx];
+          }
+        }
+        memoryPatch.cardAcquisitionTurn = updatedCardAcquisitionTurn;
 
         // JIRA-61: Invalidate active route if it references demand cards no longer in hand
         if (activeRoute) {
@@ -673,6 +699,7 @@ export class AIStrategyEngine {
 
       // JIRA-64: After delivery, refresh context.demands from newly drawn card
       if (hasDelivery) {
+        const preDeliveryCardIndices = new Set((context.demands ?? []).map(d => d.cardIndex));
         const freshSnapshot = await capture(gameId, botPlayerId);
         context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
         context.canDeliver = ContextBuilder.rebuildCanDeliver(freshSnapshot, gridPoints);
@@ -680,6 +707,19 @@ export class AIStrategyEngine {
           `${tag} JIRA-165: Refreshed canDeliver after delivery — ` +
           `${context.canDeliver.length} opportunit(ies) now in context`,
         );
+        // Track newly drawn cards and remove delivered card from acquisition map
+        const updatedCardAcquisitionTurnOnDelivery = { ...(memoryPatch.cardAcquisitionTurn ?? memory.cardAcquisitionTurn ?? {}) };
+        for (const d of context.demands) {
+          if (!preDeliveryCardIndices.has(d.cardIndex)) {
+            updatedCardAcquisitionTurnOnDelivery[d.cardIndex] = snapshot.turnNumber;
+          }
+        }
+        for (const oldIdx of preDeliveryCardIndices) {
+          if (!context.demands.some(d => d.cardIndex === oldIdx)) {
+            delete updatedCardAcquisitionTurnOnDelivery[oldIdx];
+          }
+        }
+        memoryPatch.cardAcquisitionTurn = updatedCardAcquisitionTurnOnDelivery;
 
         // JIRA-61: Invalidate active route if it references demand cards no longer in hand
         if (activeRoute) {

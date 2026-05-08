@@ -514,6 +514,16 @@ export interface BotMemoryState {
     lastPhaseBStrippedGate?: string | null;
     /** JIRA-203: Bot position when Phase B was last stripped (for stuck-state detection) */
     lastPositionWhenStripped?: { row: number; col: number } | null;
+    /**
+     * Rolling window of recent deliveries (length capped at RECENT_DELIVERIES_WINDOW).
+     * Used by StrategicContextBuilder to compute per-turn income velocity for Medium bots.
+     */
+    recentDeliveries?: Array<{ turn: number; payout: number }>;
+    /**
+     * Maps demand card index to the turn on which it was drawn.
+     * Used by StrategicContextBuilder to compute hand staleness for Medium bots.
+     */
+    cardAcquisitionTurn?: Record<number, number>;
 }
 
 /** Simplified option summary for decision logging */
