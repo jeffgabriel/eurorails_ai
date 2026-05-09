@@ -33,6 +33,7 @@ import type { TripPlannerSelectionDiagnostic } from './LLMTranscriptLogger';
 import { build as buildStrategicContext } from './StrategicContextBuilder';
 import { simulateTrip } from './RouteDetourEstimator';
 import { PROPOSE_MIN_SCORE_DELTA } from './StrategicConstants';
+import { planTripDeterministic } from './DeterministicTripPlanner';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -62,6 +63,14 @@ export interface TripPlanResult {
   selection?: {
     fallbackReason: 'no_actionable_options' | 'keep_current_plan' | 'single_option_shortcircuit';
   };
+  /**
+   * JIRA-220: Decision source for logging.
+   * 'trip-planner' — LLM path (Easy/Hard).
+   * 'trip-planner-deterministic' — Deterministic path (Medium).
+   * 'heuristic-fallback' — LLMStrategyBrain.planRoute fallback.
+   * Absent for short-circuit results (keep_current_plan, no_actionable_options).
+   */
+  decisionSource?: 'trip-planner' | 'trip-planner-deterministic' | 'heuristic-fallback';
 }
 
 /** Raw LLM output matching TRIP_PLAN_SCHEMA (JIRA-190: renamed fields; JIRA-210B: single-route) */
@@ -197,8 +206,34 @@ export class TripPlanner {
       }
     }
 
-    // Build strategic context for Medium skill (Task 1 foundation)
-    const strategicContext = skillLevel === BotSkillLevel.Medium
+    // ── JIRA-220: Medium skill — deterministic trip planning (R1) ────────────
+    // For Medium skill, invoke the spatial-prune top-1 deterministic algorithm
+    // instead of the LLM. Easy and Hard continue to use the LLM path below.
+    if (skillLevel === BotSkillLevel.Medium) {
+      const detResult = planTripDeterministic(snapshot, context, memory);
+
+      if (detResult.outcome === 'success' && detResult.route !== null) {
+        const latencyMs = detResult.synthesizedAttempt.latencyMs;
+        console.log(`[TripPlanner] Medium deterministic: ${detResult.route.stops.length} stops, latency=${latencyMs}ms`);
+        return {
+          route: detResult.route,
+          llmLatencyMs: latencyMs,
+          llmTokens: { input: 0, output: 0 },
+          llmLog: [detResult.synthesizedAttempt],
+          decisionSource: 'trip-planner-deterministic',
+        };
+      }
+
+      // No feasible candidates — fall through to heuristic-fallback (same path as LLM total failure)
+      console.warn('[TripPlanner] Medium deterministic returned no_feasible_candidates; falling through to planRoute heuristic');
+      return this.heuristicFallback(snapshot, context, gridPoints, memory, [detResult.synthesizedAttempt]);
+    }
+
+    // Build strategic context for Medium skill (Task 1 foundation — now dead code for Medium,
+    // preserved as dead code per JIRA-220 §"Out of scope" for potential Hard rebuild.
+    // Cast to BotSkillLevel to prevent TypeScript narrowing errors on the dead code blocks below.)
+    const _skillLevel = skillLevel as BotSkillLevel;
+    const strategicContext = _skillLevel === BotSkillLevel.Medium
       ? buildStrategicContext(snapshot, context, memory)
       : undefined;
 
@@ -217,7 +252,7 @@ export class TripPlanner {
       const startMs = Date.now();
       try {
         adapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, playerName: snapshot.bot.botConfig?.name, turn: snapshot.turnNumber, caller: 'trip-planner', method: 'planTrip' });
-        const outputSchema = skillLevel === BotSkillLevel.Medium
+        const outputSchema = _skillLevel === BotSkillLevel.Medium
           ? TRIP_PLAN_SCHEMA_MEDIUM
           : TRIP_PLAN_SCHEMA;
 
@@ -229,7 +264,13 @@ export class TripPlanner {
           userPrompt: promptWithError,
           outputSchema,
           timeoutMs: 120000,
-          ...(skillLevel !== BotSkillLevel.Easy && {
+          // Adaptive thinking is reserved for Hard skill only. Enabling it for Medium
+          // (Sonnet) drove avg latency to ~70s and timed out 45% of calls (game
+          // 03b5e5f2-9c97-48e1-ae95-78f845e0d2de), causing the bot to fall through to
+          // heuristic fallback most turns. AnthropicAdapter also force-overrides
+          // temperature to 1 whenever thinking is set, silently discarding the
+          // configured TEMPERATURE_BY_SKILL value.
+          ...(skillLevel === BotSkillLevel.Hard && {
             thinking: { type: 'adaptive' },
             effort: TRIP_EFFORT[skillLevel],
           }),
@@ -291,8 +332,8 @@ export class TripPlanner {
         // ── Medium-skill: chosenOver-empty retry rule (R7) ──
         // When Medium skill has ≥2 viable alternatives (status-quo + a propose), require
         // that reasoning.chosenOver is non-empty. Trigger retry if empty.
-        const hasPropose = skillLevel === BotSkillLevel.Medium && parsed.propose != null;
-        if (skillLevel === BotSkillLevel.Medium && hasPropose) {
+        const hasPropose = _skillLevel === BotSkillLevel.Medium && parsed.propose != null;
+        if (_skillLevel === BotSkillLevel.Medium && hasPropose) {
           const reasoning = parsed.reasoning;
           if (typeof reasoning === 'object' && reasoning !== null && Array.isArray(reasoning.chosenOver) && reasoning.chosenOver.length === 0) {
             const err = 'Your reasoning.chosenOver was empty. Identify at least one alternative you considered.';
@@ -307,7 +348,7 @@ export class TripPlanner {
         let finalCandidateStops = candidates[0].stops;
         let finalCandidateScore = candidates[0].score;
 
-        if (skillLevel === BotSkillLevel.Medium && parsed.propose && parsed.propose.stops.length > 0 && snapshot.bot.position) {
+        if (_skillLevel === BotSkillLevel.Medium && parsed.propose && parsed.propose.stops.length > 0 && snapshot.bot.position) {
           const proposeStops = this.convertLLMStopsToRouteStops(parsed.propose.stops);
           const tempPropose: StrategicRoute = {
             stops: proposeStops,
@@ -403,6 +444,7 @@ export class TripPlanner {
           llmLog,
           systemPrompt,
           userPrompt,
+          decisionSource: 'trip-planner',
         };
       } catch (error) {
         const latencyMs = Date.now() - startMs;
@@ -413,7 +455,24 @@ export class TripPlanner {
     }
 
     // All retries failed — try fallback via planRoute() (ADR-5: unchanged safety net)
-    console.warn(`[TripPlanner] All ${MAX_RETRIES + 1} attempts failed, falling back to planRoute()`);
+    return this.heuristicFallback(snapshot, context, gridPoints, memory, llmLog);
+  }
+
+  /**
+   * Fallback to LLMStrategyBrain.planRoute() when the primary path exhausts retries.
+   * Called by both the LLM path (after MAX_RETRIES) and the Medium deterministic path
+   * (when no feasible candidates exist).
+   *
+   * @param priorLlmLog - LLM log entries accumulated before this fallback
+   */
+  private async heuristicFallback(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    gridPoints: GridPoint[],
+    memory: BotMemoryState,
+    priorLlmLog: LlmAttempt[],
+  ): Promise<TripPlanResult> {
+    console.warn(`[TripPlanner] All attempts failed, falling back to planRoute()`);
     try {
       const fallback = await this.brain.planRoute(
         snapshot,
@@ -428,9 +487,10 @@ export class TripPlanner {
           route: successResult.route,
           llmLatencyMs: successResult.latencyMs,
           llmTokens: successResult.tokenUsage ?? { input: 0, output: 0 },
-          llmLog: [...llmLog, ...successResult.llmLog],
+          llmLog: [...priorLlmLog, ...successResult.llmLog],
           systemPrompt: successResult.systemPrompt,
           userPrompt: successResult.userPrompt,
+          decisionSource: 'heuristic-fallback',
         };
       }
     } catch (fallbackErr) {
@@ -439,7 +499,7 @@ export class TripPlanner {
     }
 
     // Return failure with preserved llmLog for diagnostics
-    return { route: null, llmLatencyMs: 0, llmTokens: { input: 0, output: 0 }, llmLog };
+    return { route: null, llmLatencyMs: 0, llmTokens: { input: 0, output: 0 }, llmLog: priorLlmLog };
   }
 
   /**

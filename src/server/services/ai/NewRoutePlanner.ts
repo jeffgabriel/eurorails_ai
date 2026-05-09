@@ -225,9 +225,12 @@ export class NewRoutePlanner {
       };
     }
 
-    // Wrap tripResult into routeResult-compatible shape for downstream code
+    // Wrap tripResult into routeResult-compatible shape for downstream code.
+    // JIRA-220: Use decisionSource from result when present (deterministic path emits
+    // 'trip-planner-deterministic'; LLM path emits 'trip-planner').
+    const tripModel = tripResult.decisionSource ?? 'trip-planner';
     const routeResult = tripResult.route
-      ? { route: tripResult.route, model: 'trip-planner', latencyMs: tripResult.llmLatencyMs, tokenUsage: tripResult.llmTokens, llmLog: tripResult.llmLog, systemPrompt: tripResult.systemPrompt, userPrompt: tripResult.userPrompt }
+      ? { route: tripResult.route, model: tripModel, latencyMs: tripResult.llmLatencyMs, tokenUsage: tripResult.llmTokens, llmLog: tripResult.llmLog, systemPrompt: tripResult.systemPrompt, userPrompt: tripResult.userPrompt }
       : { route: null as StrategicRoute | null, llmLog: tripResult.llmLog, systemPrompt: undefined as string | undefined, userPrompt: undefined as string | undefined };
 
     if (routeResult.route) {

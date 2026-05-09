@@ -1029,6 +1029,8 @@ export class AIStrategyEngine {
         return { actor: 'heuristic', actorDetail: model };
       case 'trip-planner':
         return { actor: 'llm', actorDetail: 'trip-planner' };
+      case 'trip-planner-deterministic':
+        return { actor: 'system', actorDetail: 'trip-planner-deterministic' };
       case 'llm-failed':
       case 'no-api-key':
       case 'pipeline-error':
