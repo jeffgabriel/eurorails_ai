@@ -670,12 +670,70 @@ function synthesizeLlmAttempt(
   };
 }
 
+// ── Upgrade decision (JIRA-220 follow-up) ──────────────────────────────
+
+/**
+ * Cost of any single train upgrade (rules-defined, EuroRails canonical):
+ *   Freight → Fast Freight: ECU 20M
+ *   Freight → Heavy Freight: ECU 20M
+ *   Fast Freight → Superfreight: ECU 20M
+ *   Heavy Freight → Superfreight: ECU 20M
+ */
+const UPGRADE_COST_M = 20;
+
+/**
+ * Select the upgrade target for a Medium-skill bot, or undefined if no upgrade
+ * should be emitted this turn.
+ *
+ * Policy (per user direction): "Upgrade as soon as possible without going broke.
+ * Upgrades are always a good idea — no need to model effectiveness. The only
+ * modeling is: can the bot afford this given upcoming expenses (track build)
+ * vs cash on hand?"
+ *
+ * Tier progression — pick a deterministic default rather than evaluate Fast vs
+ * Heavy. Per CLAUDE.md the bot's strategic principle is "income velocity matters
+ * more than payout size", so Fast Freight (speed +3) is the default upgrade
+ * from base Freight. Heavy Freight (cap +1) is only chosen via explicit
+ * non-deterministic paths today and is out of scope for this default.
+ *
+ * Affordability check — emit upgrade only when `cash ≥ upgradeCost +
+ * top1.buildCost`. This mirrors the LLM-path affordability gate (TripPlanner.ts
+ * line 407) using the simulator's truthful build cost. Usage fees on opponent
+ * track are not modeled here; a downstream safety net (NewRoutePlanner.
+ * tryConsumeUpgrade) re-checks affordability against current cash before
+ * applying the upgrade and silently skips if insufficient — so emitting an
+ * upgrade that becomes unaffordable mid-trip is not catastrophic, just a
+ * missed opportunity for one turn.
+ */
+function selectUpgradeTarget(
+  currentTrainType: string,
+  cash: number,
+  tripBuildCost: number,
+): string | undefined {
+  const current = (currentTrainType || '').toLowerCase();
+  let target: string | undefined;
+  if (current === 'freight') {
+    target = 'fast_freight';
+  } else if (current === 'fast_freight' || current === 'heavy_freight') {
+    target = 'superfreight';
+  } else {
+    // Already at top tier (superfreight) or unknown — no upgrade.
+    return undefined;
+  }
+
+  if (cash >= UPGRADE_COST_M + tripBuildCost) {
+    return target;
+  }
+  return undefined;
+}
+
 // ── StrategicRoute builder ─────────────────────────────────────────────
 
 function buildStrategicRoute(
   top1: ScoredCandidate,
   turn: number,
   reasoning: string,
+  upgradeOnRoute?: string,
 ): StrategicRoute {
   return {
     stops: top1.stops,
@@ -683,6 +741,7 @@ function buildStrategicRoute(
     phase: 'build',
     createdAtTurn: turn,
     reasoning,
+    ...(upgradeOnRoute ? { upgradeOnRoute } : {}),
   };
 }
 
@@ -798,9 +857,19 @@ export function planTripDeterministic(
   const sorted = [...feasible].sort((a, b) => b.score - a.score);
   const top1 = pickTop1(sorted)!;
 
+  // JIRA-220 follow-up: deterministic upgrade decision. Upgrade as soon as the
+  // bot can afford it given the chosen trip's build cost. Emits undefined when
+  // the bot is already on Superfreight or when cash would fall short.
+  const upgradeOnRoute = selectUpgradeTarget(
+    snapshot.bot.trainType,
+    snapshot.bot.money,
+    top1.buildCost,
+  );
+
   const latencyMs = Date.now() - startMs;
-  const reasoning = synthesizeReasoning(top1, sorted, stats, opts);
-  const route = buildStrategicRoute(top1, snapshot.turnNumber, reasoning);
+  const reasoning = synthesizeReasoning(top1, sorted, stats, opts) +
+    (upgradeOnRoute ? `\n  Upgrade emitted: ${upgradeOnRoute} (cost ${UPGRADE_COST_M}M, cash ${snapshot.bot.money}M, build ${top1.buildCost}M).` : '');
+  const route = buildStrategicRoute(top1, snapshot.turnNumber, reasoning, upgradeOnRoute);
 
   return {
     route,

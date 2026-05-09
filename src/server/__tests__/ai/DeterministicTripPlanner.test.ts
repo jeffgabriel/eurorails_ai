@@ -718,3 +718,74 @@ describe('planTripDeterministic', () => {
     expect(result.route!.createdAtTurn).toBe(snapshot.turnNumber);
   });
 });
+
+// ── Upgrade emission (JIRA-220 follow-up) ─────────────────────────────
+
+describe('planTripDeterministic — upgrade emission', () => {
+  // The standing demand fixture used by the upgrade tests below.
+  function upgradeDemands() {
+    return [makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 30 })];
+  }
+
+  it('Freight + cash >= upgradeCost + buildCost → emits upgradeOnRoute=fast_freight', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 10, feasible: true });
+    // 100 cash >= 20 (upgrade) + 10 (build) ✓
+    const snapshot = makeSnapshot({ trainType: 'freight', money: 100 });
+    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
+    expect(result.outcome).toBe('success');
+    expect(result.route!.upgradeOnRoute).toBe('fast_freight');
+  });
+
+  it('Freight + cash exactly upgradeCost + buildCost → emits upgradeOnRoute (boundary inclusive)', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 10, feasible: true });
+    // 30 cash == 20 + 10 — boundary is inclusive (>= rule).
+    const snapshot = makeSnapshot({ trainType: 'freight', money: 30 });
+    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
+    expect(result.route!.upgradeOnRoute).toBe('fast_freight');
+  });
+
+  it('Freight + cash < upgradeCost + buildCost → no upgradeOnRoute', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 15, feasible: true });
+    // 25 cash < 20 + 15 — short by 10.
+    const snapshot = makeSnapshot({ trainType: 'freight', money: 25 });
+    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
+    expect(result.outcome).toBe('success');
+    expect(result.route!.upgradeOnRoute).toBeUndefined();
+  });
+
+  it('Fast Freight + cash sufficient → emits upgradeOnRoute=superfreight', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true });
+    const snapshot = makeSnapshot({ trainType: 'fast_freight', money: 50 });
+    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
+    expect(result.route!.upgradeOnRoute).toBe('superfreight');
+  });
+
+  it('Heavy Freight + cash sufficient → emits upgradeOnRoute=superfreight', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true });
+    const snapshot = makeSnapshot({ trainType: 'heavy_freight', money: 50 });
+    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
+    expect(result.route!.upgradeOnRoute).toBe('superfreight');
+  });
+
+  it('Superfreight (top tier) → never emits upgradeOnRoute', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true });
+    const snapshot = makeSnapshot({ trainType: 'superfreight', money: 1000 });
+    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
+    expect(result.route!.upgradeOnRoute).toBeUndefined();
+  });
+
+  it('reasoning string mentions the upgrade decision when one is emitted', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 10, feasible: true });
+    const snapshot = makeSnapshot({ trainType: 'freight', money: 100 });
+    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
+    expect(result.route!.reasoning).toContain('Upgrade emitted: fast_freight');
+    expect(result.route!.reasoning).toContain('cost 20M');
+  });
+
+  it('reasoning string does NOT mention an upgrade when none is emitted', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true });
+    const snapshot = makeSnapshot({ trainType: 'superfreight', money: 1000 });
+    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
+    expect(result.route!.reasoning).not.toContain('Upgrade emitted');
+  });
+});
