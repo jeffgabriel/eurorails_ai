@@ -149,10 +149,14 @@ function makeMemory(overrides: Partial<BotMemoryState> = {}): BotMemoryState {
 }
 
 function makeConfig(): LLMStrategyConfig {
+  // JIRA-220: tests in this file exercise the LLM path generically; Medium no
+  // longer uses the LLM (deterministic now). Default to Easy so the existing
+  // assertions on adapter.chat invocations remain valid. Medium-specific tests
+  // moved to TripPlanner.skill-fork.test.ts.
   return {
-    skillLevel: BotSkillLevel.Medium,
+    skillLevel: BotSkillLevel.Easy,
     provider: LLMProvider.Anthropic,
-    model: 'claude-sonnet-4-6',
+    model: 'claude-haiku-4-5-20251001',
     apiKey: 'test-key',
     timeoutMs: 15000,
     maxRetries: 1,
