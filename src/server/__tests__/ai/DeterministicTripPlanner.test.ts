@@ -207,12 +207,13 @@ beforeEach(() => {
 // ── Constants ──────────────────────────────────────────────────────────
 
 describe('Exported constants', () => {
-  it('OCPT === 5', () => {
-    // OCPT was originally 8 to compensate for a simulator quirk that added a
-    // spurious +1 turn per zero-distance stop. Now that the simulator only
-    // counts a destination turn when the leg had work, OCPT reflects the
-    // bot's per-turn income upper bound (~5M).
-    expect(OCPT).toBe(5);
+  it('OCPT === 3.5', () => {
+    // OCPT history: originally 8 (compensating for a simulator destination-turn
+    // quirk that has since been fixed), then 5 (income-velocity match), now
+    // 3.5 to deliberately favor multi-stop pair candidates whose extra
+    // simulated turns from per-leg build sequencing would otherwise still
+    // lose to singles. Below the bot's per-turn income upper bound.
+    expect(OCPT).toBe(3.5);
   });
 
   it('PRUNE_MAX_TURNS === 12', () => {
@@ -463,7 +464,7 @@ describe('scoreCandidate', () => {
     hopAvgCostM: HOP_AVG_COST_M,
   };
 
-  it('computes correct score: payout=31, turns=3, buildCost=22, OCPT=5 → score=-6', () => {
+  it('computes correct score: payout=31, turns=3, buildCost=22, OCPT=3.5 → score=-1.5', () => {
     mockSimulateTrip.mockReturnValueOnce({ turnsToComplete: 3, totalBuildCost: 22, feasible: true });
     const snapshot = makeSnapshot();
     const candidate = {
@@ -476,11 +477,11 @@ describe('scoreCandidate', () => {
       payout: 31,
     };
     const result = scoreCandidate(candidate, { row: 5, col: 5 }, snapshot, defaultOpts);
-    // score = (31 - 22) - 5 * 3 = 9 - 15 = -6
+    // score = (31 - 22) - 3.5 * 3 = 9 - 10.5 = -1.5
     expect(result.feasible).toBe(true);
     expect(result.buildCost).toBe(22);
     expect(result.turns).toBe(3);
-    expect(result.score).toBeCloseTo(-6, 5);
+    expect(result.score).toBeCloseTo(-1.5, 5);
     expect(result.net).toBeCloseTo(9, 5);
   });
 

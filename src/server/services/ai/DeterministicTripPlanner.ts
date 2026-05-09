@@ -34,8 +34,12 @@ import {
 /**
  * Opportunity cost per turn (ECU-equivalent score points).
  *
- * Set to 5 — matching the bot's per-turn income upper bound (~5M, per
- * CLAUDE.md "income velocity" principle).
+ * Set to 3.5 — deliberately *below* the bot's per-turn income upper bound
+ * (~5M, CLAUDE.md "income velocity") to favor multi-stop pair and triple
+ * candidates. With OCPT < income-upper-bound, the algorithm tolerates an
+ * extra turn per ~3.5M of payout improvement, which is the regime in
+ * which P1/P2/P3 pair patterns reliably out-score their best single
+ * alternatives once the simulator's destination-turn quirk is also fixed.
  *
  * History:
  * - Originally 8, empirically chosen from sweep-spatial-prune.py vs 299
@@ -45,25 +49,24 @@ import {
  *   city the bot just arrived at (the typical P3 second-delivery case).
  *   That spurious +1 systematically punished pair candidates and biased
  *   the algorithm toward singles, inheriting Sonnet's single-bias.
- * - The simulator quirk was fixed (RouteDetourEstimator.simulateTrip
- *   only counts a destination turn when the leg had build or movement),
- *   removing the need for the +3 compensation. OCPT now reflects the
- *   true strategic value: each turn the bot spends is worth roughly its
- *   per-turn income upper bound.
- *
- * RouteDetourEstimator.simulateTrip still uses strict per-leg "build all
- * then move" sequencing, which inflates turn counts modestly compared to
- * real play (where build and movement interleave within a leg). If that
- * is ever fixed, OCPT will not need further adjustment — the per-leg
- * inflation is bounded and small. The dominant fix was the destination-turn
- * guard.
+ * - Simulator quirk was fixed (RouteDetourEstimator.simulateTrip only
+ *   counts a destination turn when the leg had build or movement).
+ * - OCPT then dropped to 5 (income-velocity match), but pair-pick rate
+ *   remained low because pairs still incur 2–4 extra simulated turns
+ *   from the per-leg "build all then move" sequencing that has not been
+ *   fixed.
+ * - OCPT lowered further to 3.5 to deliberately tilt scoring toward
+ *   multi-stop patterns, accepting that long single trips will also be
+ *   somewhat more aggressively selected. This trades single-trip
+ *   precision for pair-pick rate — the user-stated goal.
  *
  * Do not change OCPT without re-running the sweep against the historical
- * log corpus to confirm the new value still produces zero strict-loss
- * decisions vs the Sonnet baseline. The sweep tooling lives at
- * scripts/ai/sweep-spatial-prune.py.
+ * log corpus. The sweep tooling lives at scripts/ai/sweep-spatial-prune.py.
+ * If pair-pick rate starts trending too high (bot bites off trips it
+ * cannot afford), revisit upward; if singles still dominate when pairs
+ * are obviously better, revisit downward.
  */
-export const OCPT = 5;
+export const OCPT = 3.5;
 
 export const PRUNE_MAX_TURNS = 12;
 export const PRUNE_MAX_BUILD_M = 130;
