@@ -580,8 +580,17 @@ export function simulateTrip(
       milesRemaining -= movedThisTurn;
       if (milesRemaining > 0) turn++;
     }
-    // The move phase completes at destination
-    turn++;
+    // Account for the leg's destination turn — but only when *something*
+    // actually happened on this leg (build or movement). Without this guard,
+    // zero-distance, zero-build stops (e.g., a second deliver at a city we
+    // just delivered at — typical of P3 shared-delivery pairs) would each
+    // add a spurious +1 turn that systematically punishes pair candidates
+    // in score-based ranking. JIRA-220 follow-up: this fix unblocks deterministic
+    // pair selection by removing the simulator's per-stop turn tax for
+    // already-arrived stops.
+    if (legBuildCost > 0 || milestonesToTraverse > 0) {
+      turn++;
+    }
 
     currentPos = cityCoord;
   }

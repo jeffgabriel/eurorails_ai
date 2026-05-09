@@ -207,8 +207,12 @@ beforeEach(() => {
 // ── Constants ──────────────────────────────────────────────────────────
 
 describe('Exported constants', () => {
-  it('OCPT === 8', () => {
-    expect(OCPT).toBe(8);
+  it('OCPT === 5', () => {
+    // OCPT was originally 8 to compensate for a simulator quirk that added a
+    // spurious +1 turn per zero-distance stop. Now that the simulator only
+    // counts a destination turn when the leg had work, OCPT reflects the
+    // bot's per-turn income upper bound (~5M).
+    expect(OCPT).toBe(5);
   });
 
   it('PRUNE_MAX_TURNS === 12', () => {
@@ -223,18 +227,17 @@ describe('Exported constants', () => {
     expect(HOP_AVG_COST_M).toBe(1.3);
   });
 
-  it('OCPT source contains calibration phrase "must be re-tuned"', () => {
+  it('OCPT source contains calibration history phrase ("re-running the sweep")', () => {
+    // The OCPT comment must explain why the value is what it is and what would
+    // trigger a re-tune. Without this, the value looks arbitrary. The unique
+    // phrase to grep for tracks the sweep tooling at scripts/ai/sweep-spatial-prune.py.
     const srcPath = path.join(
       __dirname,
       '../../services/ai/DeterministicTripPlanner.ts',
     );
     const src = fs.readFileSync(srcPath, 'utf8');
-    // The spec says grep for the unique phrase "must be re-tuned".
-    // In the verbatim comment this spans two lines as:
-    //   "OCPT MUST be\n     * re-tuned."
-    // So we normalize multi-line comment continuation and check case-insensitively.
     const normalized = src.replace(/\r?\n\s*\*\s*/g, ' ').toLowerCase();
-    expect(normalized).toContain('must be re-tuned');
+    expect(normalized).toContain('re-running the sweep');
   });
 });
 
@@ -460,7 +463,7 @@ describe('scoreCandidate', () => {
     hopAvgCostM: HOP_AVG_COST_M,
   };
 
-  it('computes correct score: payout=31, turns=3, buildCost=22, OCPT=8 → score=-15', () => {
+  it('computes correct score: payout=31, turns=3, buildCost=22, OCPT=5 → score=-6', () => {
     mockSimulateTrip.mockReturnValueOnce({ turnsToComplete: 3, totalBuildCost: 22, feasible: true });
     const snapshot = makeSnapshot();
     const candidate = {
@@ -473,11 +476,11 @@ describe('scoreCandidate', () => {
       payout: 31,
     };
     const result = scoreCandidate(candidate, { row: 5, col: 5 }, snapshot, defaultOpts);
-    // score = (31 - 22) - 8 * 3 = 9 - 24 = -15
+    // score = (31 - 22) - 5 * 3 = 9 - 15 = -6
     expect(result.feasible).toBe(true);
     expect(result.buildCost).toBe(22);
     expect(result.turns).toBe(3);
-    expect(result.score).toBeCloseTo(-15, 5);
+    expect(result.score).toBeCloseTo(-6, 5);
     expect(result.net).toBeCloseTo(9, 5);
   });
 

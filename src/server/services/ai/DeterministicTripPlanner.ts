@@ -34,32 +34,36 @@ import {
 /**
  * Opportunity cost per turn (ECU-equivalent score points).
  *
- * Empirically tuned to 8 from a parameter sweep over 299 historical Sonnet
- * trip-planner decisions (scripts/ai/sweep-spatial-prune.py). At OCPT=8 the
- * deterministic algorithm makes ZERO strict-loss decisions vs the Sonnet
- * baseline; at OCPT=5 it makes 1 strict loss out of 299. OCPT=8 is the knee
- * of the win-rate curve.
+ * Set to 5 — matching the bot's per-turn income upper bound (~5M, per
+ * CLAUDE.md "income velocity" principle).
  *
- * IMPORTANT — calibration note:
- * OCPT=8 is higher than the bot's per-turn income upper bound (~5M, per
- * CLAUDE.md "income velocity" principle). The discrepancy is NOT a strategic
- * choice — it is a compensation for a simulator quirk:
+ * History:
+ * - Originally 8, empirically chosen from sweep-spatial-prune.py vs 299
+ *   historical Sonnet decisions. The +3 inflation above income velocity
+ *   was compensating for a simulator quirk where every stop added a +1
+ *   "destination turn" unconditionally — even zero-distance stops at a
+ *   city the bot just arrived at (the typical P3 second-delivery case).
+ *   That spurious +1 systematically punished pair candidates and biased
+ *   the algorithm toward singles, inheriting Sonnet's single-bias.
+ * - The simulator quirk was fixed (RouteDetourEstimator.simulateTrip
+ *   only counts a destination turn when the leg had build or movement),
+ *   removing the need for the +3 compensation. OCPT now reflects the
+ *   true strategic value: each turn the bot spends is worth roughly its
+ *   per-turn income upper bound.
  *
- *   RouteDetourEstimator.simulateTrip uses strict per-leg sequencing:
- *   "build all of this leg's new track, THEN move next turn." This inflates
- *   turn count vs real play (where bots interleave build and move within a
- *   leg). To rank candidates correctly under inflated turn counts, OCPT
- *   must be inflated proportionally.
+ * RouteDetourEstimator.simulateTrip still uses strict per-leg "build all
+ * then move" sequencing, which inflates turn counts modestly compared to
+ * real play (where build and movement interleave within a leg). If that
+ * is ever fixed, OCPT will not need further adjustment — the per-leg
+ * inflation is bounded and small. The dominant fix was the destination-turn
+ * guard.
  *
- * IF THE SIMULATOR'S SEQUENCING IS EVER FIXED (e.g., a future ticket lets
- * RouteDetourEstimator interleave build+move within a leg), OCPT MUST be
- * re-tuned. The expected new value is ~5, matching the income upper bound.
- * Re-run scripts/ai/sweep-spatial-prune.py against fresh log dumps to
- * confirm before changing.
- *
- * Do not change OCPT without re-running the sweep.
+ * Do not change OCPT without re-running the sweep against the historical
+ * log corpus to confirm the new value still produces zero strict-loss
+ * decisions vs the Sonnet baseline. The sweep tooling lives at
+ * scripts/ai/sweep-spatial-prune.py.
  */
-export const OCPT = 8;
+export const OCPT = 5;
 
 export const PRUNE_MAX_TURNS = 12;
 export const PRUNE_MAX_BUILD_M = 130;

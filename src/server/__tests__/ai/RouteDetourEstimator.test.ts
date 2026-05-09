@@ -303,8 +303,12 @@ describe('simulateTrip (AC2)', () => {
     expect(result.turnsToComplete).toBeGreaterThan(0);
   });
 
-  it('returns turnsToComplete = 1 when path is empty (already at destination)', () => {
-    // CityA is the same as start
+  it('returns turnsToComplete = 0 when path is empty (already at destination, no build, no movement)', () => {
+    // CityA is the same as start — and no build needed → no turns consumed.
+    // JIRA-220 follow-up: a zero-distance, zero-build stop adds 0 turns. Prior
+    // to the fix this returned turnsToComplete = 1 (a spurious destination turn),
+    // which systematically biased the deterministic algorithm against P3 pair
+    // candidates whose final delivery was at the same city as their prior stop.
     const stops: RouteStop[] = [
       { action: 'pickup', loadType: 'Coal', city: 'CityA' },
     ];
@@ -312,8 +316,26 @@ describe('simulateTrip (AC2)', () => {
     const result = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot());
 
     expect(result.feasible).toBe(true);
-    // Trivial path — 0 build, 1 turn to "arrive"
     expect(result.totalBuildCost).toBe(0);
+    expect(result.turnsToComplete).toBe(0);
+  });
+
+  it('zero-distance, zero-build follow-up stop does not add a destination turn (JIRA-220 follow-up)', () => {
+    // Two stops at the same city — second one is zero-distance, zero-build
+    // from the first. This is the canonical P3 same-delivery-city pattern
+    // (e.g., deliver Hops at Holland, then deliver Iron at Holland).
+    // The second stop must NOT inflate the turn count.
+    const stops: RouteStop[] = [
+      { action: 'deliver', loadType: 'Hops', city: 'CityA' },
+      { action: 'deliver', loadType: 'Iron', city: 'CityA' },
+    ];
+
+    const result = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot());
+
+    expect(result.feasible).toBe(true);
+    expect(result.totalBuildCost).toBe(0);
+    // Both stops are zero-distance from start → 0 turns total.
+    expect(result.turnsToComplete).toBe(0);
   });
 });
 
