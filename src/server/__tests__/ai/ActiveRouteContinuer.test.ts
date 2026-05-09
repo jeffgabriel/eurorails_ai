@@ -20,6 +20,7 @@ import type {
   LlmAttempt,
   TurnPlan,
   LLMDecisionResult,
+  BotMemoryState,
 } from '../../../shared/types/GameTypes';
 import type { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
 import type { CompositionTrace, TurnExecutorResult } from '../../services/ai/TurnExecutorPlanner';
@@ -139,6 +140,23 @@ const gridPoints: GridPoint[] = [];
 const brain: LLMStrategyBrain | null = null;
 const tag = '[bot:test turn:1]';
 
+function makeMemory(overrides: Partial<BotMemoryState> = {}): BotMemoryState {
+  return {
+    currentBuildTarget: null,
+    turnsOnTarget: 0,
+    lastAction: null,
+    consecutiveDiscards: 0,
+    deliveryCount: 0,
+    totalEarnings: 0,
+    turnNumber: 1,
+    activeRoute: null,
+    turnsOnRoute: 0,
+    routeHistory: [],
+    consecutiveLlmFailures: 0,
+    ...overrides,
+  };
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -160,6 +178,7 @@ describe('ActiveRouteContinuer.run', () => {
         brain,
         gridPoints,
         tag,
+        makeMemory(),
       );
 
       expect(result.routeWasCompleted).toBe(false);
@@ -185,6 +204,7 @@ describe('ActiveRouteContinuer.run', () => {
         brain,
         gridPoints,
         tag,
+        makeMemory(),
       );
 
       expect(result.decision.plan).toEqual({ type: 'MultiAction', steps: [plan1, plan2] });
@@ -201,6 +221,7 @@ describe('ActiveRouteContinuer.run', () => {
         brain,
         gridPoints,
         tag,
+        makeMemory(),
       );
 
       expect(result.decision.plan).toEqual({ type: AIActionType.PassTurn });
@@ -224,6 +245,7 @@ describe('ActiveRouteContinuer.run', () => {
         brain,
         gridPoints,
         tag,
+        makeMemory(),
       );
 
       expect(result.routeWasAbandoned).toBe(true);
@@ -247,6 +269,7 @@ describe('ActiveRouteContinuer.run', () => {
         brain,
         gridPoints,
         tag,
+        makeMemory(),
       );
 
       expect(result.routeWasCompleted).toBe(true);
@@ -266,6 +289,7 @@ describe('ActiveRouteContinuer.run', () => {
         brain,
         gridPoints,
         tag,
+        makeMemory(),
       );
 
       expect(result.hasDelivery).toBe(true);
@@ -292,6 +316,7 @@ describe('ActiveRouteContinuer.run', () => {
         brain,
         gridPoints,
         tag,
+        makeMemory(),
       );
 
       // The decision must carry JIRA-185 replan data for the debug overlay
@@ -300,9 +325,67 @@ describe('ActiveRouteContinuer.run', () => {
       expect((result.decision as LLMDecisionResult).userPrompt).toBe(replanUserPrompt);
     });
 
+    it('JIRA-220 follow-up: surfaces updatedRoute.reasoning in decision.reasoning when a replan happened', async () => {
+      // PostDeliveryReplanner installed a new route via TripPlanner.planTrip; the new
+      // route carries the planner's verbose reasoning (deterministic top-1 trace for
+      // Medium, or LLM reasoning for Easy/Hard). Without this propagation, the per-turn
+      // NDJSON record only retains "[route-executor] stop X/Y, phase=Z" and the
+      // planner's diagnostic is lost.
+      const replanLlmLog: LlmAttempt[] = [{ role: 'assistant', content: 'replan response' } as unknown as LlmAttempt];
+      const verboseReasoning = '[deterministic-top-1] pair:c10-Hops+c82-Iron:AB chosen.\n  Picked: pair-shared-delivery — payout 27M, build 33M, 6 turns, NET -6M, score -54.0\n  Stops: 1) pickup Hops at Cardiff; 2) pickup Iron at Birmingham; 3) deliver Hops at Holland; 4) deliver Iron at Holland\n  Survivors after spatial prune: 18 of 47 raw.';
+      const newRoute = makeRoute({
+        currentStopIndex: 0,
+        reasoning: verboseReasoning,
+      });
+
+      const execResult = makeExecResult({
+        replanLlmLog,
+        updatedRoute: newRoute,
+      });
+      mockExecute.mockResolvedValue(execResult);
+
+      const result = await ActiveRouteContinuer.run(
+        makeRoute(),
+        makeSnapshot(),
+        makeContext(),
+        brain,
+        gridPoints,
+        tag,
+        makeMemory(),
+      );
+
+      expect(result.decision.reasoning).toContain('[route-executor]');
+      expect(result.decision.reasoning).toContain('replan triggered');
+      expect(result.decision.reasoning).toContain('[deterministic-top-1]');
+      expect(result.decision.reasoning).toContain('pair-shared-delivery');
+      expect(result.decision.reasoning).toContain('Survivors after spatial prune');
+    });
+
+    it('JIRA-220 follow-up: does NOT append updatedRoute.reasoning when no replan happened', async () => {
+      // No replanLlmLog → no replan → keep the brief route-executor tag.
+      const execResult = makeExecResult({
+        updatedRoute: makeRoute({ reasoning: 'unrelated route reasoning that should not surface' }),
+      });
+      delete (execResult as Partial<TurnExecutorResult>).replanLlmLog;
+      mockExecute.mockResolvedValue(execResult);
+
+      const result = await ActiveRouteContinuer.run(
+        makeRoute(),
+        makeSnapshot(),
+        makeContext(),
+        brain,
+        gridPoints,
+        tag,
+        makeMemory(),
+      );
+
+      expect(result.decision.reasoning).toContain('[route-executor]');
+      expect(result.decision.reasoning).not.toContain('replan triggered');
+      expect(result.decision.reasoning).not.toContain('unrelated route reasoning');
+    });
+
     it('does not add llmLog/systemPrompt fields when replan fields are absent', async () => {
       const execResult = makeExecResult();
-      // Ensure no replan fields are set
       delete (execResult as Partial<TurnExecutorResult>).replanLlmLog;
       delete (execResult as Partial<TurnExecutorResult>).replanSystemPrompt;
       delete (execResult as Partial<TurnExecutorResult>).replanUserPrompt;
@@ -315,12 +398,99 @@ describe('ActiveRouteContinuer.run', () => {
         brain,
         gridPoints,
         tag,
+        makeMemory(),
       );
 
       expect((result.decision as LLMDecisionResult).llmLog).toBeUndefined();
       expect((result.decision as LLMDecisionResult).systemPrompt).toBeUndefined();
-      // userPrompt should still exist (the default route prompt), just not the replan one
       expect(typeof (result.decision as LLMDecisionResult).userPrompt).toBe('string');
+    });
+  });
+
+  describe('stuck-route abandonment', () => {
+    it.each([
+      ['stop_city_not_on_network'],
+      ['budget_exhausted'],
+      ['max_iterations'],
+    ])('abandons stuck route after threshold turns of PassTurn-only output (a2=%s)', async (terminationReason) => {
+      // Reproduces game c5f36a97 / 0c6f0fb6 — bot stuck on a route whose pickup
+      // city it cannot reach. TurnExecutorPlanner returns no plans (PassTurn),
+      // and after ≥ 2 prior turns on this route the next no-progress turn must
+      // abandon so TripPlanner can replan instead of PassTurning forever.
+      const activeRoute = makeRoute({ currentStopIndex: 0 });
+      const trace = { ...makeTrace(), a2: { iterations: 1, terminationReason } };
+      const execResult = makeExecResult({
+        plans: [],
+        compositionTrace: trace,
+        routeComplete: false,
+        routeAbandoned: false,
+      });
+      mockExecute.mockResolvedValue(execResult);
+
+      const result = await ActiveRouteContinuer.run(
+        activeRoute,
+        makeSnapshot(),
+        makeContext(),
+        brain,
+        gridPoints,
+        tag,
+        makeMemory({ turnsOnRoute: 2 }),
+      );
+
+      expect(result.routeWasAbandoned).toBe(true);
+      expect(result.routeWasCompleted).toBe(false);
+      expect(result.activeRoute).toBe(activeRoute);
+      expect(result.decision.model).toBe('stuck-route-abandon');
+      expect(result.decision.reasoning).toContain('stuck-route-abandon');
+    });
+
+    it('does NOT abandon a fresh route on its first PassTurn turn (turnsOnRoute=0)', async () => {
+      // Building toward a far pickup may legitimately produce PassTurn on the
+      // first turn — abandonment should only fire after the threshold.
+      const activeRoute = makeRoute({ currentStopIndex: 0 });
+      const execResult = makeExecResult({ plans: [], routeComplete: false, routeAbandoned: false });
+      mockExecute.mockResolvedValue(execResult);
+
+      const result = await ActiveRouteContinuer.run(
+        activeRoute,
+        makeSnapshot(),
+        makeContext(),
+        brain,
+        gridPoints,
+        tag,
+        makeMemory({ turnsOnRoute: 0 }),
+      );
+
+      expect(result.routeWasAbandoned).toBe(false);
+      expect(result.decision.model).toBe('route-executor');
+    });
+
+    it('does NOT abandon when the route advanced this turn (pickup or deliver happened)', async () => {
+      // Even at turnsOnRoute=5, if execResult contains real plans (e.g., MoveTrain + PickupLoad),
+      // the bot is making progress and the route must be preserved.
+      const activeRoute = makeRoute({ currentStopIndex: 0 });
+      const updatedRoute = makeRoute({ currentStopIndex: 1 });
+      const execResult = makeExecResult({
+        plans: [{ type: AIActionType.PickupLoad, load: 'Coal', city: 'Lyon', cardId: 1 } as TurnPlan],
+        updatedRoute,
+        routeComplete: false,
+        routeAbandoned: false,
+      });
+      mockExecute.mockResolvedValue(execResult);
+
+      const result = await ActiveRouteContinuer.run(
+        activeRoute,
+        makeSnapshot(),
+        makeContext(),
+        brain,
+        gridPoints,
+        tag,
+        makeMemory({ turnsOnRoute: 5 }),
+      );
+
+      expect(result.routeWasAbandoned).toBe(false);
+      expect(result.activeRoute).toBe(updatedRoute);
+      expect(result.decision.model).toBe('route-executor');
     });
   });
 });
