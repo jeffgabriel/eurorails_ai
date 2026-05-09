@@ -271,16 +271,16 @@ export class TurnExecutor {
         concatenatedPath.push(...result.movementPath.slice(startIndex));
       }
 
-      // Update snapshot state so subsequent steps see correct position/loads
+      // Update snapshot.bot.position so subsequent steps see the new position.
+      // Loads mutations now live inside the per-action handlers
+      // (handlePickupLoad / handleDeliverLoad / handleDropLoad), so they fire
+      // both on the multi-action path and on the early-execution path used by
+      // MovementPhasePlanner's post-delivery replan. JIRA-220 follow-up —
+      // see analysis on game e437ce9b for why orchestrator-level mutations
+      // were incorrect.
       if (step.type === AIActionType.MoveTrain && step.path.length > 0) {
         const dest = step.path[step.path.length - 1];
         snapshot.bot.position = { row: dest.row, col: dest.col };
-      }
-      if (step.type === AIActionType.PickupLoad) {
-        snapshot.bot.loads = [...snapshot.bot.loads, step.load];
-      }
-      if (step.type === AIActionType.DeliverLoad) {
-        snapshot.bot.loads = snapshot.bot.loads.filter(l => l !== step.load);
       }
     }
 
@@ -541,6 +541,14 @@ export class TurnExecutor {
       client.release();
     }
 
+    // Mirror the DB mutation onto the in-memory snapshot so subsequent
+    // mid-turn consumers (e.g., MovementPhasePlanner's JIRA-165 demand
+    // refresh) see the correct loads. Previously this lived in
+    // executeMultiAction's per-step orchestration loop, which left
+    // snapshot.bot.loads stale on the early-execution path used by
+    // PostDeliveryReplanner — see JIRA-220 follow-up game e437ce9b.
+    snapshot.bot.loads = [...snapshot.bot.loads, loadType];
+
     // If this is a dropped load at the city, clear it (best-effort — separate from critical tx)
     if (cityName) {
       try {
@@ -706,6 +714,24 @@ export class TurnExecutor {
     const newCardId = deliverResult.newCard.id;
     const remainingMoney = deliverResult.updatedMoney;
 
+    // Mirror the DB mutation onto the in-memory snapshot so subsequent
+    // mid-turn consumers (e.g., MovementPhasePlanner's JIRA-165 demand
+    // refresh after a delivery) see the correct loads. Without this,
+    // a stale snapshot.bot.loads gets copied onto the freshly-captured
+    // snapshot at MovementPhasePlanner.ts:256, which propagates wrong
+    // isLoadOnTrain flags into the post-delivery replan and causes the
+    // deterministic algorithm to emit deliver-only routes for fresh
+    // demands of the just-delivered loadType. JIRA-220 follow-up — see
+    // analysis on game e437ce9b. Removes ONE occurrence of the load
+    // (delivery is per-instance, not per-loadType-class).
+    const idx = snapshot.bot.loads.indexOf(loadType);
+    if (idx >= 0) {
+      snapshot.bot.loads = [
+        ...snapshot.bot.loads.slice(0, idx),
+        ...snapshot.bot.loads.slice(idx + 1),
+      ];
+    }
+
     // Post-commit: audit record (best-effort)
     try {
       const auditDurationMs = Date.now() - startTime;
@@ -845,6 +871,20 @@ export class TurnExecutor {
       throw error;
     } finally {
       client.release();
+    }
+
+    // Mirror the DB mutation onto the in-memory snapshot so subsequent
+    // mid-turn consumers see the correct loads. Removes ONE occurrence
+    // of the load. JIRA-220 follow-up — symmetric with handlePickupLoad
+    // and handleDeliverLoad.
+    {
+      const idx = snapshot.bot.loads.indexOf(loadType);
+      if (idx >= 0) {
+        snapshot.bot.loads = [
+          ...snapshot.bot.loads.slice(0, idx),
+          ...snapshot.bot.loads.slice(idx + 1),
+        ];
+      }
     }
 
     // Drop the load at the city (best-effort — separate from critical tx)
