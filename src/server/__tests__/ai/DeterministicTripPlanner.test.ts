@@ -33,9 +33,11 @@ jest.mock('../../services/ai/MapTopology', () => ({
 import { simulateTrip } from '../../services/ai/RouteDetourEstimator';
 import {
   OCPT,
+  OCPT_BY_PHASE,
   PRUNE_MAX_TURNS,
   PRUNE_MAX_BUILD_M,
   HOP_AVG_COST_M,
+  classifyGamePhase,
   detectCarriedLoads,
   enumerateCandidates,
   cheapPrune,
@@ -207,13 +209,19 @@ beforeEach(() => {
 // ── Constants ──────────────────────────────────────────────────────────
 
 describe('Exported constants', () => {
-  it('OCPT === 3.5', () => {
-    // OCPT history: originally 8 (compensating for a simulator destination-turn
-    // quirk that has since been fixed), then 5 (income-velocity match), now
-    // 3.5 to deliberately favor multi-stop pair candidates whose extra
-    // simulated turns from per-leg build sequencing would otherwise still
-    // lose to singles. Below the bot's per-turn income upper bound.
-    expect(OCPT).toBe(3.5);
+  it('OCPT_BY_PHASE has the expected phase-aware values (early=2, mid=5, late=7)', () => {
+    // OCPT now varies by game phase. Early-game favors network-building
+    // multi-stop trips (low turn cost); mid-game is income-velocity-matched
+    // neutral; late-game punishes long trips because every remaining turn
+    // matters for closing out the win condition (7 cities + ECU 250M).
+    expect(OCPT_BY_PHASE.early).toBe(2);
+    expect(OCPT_BY_PHASE.mid).toBe(5);
+    expect(OCPT_BY_PHASE.late).toBe(7);
+  });
+
+  it('OCPT (default export) equals OCPT_BY_PHASE.mid for backward compatibility', () => {
+    expect(OCPT).toBe(OCPT_BY_PHASE.mid);
+    expect(OCPT).toBe(5);
   });
 
   it('PRUNE_MAX_TURNS === 12', () => {
@@ -228,17 +236,59 @@ describe('Exported constants', () => {
     expect(HOP_AVG_COST_M).toBe(1.3);
   });
 
-  it('OCPT source contains calibration history phrase ("re-running the sweep")', () => {
-    // The OCPT comment must explain why the value is what it is and what would
-    // trigger a re-tune. Without this, the value looks arbitrary. The unique
-    // phrase to grep for tracks the sweep tooling at scripts/ai/sweep-spatial-prune.py.
+  it('OCPT_BY_PHASE source contains calibration history pointing to sweep tooling', () => {
+    // The OCPT comment must explain why values are what they are and what
+    // triggers a re-tune. Without this, values look arbitrary. The unique
+    // phrase tracks the sweep tooling at scripts/ai/sweep-spatial-prune.py.
     const srcPath = path.join(
       __dirname,
       '../../services/ai/DeterministicTripPlanner.ts',
     );
     const src = fs.readFileSync(srcPath, 'utf8');
     const normalized = src.replace(/\r?\n\s*\*\s*/g, ' ').toLowerCase();
-    expect(normalized).toContain('re-running the sweep');
+    expect(normalized).toContain('sweep-spatial-prune.py');
+  });
+});
+
+// ── classifyGamePhase ──────────────────────────────────────────────────
+
+describe('classifyGamePhase', () => {
+  // LATE triggers
+  it('citiesConnected >= 5 → late (regardless of turn)', () => {
+    expect(classifyGamePhase(10, 0, 5)).toBe('late');
+    expect(classifyGamePhase(10, 0, 7)).toBe('late');
+  });
+
+  it('turn >= 60 → late (regardless of cities)', () => {
+    expect(classifyGamePhase(60, 0, 0)).toBe('late');
+    expect(classifyGamePhase(120, 5, 4)).toBe('late');
+  });
+
+  // EARLY triggers (none of the LATE triggers fired)
+  it('turn < 25 → early', () => {
+    expect(classifyGamePhase(24, 5, 4)).toBe('early');
+    expect(classifyGamePhase(0, 0, 0)).toBe('early');
+  });
+
+  it('deliveries < 3 → early (when not late)', () => {
+    expect(classifyGamePhase(30, 2, 3)).toBe('early');
+    expect(classifyGamePhase(50, 0, 4)).toBe('early');
+  });
+
+  it('citiesConnected < 2 → early (when not late)', () => {
+    expect(classifyGamePhase(30, 5, 1)).toBe('early');
+    expect(classifyGamePhase(40, 10, 0)).toBe('early');
+  });
+
+  // MID — past all early triggers, before late triggers
+  it('turn >= 25, deliveries >= 3, citiesConnected in [2..4] → mid', () => {
+    expect(classifyGamePhase(25, 3, 2)).toBe('mid');
+    expect(classifyGamePhase(45, 6, 4)).toBe('mid');
+    expect(classifyGamePhase(59, 10, 4)).toBe('mid');
+  });
+
+  it('LATE precedence over EARLY when both could match (citiesConnected=5, deliveries=0)', () => {
+    expect(classifyGamePhase(5, 0, 5)).toBe('late');
   });
 });
 
@@ -464,7 +514,7 @@ describe('scoreCandidate', () => {
     hopAvgCostM: HOP_AVG_COST_M,
   };
 
-  it('computes correct score: payout=31, turns=3, buildCost=22, OCPT=3.5 → score=-1.5', () => {
+  it('computes correct score: payout=31, turns=3, buildCost=22, OCPT=5 (mid-phase default) → score=-6', () => {
     mockSimulateTrip.mockReturnValueOnce({ turnsToComplete: 3, totalBuildCost: 22, feasible: true });
     const snapshot = makeSnapshot();
     const candidate = {
@@ -477,11 +527,11 @@ describe('scoreCandidate', () => {
       payout: 31,
     };
     const result = scoreCandidate(candidate, { row: 5, col: 5 }, snapshot, defaultOpts);
-    // score = (31 - 22) - 3.5 * 3 = 9 - 10.5 = -1.5
+    // score = (31 - 22) - 5 * 3 = 9 - 15 = -6 (mid-phase OCPT)
     expect(result.feasible).toBe(true);
     expect(result.buildCost).toBe(22);
     expect(result.turns).toBe(3);
-    expect(result.score).toBeCloseTo(-1.5, 5);
+    expect(result.score).toBeCloseTo(-6, 5);
     expect(result.net).toBeCloseTo(9, 5);
   });
 
@@ -791,5 +841,73 @@ describe('planTripDeterministic — upgrade emission', () => {
     const snapshot = makeSnapshot({ trainType: 'superfreight', money: 1000 });
     const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
     expect(result.route!.reasoning).not.toContain('Upgrade emitted');
+  });
+});
+
+// ── Phase-aware OCPT (JIRA-220 follow-up) ──────────────────────────────
+
+describe('planTripDeterministic — phase-aware OCPT', () => {
+  function singleDemand() {
+    return [makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 30 })];
+  }
+
+  it('default snapshot (turn=5) classifies as EARLY → reasoning shows OCPT=2', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true });
+    // Default makeSnapshot: turnNumber=5, deliveries=0, connectedMajorCityCount=0 → EARLY
+    const result = planTripDeterministic(makeSnapshot(), makeContext(singleDemand()), makeMemory());
+    expect(result.outcome).toBe('success');
+    expect(result.route!.reasoning).toContain('Phase: early');
+    expect(result.route!.reasoning).toContain('OCPT=2');
+  });
+
+  it('mid-game state (turn=30, deliveries=5, cities=3) → reasoning shows OCPT=5', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true });
+    const base = makeSnapshot();
+    const snapshot = { ...base, turnNumber: 30, bot: { ...base.bot, connectedMajorCityCount: 3 } };
+    const memory = { ...makeMemory(), deliveryCount: 5 };
+    const result = planTripDeterministic(snapshot, makeContext(singleDemand()), memory);
+    expect(result.route!.reasoning).toContain('Phase: mid');
+    expect(result.route!.reasoning).toContain('OCPT=5');
+  });
+
+  it('late-game state (cities=5) → reasoning shows OCPT=7', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true });
+    const base = makeSnapshot();
+    const snapshot = { ...base, turnNumber: 50, bot: { ...base.bot, connectedMajorCityCount: 5 } };
+    const memory = { ...makeMemory(), deliveryCount: 8 };
+    const result = planTripDeterministic(snapshot, makeContext(singleDemand()), memory);
+    expect(result.route!.reasoning).toContain('Phase: late');
+    expect(result.route!.reasoning).toContain('OCPT=7');
+  });
+
+  it('options.ocpt overrides phase-derived OCPT (phase still surfaced in reasoning)', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true });
+    // Default snapshot is EARLY → would normally use OCPT=2. Override to 9.
+    const result = planTripDeterministic(makeSnapshot(), makeContext(singleDemand()), makeMemory(), { ocpt: 9 });
+    expect(result.route!.reasoning).toContain('Phase: early');
+    expect(result.route!.reasoning).toContain('OCPT=9');
+  });
+
+  it('score reflects phase-derived OCPT — same fixture scores higher in early than late', () => {
+    // Fixture: payout 30, turns 4, build 8 → net = 22
+    //   EARLY (OCPT=2): score = 22 - 2*4 = 14
+    //   MID   (OCPT=5): score = 22 - 5*4 = 2
+    //   LATE  (OCPT=7): score = 22 - 7*4 = -6
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 4, totalBuildCost: 8, feasible: true });
+    const demand = [makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 30 })];
+
+    const earlyRes = planTripDeterministic(makeSnapshot(), makeContext(demand), makeMemory());
+
+    const baseMid = makeSnapshot();
+    const midSnapshot = { ...baseMid, turnNumber: 30, bot: { ...baseMid.bot, connectedMajorCityCount: 3 } };
+    const midRes = planTripDeterministic(midSnapshot, makeContext(demand), { ...makeMemory(), deliveryCount: 5 });
+
+    const baseLate = makeSnapshot();
+    const lateSnapshot = { ...baseLate, turnNumber: 50, bot: { ...baseLate.bot, connectedMajorCityCount: 5 } };
+    const lateRes = planTripDeterministic(lateSnapshot, makeContext(demand), { ...makeMemory(), deliveryCount: 8 });
+
+    expect(earlyRes.route!.reasoning).toContain('score 14.0');
+    expect(midRes.route!.reasoning).toContain('score 2.0');
+    expect(lateRes.route!.reasoning).toContain('score -6.0');
   });
 });

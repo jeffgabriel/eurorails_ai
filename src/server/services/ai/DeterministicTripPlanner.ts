@@ -32,41 +32,74 @@ import {
 // ── Tunables ───────────────────────────────────────────────────────────
 
 /**
- * Opportunity cost per turn (ECU-equivalent score points).
+ * Opportunity cost per turn (ECU-equivalent score points), keyed by game phase.
  *
- * Set to 3.5 — deliberately *below* the bot's per-turn income upper bound
- * (~5M, CLAUDE.md "income velocity") to favor multi-stop pair and triple
- * candidates. With OCPT < income-upper-bound, the algorithm tolerates an
- * extra turn per ~3.5M of payout improvement, which is the regime in
- * which P1/P2/P3 pair patterns reliably out-score their best single
- * alternatives once the simulator's destination-turn quirk is also fixed.
+ * Each turn the bot spends is penalized in score by this many ECU. The value
+ * shifts across the strategic arc of a game:
+ *
+ * - **Early (OCPT=2)** — track is sparse, every delivery has high marginal
+ *   value because each connection unlocks more of the network. The bot should
+ *   accept long, expensive trips that pay off compounding. Low OCPT favors
+ *   multi-stop pair/triple candidates that consolidate cards and build
+ *   useful track in fewer total turns than equivalent singles would.
+ * - **Mid (OCPT=5)** — matches the bot's per-turn income upper bound (~5M,
+ *   CLAUDE.md "income velocity"). The strategically neutral value: pair vs
+ *   single is decided purely on truthful score.
+ * - **Late (OCPT=7)** — the bot is racing to ECU 250M cash and 7 connected
+ *   major cities. Each remaining turn is precious; long-haul trips that
+ *   delay the win condition are penalized harder. Higher OCPT favors short,
+ *   high-velocity finalizers over network-building plays.
  *
  * History:
- * - Originally 8, empirically chosen from sweep-spatial-prune.py vs 299
- *   historical Sonnet decisions. The +3 inflation above income velocity
- *   was compensating for a simulator quirk where every stop added a +1
- *   "destination turn" unconditionally — even zero-distance stops at a
- *   city the bot just arrived at (the typical P3 second-delivery case).
- *   That spurious +1 systematically punished pair candidates and biased
- *   the algorithm toward singles, inheriting Sonnet's single-bias.
- * - Simulator quirk was fixed (RouteDetourEstimator.simulateTrip only
- *   counts a destination turn when the leg had build or movement).
- * - OCPT then dropped to 5 (income-velocity match), but pair-pick rate
- *   remained low because pairs still incur 2–4 extra simulated turns
- *   from the per-leg "build all then move" sequencing that has not been
- *   fixed.
- * - OCPT lowered further to 3.5 to deliberately tilt scoring toward
- *   multi-stop patterns, accepting that long single trips will also be
- *   somewhat more aggressively selected. This trades single-trip
- *   precision for pair-pick rate — the user-stated goal.
+ * - Originally a single constant 8 (empirically tuned). +3 above income
+ *   velocity was compensating for a simulator quirk where every stop added
+ *   a spurious +1 destination turn — fixed in RouteDetourEstimator.
+ * - Then 5 (income-velocity match), then 3.5 (pair-friendly tilt across
+ *   all phases), and now this phase-aware table.
  *
- * Do not change OCPT without re-running the sweep against the historical
- * log corpus. The sweep tooling lives at scripts/ai/sweep-spatial-prune.py.
- * If pair-pick rate starts trending too high (bot bites off trips it
- * cannot afford), revisit upward; if singles still dominate when pairs
- * are obviously better, revisit downward.
+ * Do not change values without re-running scripts/ai/sweep-spatial-prune.py
+ * to confirm no regression in strict-loss count. If pair-pick rate trends
+ * too high (bot bites off trips it cannot afford in a phase), nudge that
+ * phase's value upward; if singles still dominate when pairs would be
+ * better in a phase, nudge it downward.
  */
-export const OCPT = 3.5;
+export const OCPT_BY_PHASE = {
+  early: 2,
+  mid: 5,
+  late: 7,
+} as const;
+
+/**
+ * Default OCPT — exposed for backward compatibility and direct
+ * `scoreCandidate` calls that don't have phase context. Equivalent to
+ * mid-phase. Production callers go through `planTripDeterministic`, which
+ * computes the phase from snapshot/memory state and uses
+ * `OCPT_BY_PHASE[phase]`.
+ */
+export const OCPT = OCPT_BY_PHASE.mid;
+
+/**
+ * Classify the game's strategic phase from observable bot state.
+ *
+ * Boundaries (matching docs/trip-candidate-menu-easy-design.md §5):
+ * - LATE when the bot has connected ≥5 major cities OR turn ≥ 60.
+ *   The win condition needs 7 cities + ECU 250M; at 5/7 connected the
+ *   endgame is in sight regardless of turn count, and turn 60 is deep
+ *   enough that finishing matters more than accumulating.
+ * - EARLY when turn < 25 OR deliveries < 3 OR citiesConnected < 2.
+ *   The bot is still in network-building mode; few completed deliveries
+ *   means cards in hand are largely unrealized investments.
+ * - MID otherwise — past the build-out phase, not yet sprinting to win.
+ */
+export function classifyGamePhase(
+  turn: number,
+  deliveries: number,
+  citiesConnected: number,
+): 'early' | 'mid' | 'late' {
+  if (citiesConnected >= 5 || turn >= 60) return 'late';
+  if (turn < 25 || deliveries < 3 || citiesConnected < 2) return 'early';
+  return 'mid';
+}
 
 export const PRUNE_MAX_TURNS = 12;
 export const PRUNE_MAX_BUILD_M = 130;
@@ -606,6 +639,7 @@ function synthesizeReasoning(
   allSorted: ScoredCandidate[],
   stats: PruneStats,
   opts: ResolvedOptions,
+  phase?: 'early' | 'mid' | 'late',
 ): string {
   const pattern = inferPatternLabel(top1);
   const stopsStr = top1.stops
@@ -614,6 +648,9 @@ function synthesizeReasoning(
 
   const patternExplanation = explainPattern(pattern, top1);
   let reasoning = `[deterministic-top-1] ${top1.id} chosen.\n`;
+  if (phase) {
+    reasoning += `  Phase: ${phase} (OCPT=${opts.ocpt})\n`;
+  }
   reasoning += `  Picked: ${pattern} — payout ${top1.payout}M, build ${top1.buildCost}M, ${top1.turns} turns, NET ${top1.net.toFixed(0)}M, score ${top1.score.toFixed(1)}\n`;
   reasoning += `  Stops: ${stopsStr}\n`;
   reasoning += `  Rationale: ${patternExplanation}\n`;
@@ -765,8 +802,17 @@ export function planTripDeterministic(
 ): DeterministicTripPlanResult {
   const startMs = Date.now();
 
+  // Phase-aware OCPT: classify game phase from observable state and pick the
+  // matching OCPT_BY_PHASE value. Caller may override via options.ocpt for
+  // tests or experiments.
+  const phase = classifyGamePhase(
+    snapshot.turnNumber ?? 0,
+    memory.deliveryCount ?? 0,
+    snapshot.bot.connectedMajorCityCount ?? 0,
+  );
+
   const opts: ResolvedOptions = {
-    ocpt: options?.ocpt ?? OCPT,
+    ocpt: options?.ocpt ?? OCPT_BY_PHASE[phase],
     pruneMaxTurns: options?.pruneMaxTurns ?? PRUNE_MAX_TURNS,
     pruneMaxBuildM: options?.pruneMaxBuildM ?? PRUNE_MAX_BUILD_M,
     hopAvgCostM: options?.hopAvgCostM ?? HOP_AVG_COST_M,
@@ -874,7 +920,7 @@ export function planTripDeterministic(
   );
 
   const latencyMs = Date.now() - startMs;
-  const reasoning = synthesizeReasoning(top1, sorted, stats, opts) +
+  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, phase) +
     (upgradeOnRoute ? `\n  Upgrade emitted: ${upgradeOnRoute} (cost ${UPGRADE_COST_M}M, cash ${snapshot.bot.money}M, build ${top1.buildCost}M).` : '');
   const route = buildStrategicRoute(top1, snapshot.turnNumber, reasoning, upgradeOnRoute);
 
