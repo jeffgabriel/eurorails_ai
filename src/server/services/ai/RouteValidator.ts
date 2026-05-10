@@ -84,7 +84,7 @@ export class RouteValidator {
       const v = validations[i];
       if (!v.feasible || v.stop.action !== 'deliver') continue;
 
-      const isCarried = snapshot.bot.loads.includes(v.stop.loadType);
+      const isCarried = context.loads.includes(v.stop.loadType);
       const hasFeasiblePriorPickup = validations
         .slice(0, i)
         .some(pv => pv.feasible && pv.stop.action === 'pickup' && pv.stop.loadType === v.stop.loadType);

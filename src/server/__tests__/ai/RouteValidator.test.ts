@@ -502,6 +502,7 @@ describe('RouteValidator', () => {
       });
       const context = makeContext({
         demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin', payout: 15 })],
+        loads: ['Steel'], // JIRA-222: validator reads context.loads (planner-working-state)
       });
       const snapshot = makeSnapshot();
       snapshot.bot.loads = ['Steel']; // bot carries Steel
@@ -605,6 +606,7 @@ describe('RouteValidator', () => {
           makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Wroclaw', payout: 14 }),
           makeDemand({ cardIndex: 2, loadType: 'Ham', supplyCity: 'Frankfurt', deliveryCity: 'Stuttgart', payout: 12 }),
         ],
+        loads: ['Sheep', 'Steel'], // JIRA-222: validator reads context.loads (planner-working-state)
       });
       const snapshot = makeSnapshot();
       snapshot.bot.loads = ['Sheep', 'Steel']; // bot carries Sheep and Steel
@@ -628,6 +630,7 @@ describe('RouteValidator', () => {
       });
       const context = makeContext({
         demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin', payout: 15 })],
+        loads: ['Steel'], // JIRA-222: validator reads context.loads (planner-working-state)
       });
       const snapshot = makeSnapshot();
       snapshot.bot.loads = ['Steel']; // bot carries Steel
@@ -732,7 +735,10 @@ describe('RouteValidator', () => {
         ],
       });
 
-      const context = makeContext({ demands: [laborDemand, hamDemand] });
+      const context = makeContext({
+        demands: [laborDemand, hamDemand],
+        loads: ['Labor'], // JIRA-222: validator reads context.loads (planner-working-state)
+      });
       const snapshot = makeSnapshot(27);
       snapshot.bot.loads = ['Labor'];
 
@@ -840,7 +846,10 @@ describe('JIRA-214: insertionDetourCostOverride in checkCumulativeBudget (AC5)',
       ],
     });
 
-    const context = makeContext({ demands: [demand] });
+    const context = makeContext({
+      demands: [demand],
+      loads: ['Steel'], // JIRA-222: validator reads context.loads (planner-working-state)
+    });
     const snapshot = makeSnapshot(25); // 25M cash
     snapshot.bot.loads = ['Steel']; // bot is carrying Steel
 

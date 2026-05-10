@@ -288,7 +288,7 @@ export class MovementPhasePlanner {
           if (gridPoints && gridPoints.length > 0) {
             try {
               const freshSnapshot = await capture(snapshot.gameId, snapshot.bot.playerId);
-              freshSnapshot.bot.loads = [...snapshot.bot.loads];
+              freshSnapshot.bot.loads = [...context.loads];
               context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
               context.canDeliver = ContextBuilder.rebuildCanDeliver(freshSnapshot, gridPoints);
               snapshot.bot.resolvedDemands = freshSnapshot.bot.resolvedDemands;
