@@ -84,11 +84,31 @@ export class GuardrailEnforcer {
     //
     // When an affordable+connectable demand exists the bot should NOT discard — it has a viable
     // plan and just needs to execute it. JIRA-68, JIRA-183: no noProgressTurns gate needed.
+    // Carried-loads-with-matching-demand suppress: NEVER force DiscardHand when
+    // the bot has loads on its train AND those loads have matching demand cards
+    // in hand. Discarding would replace the matching cards, orphaning the loads.
+    // The bot invested turns to pick those loads up; that investment must not
+    // be thrown away by a guardrail just because the delivery city isn't yet
+    // reachable on the existing network — the bot can build toward it later.
+    //
+    // See game b1dd75b7: Sonnet at Oslo carrying 2 Fish for delivery to
+    // Bern/Zurich (neither yet on network) hit the broke-stuck guardrail and
+    // discarded mid-trip, losing both Fish demands.
+    //
+    // True orphan loads (loads on train with NO matching demand in hand —
+    // typically the result of a Derailment event or a prior bug) are still
+    // discardable; the discard suppression hinges on whether ANY demand has
+    // isLoadOnTrain=true (set by DemandEngine when bot.loads includes the
+    // demand's loadType).
+    const carriedLoadsHaveMatchingDemand =
+      snapshot.bot.loads.length > 0 &&
+      context.demands.some(d => d.isLoadOnTrain);
+
     const hasDeliverableLoad = snapshot.bot.loads.length > 0 && context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork);
     const hasAffordableConnectableDemand = context.demands.some(
       d => d.isAffordable && (d.isSupplyOnNetwork || d.isLoadOnTrain) && d.isDeliveryOnNetwork,
     );
-    if (!hasActiveRoute && !hasDeliverableLoad && !hasAffordableConnectableDemand && planType !== AIActionType.DiscardHand) {
+    if (!hasActiveRoute && !hasDeliverableLoad && !hasAffordableConnectableDemand && !carriedLoadsHaveMatchingDemand && planType !== AIActionType.DiscardHand) {
       console.warn(
         `[Guardrail Unaffordable-Stuck] Bot has $${snapshot.bot.money}M cash but no active route,` +
         ` no deliverable load, and no affordable+connectable demand — forcing DiscardHand`,
@@ -104,6 +124,11 @@ export class GuardrailEnforcer {
     // blocking the stuck detector, and no demand is achievable on the existing track network.
     // JIRA-177, JIRA-183: fires immediately on raw state — no noProgressTurns gate, no cap on
     // consecutive discards. A broke bot with unachievable demands gains nothing from waiting.
+    //
+    // Carrying-loads guard: do NOT discard if the bot has any loads on its train, even when
+    // the delivery cities aren't yet on network. The matching demand cards are needed to
+    // realize value from those loads once track is built (or once cash returns from elsewhere
+    // — opponent track-use fees, mercy borrow, etc.). Discarding orphans the loads.
     const botIsBroke = snapshot.bot.money < 5;
     const hasAchievableDemand = context.demands.some(
       d => (d.isSupplyOnNetwork || d.isLoadOnTrain) && d.isDeliveryOnNetwork,
@@ -112,6 +137,7 @@ export class GuardrailEnforcer {
       botIsBroke &&
       hasActiveRoute &&
       !hasAchievableDemand &&
+      !carriedLoadsHaveMatchingDemand &&
       planType !== AIActionType.DiscardHand
     ) {
       console.warn(

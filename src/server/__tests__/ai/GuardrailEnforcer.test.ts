@@ -469,6 +469,47 @@ describe('GuardrailEnforcer', () => {
           expect(result.plan.type).toBe(AIActionType.DiscardHand);
         }
       });
+
+      it('JIRA-220 follow-up: must NOT fire when bot has loads on train, even with no achievable demand on network', async () => {
+        // Game b1dd75b7: Sonnet at Oslo carrying 2 Fish for delivery to Bern/Zurich
+        // (neither yet on network) hit this guardrail and discarded mid-trip,
+        // orphaning both Fish demands. Discarding the hand replaces the demand
+        // cards that match the carried loads — those loads then become dead
+        // weight because no remaining card can satisfy them.
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [
+            makeDemand({
+              loadType: 'Fish',
+              supplyCity: 'Oslo',
+              deliveryCity: 'Bern',
+              isSupplyOnNetwork: true,
+              isDeliveryOnNetwork: false,  // delivery not yet on network
+              isLoadOnTrain: true,
+            }),
+            makeDemand({
+              loadType: 'Fish',
+              supplyCity: 'Oslo',
+              deliveryCity: 'Zurich',
+              isSupplyOnNetwork: true,
+              isDeliveryOnNetwork: false,
+              isLoadOnTrain: true,
+            }),
+          ],
+        });
+        const snap = makeSnapshot(0); // broke
+        snap.bot.loads = ['Fish', 'Fish'];  // carrying loads
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, true);
+
+        expect(result.overridden).toBe(false);
+        // Reason should NOT mention Broke-and-stuck or Unaffordable-Stuck.
+        if (result.reason) {
+          expect(result.reason).not.toContain('Broke-and-stuck');
+          expect(result.reason).not.toContain('Unaffordable-Stuck');
+        }
+      });
     });
 
     describe('Guardrail priority', () => {
@@ -876,6 +917,36 @@ describe('GuardrailEnforcer', () => {
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DiscardHand);
         expect(result.reason).toMatch(/unaffordable.stuck/i);
+      });
+
+      it('JIRA-220 follow-up: must NOT fire Unaffordable-Stuck when bot has loads on train', async () => {
+        // Even with no active route and no affordable+connectable demand, do not
+        // discard if the bot is carrying loads — the matching demand cards must
+        // be preserved so the loads remain deliverable when network expands.
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [
+            makeDemand({
+              loadType: 'Fish',
+              supplyCity: 'Oslo',
+              deliveryCity: 'Bern',
+              isAffordable: false,
+              isSupplyOnNetwork: false,
+              isDeliveryOnNetwork: false,
+              isLoadOnTrain: true,
+            }),
+          ],
+        });
+        const snap = makeSnapshot(40); // not broke
+        snap.bot.loads = ['Fish'];     // carrying load
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, false);
+
+        expect(result.overridden).toBe(false);
+        if (result.reason) {
+          expect(result.reason).not.toMatch(/unaffordable.stuck/i);
+        }
       });
 
       // AC2: empty-stops route treated as no active route — guardrail still fires
