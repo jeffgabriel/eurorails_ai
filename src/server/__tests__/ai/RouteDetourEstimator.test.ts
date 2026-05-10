@@ -337,37 +337,6 @@ describe('simulateTrip (AC2)', () => {
     // Both stops are zero-distance from start → 0 turns total.
     expect(result.turnsToComplete).toBe(0);
   });
-
-  it('JIRA-223: returns minCashRelative=0 and finalCashRelative=sum(payments) for zero-build trip', () => {
-    // No build, no fees — only delivery payments accrue. Cash never dips.
-    const stops: RouteStop[] = [
-      { action: 'deliver', loadType: 'X', city: 'CityA', payment: 12 },
-      { action: 'deliver', loadType: 'Y', city: 'CityA', payment: 8 },
-    ];
-    const result = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot());
-    expect(result.feasible).toBe(true);
-    expect(result.minCashRelative).toBe(0);
-    expect(result.finalCashRelative).toBe(20);
-  });
-
-  it('JIRA-223: minCashRelative tracks the worst dip; trips with positive net can still have negative dip', () => {
-    // Build of N M with no test segments to add, payment after — verify dip
-    // tracking. We assert minCashRelative <= 0 and finalCashRelative is the
-    // signed net inflow. Exact numbers depend on the mock grid; assert
-    // invariants rather than absolute values.
-    const stops: RouteStop[] = [
-      { action: 'pickup', loadType: 'X', city: 'CityB' },
-      { action: 'deliver', loadType: 'X', city: 'CityA', payment: 20 },
-    ];
-    const result = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot());
-    if (result.feasible) {
-      // Build + deliver: dip can be 0 or negative; final = payment - build.
-      expect(result.minCashRelative).toBeLessThanOrEqual(0);
-      expect(result.finalCashRelative).toBe(20 - result.totalBuildCost);
-      // Min dip is at least as low as final (because final adds payment back).
-      expect(result.minCashRelative).toBeLessThanOrEqual(result.finalCashRelative);
-    }
-  });
 });
 
 // ── AC3: computeCandidateDetourCosts ──────────────────────────────────

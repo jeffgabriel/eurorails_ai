@@ -422,7 +422,6 @@ describe('cheapPrune', () => {
     pruneMaxTurns: PRUNE_MAX_TURNS,
     pruneMaxBuildM: PRUNE_MAX_BUILD_M,
     hopAvgCostM: HOP_AVG_COST_M,
-    affordabilityCashFloorM: 0,
   };
 
   beforeEach(() => {
@@ -513,7 +512,6 @@ describe('scoreCandidate', () => {
     pruneMaxTurns: PRUNE_MAX_TURNS,
     pruneMaxBuildM: PRUNE_MAX_BUILD_M,
     hopAvgCostM: HOP_AVG_COST_M,
-    affordabilityCashFloorM: 0,
   };
 
   it('computes correct score: payout=31, turns=3, buildCost=22, OCPT=5 (mid-phase default) → score=-6', () => {
@@ -566,108 +564,6 @@ describe('scoreCandidate', () => {
       payout: 10,
     };
     const result = scoreCandidate(candidate, { row: 5, col: 5 }, snapshot, defaultOpts);
-    expect(result.feasible).toBe(false);
-  });
-
-  // JIRA-223: affordability gate
-
-  it('JIRA-223: cash dip below floor → returns feasible: false (broke bot, big front-loaded build)', () => {
-    // Simulator says trip needs 30M build before payouts. Bot has 7M cash.
-    // minCashRelative = -30 (30M out before any inflow). startingCash + minCashRelative = 7 - 30 = -23 < 0.
-    // → unaffordable, gate fires, candidate dropped.
-    mockSimulateTrip.mockReturnValueOnce({
-      turnsToComplete: 6,
-      totalBuildCost: 30,
-      feasible: true,
-      minCashRelative: -30,
-      finalCashRelative: -2,  // 28M payout - 30M build = -2 final
-    });
-    const snapshot = makeSnapshot({ money: 7 });
-    const candidate = {
-      id: 'unaffordable-front-loaded',
-      rows: [],
-      stops: [
-        { action: 'pickup' as const, loadType: 'Fish', city: 'Oslo' },
-        { action: 'deliver' as const, loadType: 'Fish', city: 'Bern', demandCardId: 1, payment: 14 },
-        { action: 'deliver' as const, loadType: 'Fish', city: 'Zurich', demandCardId: 2, payment: 14 },
-      ],
-      payout: 28,
-    };
-    const result = scoreCandidate(candidate, { row: 5, col: 5 }, snapshot, defaultOpts);
-    expect(result.feasible).toBe(false);
-  });
-
-  it('JIRA-223: trip with intermediate payout funding later legs → feasible', () => {
-    // Bot has 15M. Build leg 1 = 10M, payout = 20M, build leg 2 = 20M.
-    // minCashRelative tracks: -10 (after leg 1 build) → +10 (after first delivery) → -10 (after leg 2 build).
-    // startingCash + minCashRelative = 15 - 10 = 5 >= 0 ✓
-    mockSimulateTrip.mockReturnValueOnce({
-      turnsToComplete: 5,
-      totalBuildCost: 30,
-      feasible: true,
-      minCashRelative: -10,
-      finalCashRelative: 10,
-    });
-    const snapshot = makeSnapshot({ money: 15 });
-    const candidate = {
-      id: 'affordable-staged',
-      rows: [],
-      stops: [
-        { action: 'pickup' as const, loadType: 'X', city: 'C1' },
-        { action: 'deliver' as const, loadType: 'X', city: 'C2', demandCardId: 1, payment: 20 },
-        { action: 'pickup' as const, loadType: 'Y', city: 'C3' },
-        { action: 'deliver' as const, loadType: 'Y', city: 'C4', demandCardId: 2, payment: 20 },
-      ],
-      payout: 40,
-    };
-    const result = scoreCandidate(candidate, { row: 5, col: 5 }, snapshot, defaultOpts);
-    expect(result.feasible).toBe(true);
-  });
-
-  it('JIRA-223: cash dip exactly to 0 → feasible (boundary inclusive)', () => {
-    // 30M cash, build cost 30M front-loaded. minCashRelative = -30. 30 + (-30) = 0 == floor ✓
-    mockSimulateTrip.mockReturnValueOnce({
-      turnsToComplete: 5,
-      totalBuildCost: 30,
-      feasible: true,
-      minCashRelative: -30,
-      finalCashRelative: 10,
-    });
-    const snapshot = makeSnapshot({ money: 30 });
-    const candidate = {
-      id: 'boundary',
-      rows: [],
-      stops: [
-        { action: 'pickup' as const, loadType: 'X', city: 'C1' },
-        { action: 'deliver' as const, loadType: 'X', city: 'C2', demandCardId: 1, payment: 40 },
-      ],
-      payout: 40,
-    };
-    const result = scoreCandidate(candidate, { row: 5, col: 5 }, snapshot, defaultOpts);
-    expect(result.feasible).toBe(true);
-  });
-
-  it('JIRA-223: affordabilityCashFloorM option enforces a buffer', () => {
-    // Same scenario as boundary above, but require 5M reserve.
-    // 30 + (-30) = 0 < 5 → infeasible.
-    mockSimulateTrip.mockReturnValueOnce({
-      turnsToComplete: 5,
-      totalBuildCost: 30,
-      feasible: true,
-      minCashRelative: -30,
-      finalCashRelative: 10,
-    });
-    const snapshot = makeSnapshot({ money: 30 });
-    const candidate = {
-      id: 'requires-buffer',
-      rows: [],
-      stops: [
-        { action: 'pickup' as const, loadType: 'X', city: 'C1' },
-        { action: 'deliver' as const, loadType: 'X', city: 'C2', demandCardId: 1, payment: 40 },
-      ],
-      payout: 40,
-    };
-    const result = scoreCandidate(candidate, { row: 5, col: 5 }, snapshot, { ...defaultOpts, affordabilityCashFloorM: 5 });
     expect(result.feasible).toBe(false);
   });
 });

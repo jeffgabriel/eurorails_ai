@@ -105,14 +105,6 @@ export const PRUNE_MAX_TURNS = 12;
 export const PRUNE_MAX_BUILD_M = 130;
 export const HOP_AVG_COST_M = 1.3;
 
-/**
- * Minimum cash the bot is allowed to dip to during a trip's simulation.
- * Defaults to 0 — the bot may run cash to exactly zero mid-trip but not below.
- * Set to a positive value (e.g., 5) to force a buffer for unmodeled costs
- * (track-use fees on opponent track, ferry fees, etc.). JIRA-223.
- */
-export const AFFORDABILITY_CASH_FLOOR_M = 0;
-
 // ── Train lookups ──────────────────────────────────────────────────────
 
 const TRAIN_CAP: Record<string, number> = {
@@ -136,12 +128,6 @@ export interface DeterministicTripPlannerOptions {
   pruneMaxTurns?: number;
   pruneMaxBuildM?: number;
   hopAvgCostM?: number;
-  /**
-   * Minimum cash the bot may dip to during a trip's simulated execution.
-   * Defaults to AFFORDABILITY_CASH_FLOOR_M (0). Use to force a buffer for
-   * unmodeled costs.
-   */
-  affordabilityCashFloorM?: number;
 }
 
 export interface DeterministicTripPlanResult {
@@ -187,7 +173,6 @@ interface ResolvedOptions {
   pruneMaxTurns: number;
   pruneMaxBuildM: number;
   hopAvgCostM: number;
-  affordabilityCashFloorM: number;
 }
 
 interface PruneStats {
@@ -580,7 +565,7 @@ export function scoreCandidate(
     allPlayerTracks: snapshot.allPlayerTracks,
   };
 
-  let result: { turnsToComplete: number; totalBuildCost: number; feasible: boolean; minCashRelative: number; finalCashRelative: number };
+  let result: { turnsToComplete: number; totalBuildCost: number; feasible: boolean };
   try {
     result = simulateTrip(startPos, candidate.stops, snapshotInput);
   } catch (e) {
@@ -593,26 +578,6 @@ export function scoreCandidate(
 
   if (!result.feasible) {
     return { ...candidate, buildCost: result.totalBuildCost, turns: result.turnsToComplete, net: -999, score: -9999, feasible: false };
-  }
-
-  // JIRA-223: affordability gate. The simulator tracks the lowest cash dip
-  // relative to the bot's starting cash. If `startingCash + minCashRelative`
-  // would go below the configured floor at any point along the simulated
-  // trip, the bot can't actually fund this trip — drop the candidate.
-  // Without this gate, an early-game broke bot can be assigned trips like
-  // game b1dd75b7's `pFish@Oslo + dFish@Bern + dFish@Zurich` from 7M cash,
-  // which require ~30M+ build before any delivery payout arrives.
-  const startingCash = snapshot.bot.money;
-  const projectedMinCash = startingCash + result.minCashRelative;
-  if (projectedMinCash < opts.affordabilityCashFloorM) {
-    return {
-      ...candidate,
-      buildCost: result.totalBuildCost,
-      turns: result.turnsToComplete,
-      net: -999,
-      score: -9999,
-      feasible: false,
-    };
   }
 
   const buildCost = result.totalBuildCost;
@@ -851,7 +816,6 @@ export function planTripDeterministic(
     pruneMaxTurns: options?.pruneMaxTurns ?? PRUNE_MAX_TURNS,
     pruneMaxBuildM: options?.pruneMaxBuildM ?? PRUNE_MAX_BUILD_M,
     hopAvgCostM: options?.hopAvgCostM ?? HOP_AVG_COST_M,
-    affordabilityCashFloorM: options?.affordabilityCashFloorM ?? AFFORDABILITY_CASH_FLOOR_M,
   };
 
   // Empty hand check (R8)
