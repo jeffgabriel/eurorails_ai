@@ -143,17 +143,56 @@ export class MovementPhasePlanner {
         );
 
         if (!actionResult.success) {
-          console.warn(`${tag} ${currentStop.action} failed at ${targetCity}: ${actionResult.error}. Abandoning route.`);
+          // A single stop-action failure (e.g., load not yet available, transient validation)
+          // is not grounds for abandoning the route — replanning every time we trip on a
+          // single failure leaks LLM cost and was the dominant cause of pure-abandonment in
+          // the 7-day log analysis. Return without progress; if the same failure persists
+          // for ≥3 turns, ActiveRouteContinuer's stuck-route detector will abandon.
+          console.warn(`${tag} ${currentStop.action} failed at ${targetCity}: ${actionResult.error}. Preserving route — will retry next turn (stuck-route detector abandons after 3 no-progress turns).`);
           trace.a2.terminationReason = 'action_failed';
-          if (plans.length === 0) plans.push({ type: AIActionType.PassTurn });
           trace.outputPlan = plans.map(p => p.type);
-          return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, false, true, replanLlmLog, replanSystemPrompt, replanUserPrompt, pendingUpgradeAction, upgradeSuppressionReason);
+          return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, false, false, replanLlmLog, replanSystemPrompt, replanUserPrompt, pendingUpgradeAction, upgradeSuppressionReason);
         }
 
         plans.push(actionResult.plan!);
         applyStopEffectToLocalState(currentStop, context);
 
         if (currentStop.action === 'pickup') {
+          // JIRA-220 follow-up — early-exec the pickup so the load is committed to
+          // DB before any subsequent same-turn deliver early-exec runs. Without this,
+          // a route containing pickup→deliver of the same load in one turn caused
+          // the deliver early-exec to fail (DB still showed empty loads), which
+          // caused the JIRA-165 refresh to capture pre-deliver state, which caused
+          // the post-delivery replan to pick a fresh route around the
+          // about-to-be-replaced card — resulting in a stuck route on the next
+          // turn (see analysis of game 1a10d393). Mark the plan preExecuted so the
+          // end-of-turn flush skips it.
+          const pickupPlan = actionResult.plan!;
+          if (pickupPlan.type === AIActionType.PickupLoad) {
+            try {
+              const earlyPickupResult = await TurnExecutor.executePlan(pickupPlan, snapshot);
+              if (earlyPickupResult.success) {
+                (pickupPlan as { preExecuted?: boolean }).preExecuted = true;
+                console.log(
+                  `${tag} JIRA-220 early pickup execution succeeded ` +
+                  `(${pickupPlan.load}@${pickupPlan.city}). DB committed; deliver early-exec can now succeed.`,
+                );
+              } else {
+                console.warn(
+                  `${tag} JIRA-220 early pickup execution failed ` +
+                  `(${earlyPickupResult.error ?? 'unknown error'}). ` +
+                  `Pickup will be retried at end-of-turn flush.`,
+                );
+              }
+            } catch (earlyPickupErr) {
+              console.warn(
+                `${tag} JIRA-220 early pickup execution threw ` +
+                `(${(earlyPickupErr as Error).message}). ` +
+                `Pickup will be retried at end-of-turn flush.`,
+              );
+            }
+          }
+
           trace.pickups.push({ load: currentStop.loadType, city: targetCity });
           console.log(`${tag} Picked up ${currentStop.loadType} at ${targetCity}. Advancing stop index (no reorder — ADR-4).`);
 
