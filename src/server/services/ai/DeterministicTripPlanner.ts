@@ -79,6 +79,20 @@ export const OCPT_BY_PHASE = {
 export const OCPT = OCPT_BY_PHASE.mid;
 
 /**
+ * Affordability floor for the cash-dip gate in scoreCandidate.
+ *
+ * Default: 0 — the bot may spend to zero but not below. This enforces
+ * CLAUDE.md "maintain operating capital" at trip selection rather than
+ * relying on guardrails after a doomed commitment.
+ *
+ * Per user direction: never suggest reserve floors above zero. Phase-aware
+ * floors and mercy-borrow modeling are explicitly deferred (see TD-1 in the
+ * technical spec). Callers may override via scoreCandidate's optional
+ * affordabilityFloorM option for specific future use cases.
+ */
+export const AFFORDABILITY_FLOOR_M = 0;
+
+/**
  * Classify the game's strategic phase from observable bot state.
  *
  * Boundaries (matching docs/trip-candidate-menu-easy-design.md §5):
@@ -548,12 +562,19 @@ export function cheapPrune(
 /**
  * Score a candidate by running it through the real trip simulator.
  * Wraps in try/catch: on throw, marks infeasible and logs warn.
+ *
+ * After the existing feasibility check, applies an affordability gate:
+ * if snapshot.bot.money + simulation.minCashRelative < affordabilityFloor,
+ * the candidate is rejected as infeasible with an "unaffordable" reasoning.
+ * This prevents bots from committing to trips whose cumulative cash position
+ * would dip below zero before the next delivery payout arrives.
  */
 export function scoreCandidate(
   candidate: Candidate,
   startPos: GridCoord,
   snapshot: WorldSnapshot,
   opts: ResolvedOptions,
+  affordabilityOptions?: { affordabilityFloorM?: number },
 ): ScoredCandidate {
   const snapshotInput = {
     bot: {
@@ -565,7 +586,7 @@ export function scoreCandidate(
     allPlayerTracks: snapshot.allPlayerTracks,
   };
 
-  let result: { turnsToComplete: number; totalBuildCost: number; feasible: boolean };
+  let result: { turnsToComplete: number; totalBuildCost: number; feasible: boolean; minCashRelative: number; finalCashRelative: number };
   try {
     result = simulateTrip(startPos, candidate.stops, snapshotInput);
   } catch (e) {
@@ -578,6 +599,26 @@ export function scoreCandidate(
 
   if (!result.feasible) {
     return { ...candidate, buildCost: result.totalBuildCost, turns: result.turnsToComplete, net: -999, score: -9999, feasible: false };
+  }
+
+  // Affordability gate (JIRA-223): reject candidates where the simulated cash
+  // position would dip below the floor before the next delivery payout arrives.
+  const floor = affordabilityOptions?.affordabilityFloorM ?? AFFORDABILITY_FLOOR_M;
+  const startingCash = snapshot.bot.money;
+  const projectedMin = startingCash + result.minCashRelative;
+  if (projectedMin < floor) {
+    const stopSummary = candidate.stops.map((s) => `${s.action}:${s.city}`).join(',');
+    console.log(
+      `[DTP] affordability gate rejected: stops=${stopSummary} startingCash=${startingCash}M minRelative=${result.minCashRelative}M projectedMin=${projectedMin}M floor=${floor}M`,
+    );
+    return {
+      ...candidate,
+      buildCost: result.totalBuildCost,
+      turns: result.turnsToComplete,
+      net: -999,
+      score: -9999,
+      feasible: false,
+    };
   }
 
   const buildCost = result.totalBuildCost;
