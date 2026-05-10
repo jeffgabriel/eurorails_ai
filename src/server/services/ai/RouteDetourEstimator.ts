@@ -56,6 +56,19 @@ export interface TripSimulation {
   totalBuildCost: number;
   /** false when any leg is unreachable (opponent track blocks all paths). */
   feasible: boolean;
+  /**
+   * Lowest cumulative cash delta (relative to starting cash = 0) reached at any
+   * point during the simulated trip. Negative = the bot would dip below starting
+   * cash by that much. 0 means cash never dropped below the starting level.
+   * Safe default: 0 when feasible: false.
+   */
+  minCashRelative: number;
+  /**
+   * Cumulative cash delta at the end of the simulated trip. Starting cash +
+   * finalCashRelative = projected cash on hand after the last delivery.
+   * Safe default: 0 when feasible: false.
+   */
+  finalCashRelative: number;
 }
 
 /** Per-candidate detour scoring result for computeCandidateDetourCosts. */
@@ -527,6 +540,12 @@ export function simulateTrip(
   let turn = 0;
   let totalBuildCost = 0;
 
+  // Cash-flow tracking (R2): running cumulative cash delta relative to starting cash.
+  // Decremented by build spend each build turn; incremented by delivery payout on the
+  // turn the stop is reached. Safe-defaults: 0 for both fields.
+  let cashRelative = 0;
+  let minCashRelative = 0;
+
   // Segments that are "built" (traversable from next turn onward)
   const simulatedSegments: TrackSegment[] = [...snapshot.bot.existingSegments];
 
@@ -547,7 +566,7 @@ export function simulateTrip(
     );
 
     if (path.length === 0) {
-      return { turnsToComplete: 0, totalBuildCost: 0, feasible: false };
+      return { turnsToComplete: 0, totalBuildCost: 0, feasible: false, minCashRelative: 0, finalCashRelative: 0 };
     }
 
     const newSegs = pathToNewSegments(path, existingEdges, grid, majorCityLookup, ferryPortCosts);
@@ -560,6 +579,9 @@ export function simulateTrip(
     while (buildRemaining > 0) {
       const builtThisTurn = Math.min(buildRemaining, TURN_BUILD_BUDGET);
       buildRemaining -= builtThisTurn;
+      // Cash-flow: each build turn spends `builtThisTurn` ECU
+      cashRelative -= builtThisTurn;
+      minCashRelative = Math.min(minCashRelative, cashRelative);
       turn++;
       // Add newly-built segments to the simulation network (traversable next turn)
       let costAccumulated = 0;
@@ -592,10 +614,16 @@ export function simulateTrip(
       turn++;
     }
 
+    // Cash-flow: delivery payout arrives when the bot reaches the delivery city
+    if (stop.action === 'deliver' && stop.payment != null) {
+      cashRelative += stop.payment;
+      minCashRelative = Math.min(minCashRelative, cashRelative);
+    }
+
     currentPos = cityCoord;
   }
 
-  return { turnsToComplete: turn, totalBuildCost, feasible: true };
+  return { turnsToComplete: turn, totalBuildCost, feasible: true, minCashRelative, finalCashRelative: cashRelative };
 }
 
 /**

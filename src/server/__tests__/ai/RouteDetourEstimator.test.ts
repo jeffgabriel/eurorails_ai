@@ -275,6 +275,9 @@ describe('simulateTrip (AC2)', () => {
     const result = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot());
 
     expect(result.feasible).toBe(false);
+    // JIRA-223: new fields must still be present with safe defaults
+    expect(result.minCashRelative).toBe(0);
+    expect(result.finalCashRelative).toBe(0);
   });
 
   it('(d) totalBuildCost equals sum of new-segment costs across all legs', () => {
@@ -336,6 +339,124 @@ describe('simulateTrip (AC2)', () => {
     expect(result.totalBuildCost).toBe(0);
     // Both stops are zero-distance from start → 0 turns total.
     expect(result.turnsToComplete).toBe(0);
+  });
+});
+
+// ── JIRA-223: simulateTrip cash-flow tracking ─────────────────────────
+
+describe('simulateTrip cash-flow tracking (JIRA-223)', () => {
+  beforeEach(() => {
+    // Grid: (0,0) → (0,1) → (0,2) with cities named
+    addGridPoint(0, 0, TerrainType.MajorCity, 'CityA');
+    addGridPoint(0, 1, TerrainType.Clear);
+    addGridPoint(0, 2, TerrainType.MajorCity, 'CityB');
+  });
+
+  it('(a) profitable trip with no dip: no build cost, payout positive → minCashRelative=0, finalCashRelative >= 0', () => {
+    // Bot is already at CityA with a track to CityB — no build needed
+    const existingSegs = [
+      makeSegment(0, 0, 0, 1, 1),
+      makeSegment(0, 1, 0, 2, 1),
+    ];
+    const stops: RouteStop[] = [
+      { action: 'deliver', loadType: 'Coal', city: 'CityB', payment: 15 },
+    ];
+
+    const result = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot({ existingSegments: existingSegs }));
+
+    expect(result.feasible).toBe(true);
+    // No build spend → cashRelative never goes negative → minCashRelative = 0
+    expect(result.minCashRelative).toBe(0);
+    // Final cash = payout received = 15
+    expect(result.finalCashRelative).toBe(15);
+  });
+
+  it('(b) trip with build cost and no payout: cashRelative dips negative → minCashRelative < 0', () => {
+    // No existing track — bot must build. Pickup stop has no payment.
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'CityB' },
+    ];
+
+    const result = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot());
+
+    expect(result.feasible).toBe(true);
+    // Build cost > 0 → cashRelative goes negative during build turns
+    expect(result.minCashRelative).toBeLessThan(0);
+    // Final: no delivery payout, so finalCashRelative equals cumulative build spend (negative)
+    expect(result.finalCashRelative).toBe(result.minCashRelative);
+  });
+
+  it('(c) trip that recovers: negative min during build, positive final after delivery', () => {
+    // Build to CityB, then deliver for a large payout.
+    // The build phase drives cashRelative negative, then delivery payout recovers it.
+    const stops: RouteStop[] = [
+      { action: 'deliver', loadType: 'Coal', city: 'CityB', payment: 50 },
+    ];
+
+    const result = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot());
+
+    expect(result.feasible).toBe(true);
+    if (result.totalBuildCost > 0) {
+      // Build phase drove cashRelative negative
+      expect(result.minCashRelative).toBeLessThan(0);
+      // Delivery payout recovered the position: finalCashRelative = payout - buildCost
+      expect(result.finalCashRelative).toBe(50 - result.totalBuildCost);
+      // min is captured before payout, so min < final
+      expect(result.minCashRelative).toBeLessThanOrEqual(result.finalCashRelative);
+    } else {
+      // No build: both should reflect payout
+      expect(result.minCashRelative).toBe(0);
+      expect(result.finalCashRelative).toBe(50);
+    }
+  });
+
+  it('(d) feasible: false path returns minCashRelative=0 and finalCashRelative=0 (safe defaults)', () => {
+    // Block all paths to CityB
+    const opponentEdges = new Set([
+      '0,0-0,1', '0,1-0,0',
+      '0,1-0,2', '0,2-0,1',
+    ]);
+    mockGetOccupiedEdges.mockReturnValue(opponentEdges);
+
+    const stops: RouteStop[] = [
+      { action: 'deliver', loadType: 'Coal', city: 'CityB', payment: 20 },
+    ];
+
+    const result = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot());
+
+    expect(result.feasible).toBe(false);
+    // Safe defaults — never undefined
+    expect(result.minCashRelative).toBe(0);
+    expect(result.finalCashRelative).toBe(0);
+  });
+
+  it('minCashRelative <= finalCashRelative always (running min is monotonic-non-increasing relative to trace)', () => {
+    // Multi-stop trip: pickup (no payment) then deliver (payment)
+    const existingSegs = [makeSegment(0, 0, 0, 1, 1)];
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'CityB' },
+      { action: 'deliver', loadType: 'Coal', city: 'CityA', payment: 20 },
+    ];
+
+    const result = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot({ existingSegments: existingSegs }));
+
+    if (result.feasible) {
+      expect(result.minCashRelative).toBeLessThanOrEqual(result.finalCashRelative);
+    }
+  });
+
+  it('new fields are always present (never undefined) for a feasible trip', () => {
+    const stops: RouteStop[] = [
+      { action: 'deliver', loadType: 'Coal', city: 'CityA', payment: 10 },
+    ];
+
+    const result = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot());
+
+    expect(result.feasible).toBe(true);
+    expect(result.minCashRelative).not.toBeUndefined();
+    expect(result.finalCashRelative).not.toBeUndefined();
+    expect(typeof result.minCashRelative).toBe('number');
+    expect(typeof result.finalCashRelative).toBe('number');
   });
 });
 
