@@ -56,6 +56,23 @@ export interface TripSimulation {
   totalBuildCost: number;
   /** false when any leg is unreachable (opponent track blocks all paths). */
   feasible: boolean;
+  /**
+   * Lowest cash-relative-to-start the bot reaches at any point during the trip.
+   * Negative means cash dipped below the starting balance by that many ECU.
+   * To check absolute affordability: `startingCash + minCashRelative >= 0`.
+   * Build outflows decrement; delivery inflows (RouteStop.payment) increment.
+   * Track-use fees and ferry fees are NOT modeled here — assume 0 for
+   * affordability purposes; the existing post-plan affordability gate in
+   * TripPlanner.ts is the secondary check for those.
+   * JIRA-223 follow-up.
+   */
+  minCashRelative: number;
+  /**
+   * Final cash relative to start at the end of the simulated trip.
+   * = sum of all delivery payouts − totalBuildCost.
+   * JIRA-223 follow-up.
+   */
+  finalCashRelative: number;
 }
 
 /** Per-candidate detour scoring result for computeCandidateDetourCosts. */
@@ -527,6 +544,13 @@ export function simulateTrip(
   let turn = 0;
   let totalBuildCost = 0;
 
+  // JIRA-223: cash flow tracking. cashRelative starts at 0 and is decremented
+  // by each turn's build spend, incremented by each delivery's payment. We
+  // track the lowest point reached so callers can check whether the bot's
+  // absolute cash dips below 0 at any time during the trip.
+  let cashRelative = 0;
+  let minCashRelative = 0;
+
   // Segments that are "built" (traversable from next turn onward)
   const simulatedSegments: TrackSegment[] = [...snapshot.bot.existingSegments];
 
@@ -547,7 +571,13 @@ export function simulateTrip(
     );
 
     if (path.length === 0) {
-      return { turnsToComplete: 0, totalBuildCost: 0, feasible: false };
+      return {
+        turnsToComplete: 0,
+        totalBuildCost: 0,
+        feasible: false,
+        minCashRelative: 0,
+        finalCashRelative: 0,
+      };
     }
 
     const newSegs = pathToNewSegments(path, existingEdges, grid, majorCityLookup, ferryPortCosts);
@@ -561,6 +591,10 @@ export function simulateTrip(
       const builtThisTurn = Math.min(buildRemaining, TURN_BUILD_BUDGET);
       buildRemaining -= builtThisTurn;
       turn++;
+      // JIRA-223: cash decrements by the amount built this turn. minCashRelative
+      // tracks the worst point so callers can check absolute solvency.
+      cashRelative -= builtThisTurn;
+      if (cashRelative < minCashRelative) minCashRelative = cashRelative;
       // Add newly-built segments to the simulation network (traversable next turn)
       let costAccumulated = 0;
       for (const seg of newSegs) {
@@ -592,10 +626,26 @@ export function simulateTrip(
       turn++;
     }
 
+    // JIRA-223: cash inflow on a successful delivery stop. Pickups don't change
+    // cash. Drops don't either. Only deliver-action stops with a payment field
+    // contribute. The payment is added AFTER the build outflows for this leg —
+    // matching real game order (you build, you arrive, you deliver, you get paid).
+    if (stop.action === 'deliver' && typeof stop.payment === 'number' && stop.payment > 0) {
+      cashRelative += stop.payment;
+      // Note: we do NOT update minCashRelative here — payments only raise cash,
+      // never lower it. The min tracker only cares about the worst-case dip.
+    }
+
     currentPos = cityCoord;
   }
 
-  return { turnsToComplete: turn, totalBuildCost, feasible: true };
+  return {
+    turnsToComplete: turn,
+    totalBuildCost,
+    feasible: true,
+    minCashRelative,
+    finalCashRelative: cashRelative,
+  };
 }
 
 /**
