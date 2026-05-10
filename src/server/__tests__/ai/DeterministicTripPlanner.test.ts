@@ -372,8 +372,10 @@ describe('enumerateCandidates', () => {
     const triples = candidates.filter((c) => c.id.startsWith('triple:'));
 
     expect(singles.length).toBe(9);
-    // C(9,2) = 36 pair-row-sets; 2 ordering variants each (both fresh)
-    expect(pairs.length).toBe(36 * 2);
+    // C(9,2) = 36 pair-row-sets; 4 ordering variants each (both fresh).
+    // JIRA-228 added :A-then-B and :B-then-A backhaul variants alongside
+    // the existing :AB and :BA.
+    expect(pairs.length).toBe(36 * 4);
     // cap=2 → no 3-fresh triples (require cap≥3)
     // With cap=2 and all non-carry, genTriples returns 0 (all 3-fresh triples are blocked)
     expect(triples.length).toBe(0);
@@ -400,6 +402,68 @@ describe('enumerateCandidates', () => {
     // 3-fresh: 1 variant for C(3,3)=1 group
     expect(triples.length).toBeGreaterThan(0);
     expect(triples.some((t) => t.id.includes('3f-ABC'))).toBe(true);
+  });
+
+  // ── JIRA-228: fresh-fresh backhaul variants ─────────────────────────
+  it('JIRA-228: fresh-fresh pair emits four variants (:AB, :BA, :A-then-B, :B-then-A)', () => {
+    type Row = { loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number; isCarry: boolean };
+    const demands: Row[] = [
+      { loadType: 'Copper',  supplyCity: 'Wroclaw',  deliveryCity: 'Madrid',     payout: 46, cardIndex: 4,   isCarry: false },
+      { loadType: 'Oranges', supplyCity: 'Valencia', deliveryCity: 'Manchester', payout: 40, cardIndex: 122, isCarry: false },
+    ];
+    const candidates = enumerateCandidates(demands, 2);
+    const pairs = candidates.filter((c) => c.id.startsWith('pair:'));
+    expect(pairs.length).toBe(4);
+
+    const suffixes = pairs.map((p) => p.id.split(':').pop()).sort();
+    expect(suffixes).toEqual(['A-then-B', 'AB', 'B-then-A', 'BA']);
+  });
+
+  it('JIRA-228: :A-then-B variant has stops [pickA, delA, pickB, delB]', () => {
+    type Row = { loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number; isCarry: boolean };
+    const demands: Row[] = [
+      { loadType: 'Copper',  supplyCity: 'Wroclaw',  deliveryCity: 'Madrid',     payout: 46, cardIndex: 4,   isCarry: false },
+      { loadType: 'Oranges', supplyCity: 'Valencia', deliveryCity: 'Manchester', payout: 40, cardIndex: 122, isCarry: false },
+    ];
+    const candidates = enumerateCandidates(demands, 2);
+    const aThenB = candidates.find((c) => c.id.endsWith(':A-then-B'));
+    expect(aThenB).toBeDefined();
+    expect(aThenB!.stops.map((s) => `${s.action}:${s.loadType}@${s.city}`)).toEqual([
+      'pickup:Copper@Wroclaw',
+      'deliver:Copper@Madrid',
+      'pickup:Oranges@Valencia',
+      'deliver:Oranges@Manchester',
+    ]);
+  });
+
+  it('JIRA-228: :B-then-A variant has stops [pickB, delB, pickA, delA]', () => {
+    type Row = { loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number; isCarry: boolean };
+    const demands: Row[] = [
+      { loadType: 'Copper',  supplyCity: 'Wroclaw',  deliveryCity: 'Madrid',     payout: 46, cardIndex: 4,   isCarry: false },
+      { loadType: 'Oranges', supplyCity: 'Valencia', deliveryCity: 'Manchester', payout: 40, cardIndex: 122, isCarry: false },
+    ];
+    const candidates = enumerateCandidates(demands, 2);
+    const bThenA = candidates.find((c) => c.id.endsWith(':B-then-A'));
+    expect(bThenA).toBeDefined();
+    expect(bThenA!.stops.map((s) => `${s.action}:${s.loadType}@${s.city}`)).toEqual([
+      'pickup:Oranges@Valencia',
+      'deliver:Oranges@Manchester',
+      'pickup:Copper@Wroclaw',
+      'deliver:Copper@Madrid',
+    ]);
+  });
+
+  it('JIRA-228: carry+fresh pair still emits 3 variants (carry branch unchanged)', () => {
+    type Row = { loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number; isCarry: boolean };
+    const demands: Row[] = [
+      { loadType: 'CarryLoad', supplyCity: null,    deliveryCity: 'CityA', payout: 20, cardIndex: 1, isCarry: true  },
+      { loadType: 'FreshLoad', supplyCity: 'CityB', deliveryCity: 'CityC', payout: 15, cardIndex: 2, isCarry: false },
+    ];
+    const candidates = enumerateCandidates(demands, 2);
+    const pairs = candidates.filter((c) => c.id.startsWith('pair:'));
+    expect(pairs.length).toBe(3);
+    const suffixes = pairs.map((p) => p.id.split(':').pop()).sort();
+    expect(suffixes).toEqual(['cA-pB', 'delAfirst', 'pB-cA']);
   });
 
   it('carry + 2-fresh triple produces correct variants (1c2f variants)', () => {
@@ -1047,5 +1111,57 @@ describe('planTripDeterministic — phase-aware OCPT', () => {
     expect(earlyRes.route!.reasoning).toContain('score 14.0');
     expect(midRes.route!.reasoning).toContain('score 2.0');
     expect(lateRes.route!.reasoning).toContain('score -6.0');
+  });
+});
+
+// ── Cash-aware build cap (JIRA-227 Fix B.1) ─────────────────────────────
+
+describe('planTripDeterministic — cash-aware build cap', () => {
+  function singleDemand() {
+    return [makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 30 })];
+  }
+
+  it('cash ≤ static cap (130M) → reasoning reports cap as 130M', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const snapshot = makeSnapshot({ money: 100 });
+    const result = planTripDeterministic(snapshot, makeContext(singleDemand()), makeMemory());
+    expect(result.outcome).toBe('success');
+    expect(result.reasoning).toContain('build > 130M');
+  });
+
+  it('cash > static cap (cash=161M) → reasoning reports cap raised to 161M', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const snapshot = makeSnapshot({ money: 161 });
+    const result = planTripDeterministic(snapshot, makeContext(singleDemand()), makeMemory());
+    expect(result.outcome).toBe('success');
+    expect(result.reasoning).toContain('build > 161M');
+  });
+
+  it('cash much greater than static cap (cash=300M) → cap tracks cash', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const snapshot = makeSnapshot({ money: 300 });
+    const result = planTripDeterministic(snapshot, makeContext(singleDemand()), makeMemory());
+    expect(result.outcome).toBe('success');
+    expect(result.reasoning).toContain('build > 300M');
+  });
+
+  it('low cash (cash=10M) → static floor (130M) holds, cap does NOT shrink below it', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const snapshot = makeSnapshot({ money: 10 });
+    const result = planTripDeterministic(snapshot, makeContext(singleDemand()), makeMemory());
+    expect(result.outcome).toBe('success');
+    expect(result.reasoning).toContain('build > 130M');
+  });
+
+  it('options.pruneMaxBuildM override bypasses cash-aware logic', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const snapshot = makeSnapshot({ money: 500 });
+    const result = planTripDeterministic(
+      snapshot,
+      makeContext(singleDemand()),
+      makeMemory(),
+      { pruneMaxBuildM: 50 },
+    );
+    expect(result.reasoning).toContain('build > 50M');
   });
 });

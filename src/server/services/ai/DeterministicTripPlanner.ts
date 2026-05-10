@@ -375,8 +375,17 @@ function genPairs(rows: NormalizedDemandRow[], cap: number): Candidate[] {
         variants.push({ suffix: 'pA-cB', stops: [pickA, delA, delB] });
         variants.push({ suffix: 'delBfirst', stops: [delB, pickA, delA] });
       } else {
-        variants.push({ suffix: 'AB', stops: [pickA, pickB, delA, delB] });
-        variants.push({ suffix: 'BA', stops: [pickA, pickB, delB, delA] });
+        // Both fresh: enumerate four geometrically-distinct orderings.
+        // :AB / :BA pickup both, then deliver — minimal capacity usage.
+        // :A-then-B / :B-then-A interleave — drop one before grabbing the
+        // other. Wins when the second supply lies past the first delivery
+        // (e.g., Wroclaw→Madrid then Valencia→Manchester routes through
+        // Madrid before Valencia, so deliver Copper before picking up
+        // Oranges). JIRA-228.
+        variants.push({ suffix: 'AB',       stops: [pickA, pickB, delA, delB] });
+        variants.push({ suffix: 'BA',       stops: [pickA, pickB, delB, delA] });
+        variants.push({ suffix: 'A-then-B', stops: [pickA, delA, pickB, delB] });
+        variants.push({ suffix: 'B-then-A', stops: [pickB, delB, pickA, delA] });
       }
       for (const v of variants) {
         pairs.push({
@@ -852,10 +861,20 @@ export function planTripDeterministic(
     snapshot.bot.connectedMajorCityCount ?? 0,
   );
 
+  // Cash-aware prune cap (JIRA-227 Fix B.1): when bot's cash exceeds the
+  // static cap, raise the prune threshold to match — the bot can afford trips
+  // it couldn't before. Static cap remains a floor for low-cash scenarios.
+  // No reserve buffer applied (per "spend to zero" discipline). Caller may
+  // still override via options.pruneMaxBuildM for tests.
+  const baseBuildCap = options?.pruneMaxBuildM ?? PRUNE_MAX_BUILD_M;
+  const dynamicBuildCap = options?.pruneMaxBuildM != null
+    ? options.pruneMaxBuildM
+    : Math.max(baseBuildCap, snapshot.bot.money);
+
   const opts: ResolvedOptions = {
     ocpt: options?.ocpt ?? OCPT_BY_PHASE[phase],
     pruneMaxTurns: options?.pruneMaxTurns ?? PRUNE_MAX_TURNS,
-    pruneMaxBuildM: options?.pruneMaxBuildM ?? PRUNE_MAX_BUILD_M,
+    pruneMaxBuildM: dynamicBuildCap,
     hopAvgCostM: options?.hopAvgCostM ?? HOP_AVG_COST_M,
   };
 
