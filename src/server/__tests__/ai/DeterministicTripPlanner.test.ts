@@ -210,15 +210,15 @@ beforeEach(() => {
 // ── Constants ──────────────────────────────────────────────────────────
 
 describe('Exported constants', () => {
-  it('OCPT_BY_PHASE has the expected phase-aware values (early=2, mid=4, late=7)', () => {
-    // OCPT now varies by game phase. Early-game favors network-building
+  it('OCPT_BY_PHASE has the expected phase-aware values (early=2, mid=4, late=5)', () => {
+    // OCPT varies by game phase. Early-game favors network-building
     // multi-stop trips (low turn cost); mid-game is slightly below income
     // velocity to favor pair/triple candidates unlocked by JIRA-227/228;
-    // late-game punishes long trips because every remaining turn matters
-    // for closing out the win condition (7 cities + ECU 250M).
+    // late-game tracks measured income velocity (~5 M/turn) so multi-stop
+    // routes with higher net-per-turn can still compete with short singles.
     expect(OCPT_BY_PHASE.early).toBe(2);
     expect(OCPT_BY_PHASE.mid).toBe(4);
-    expect(OCPT_BY_PHASE.late).toBe(7);
+    expect(OCPT_BY_PHASE.late).toBe(5);
   });
 
   it('OCPT (default export) equals OCPT_BY_PHASE.mid for backward compatibility', () => {
@@ -1018,17 +1018,28 @@ describe('planTripDeterministic — upgrade emission', () => {
     expect(result.route!.upgradeOnRoute).toBeUndefined();
   });
 
-  it('Fast Freight + cash sufficient → emits upgradeOnRoute=superfreight', () => {
+  it('Fast Freight + cash sufficient + cap-saturated ≥ threshold → emits upgradeOnRoute=superfreight', () => {
     mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
     const snapshot = makeSnapshot({ trainType: 'fast_freight', money: 50 });
-    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
+    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory({ capSaturatedTurns: 2 }));
     expect(result.route!.upgradeOnRoute).toBe('superfreight');
   });
 
-  it('Heavy Freight + cash sufficient → emits upgradeOnRoute=superfreight', () => {
+  it('Fast Freight + cash sufficient + cap-saturated < threshold → upgrade gated, no superfreight', () => {
     mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const snapshot = makeSnapshot({ trainType: 'fast_freight', money: 50 });
+    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory({ capSaturatedTurns: 1 }));
+    expect(result.route!.upgradeOnRoute).toBeUndefined();
+    expect(result.route!.reasoning).toContain('Upgrade skipped: superfreight gated');
+    expect(result.route!.reasoning).toContain('cap-saturated 1/2 turns');
+  });
+
+  it('Heavy Freight + cash sufficient → emits upgradeOnRoute=superfreight (saturation gate not applied)', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    // Heavy Freight is already cap=3; the Super upgrade buys speed, not a slot,
+    // so the cap-saturation gate does not apply. capSaturatedTurns=0 must still allow.
     const snapshot = makeSnapshot({ trainType: 'heavy_freight', money: 50 });
-    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
+    const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory({ capSaturatedTurns: 0 }));
     expect(result.route!.upgradeOnRoute).toBe('superfreight');
   });
 
@@ -1091,24 +1102,24 @@ describe('planTripDeterministic — phase-aware OCPT', () => {
     expect(result.route!.reasoning).toContain('OCPT=4');
   });
 
-  it('late-game state (cities=5) → reasoning shows OCPT=7', () => {
+  it('late-game state (cities=5) → reasoning shows OCPT=5', () => {
     mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
     const base = makeSnapshot();
     const snapshot = { ...base, turnNumber: 50, bot: { ...base.bot, connectedMajorCityCount: 5 } };
     const memory = { ...makeMemory(), deliveryCount: 8 };
     const result = planTripDeterministic(snapshot, makeContext(singleDemand()), memory);
     expect(result.route!.reasoning).toContain('Phase: late');
-    expect(result.route!.reasoning).toContain('OCPT=7');
+    expect(result.route!.reasoning).toContain('OCPT=5');
   });
 
-  it('late-game by turn (turn=80, 4 cities) → reasoning shows OCPT=7', () => {
+  it('late-game by turn (turn=80, 4 cities) → reasoning shows OCPT=5', () => {
     mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
     const base = makeSnapshot();
     const snapshot = { ...base, turnNumber: 80, bot: { ...base.bot, connectedMajorCityCount: 4 } };
     const memory = { ...makeMemory(), deliveryCount: 10 };
     const result = planTripDeterministic(snapshot, makeContext(singleDemand()), memory);
     expect(result.route!.reasoning).toContain('Phase: late');
-    expect(result.route!.reasoning).toContain('OCPT=7');
+    expect(result.route!.reasoning).toContain('OCPT=5');
   });
 
   it('options.ocpt overrides phase-derived OCPT (phase still surfaced in reasoning)', () => {
@@ -1123,7 +1134,7 @@ describe('planTripDeterministic — phase-aware OCPT', () => {
     // Fixture: payout 30, turns 4, build 8 → net = 22
     //   EARLY (OCPT=2): score = 22 - 2*4 = 14
     //   MID   (OCPT=4): score = 22 - 4*4 = 6
-    //   LATE  (OCPT=7): score = 22 - 7*4 = -6
+    //   LATE  (OCPT=5): score = 22 - 5*4 = 2
     mockSimulateTrip.mockReturnValue({ turnsToComplete: 4, totalBuildCost: 8, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
     const demand = [makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 30 })];
 
@@ -1139,7 +1150,7 @@ describe('planTripDeterministic — phase-aware OCPT', () => {
 
     expect(earlyRes.route!.reasoning).toContain('score 14.0');
     expect(midRes.route!.reasoning).toContain('score 6.0');
-    expect(lateRes.route!.reasoning).toContain('score -6.0');
+    expect(lateRes.route!.reasoning).toContain('score 2.0');
   });
 });
 
@@ -1192,5 +1203,102 @@ describe('planTripDeterministic — cash-aware build cap', () => {
       { pruneMaxBuildM: 50 },
     );
     expect(result.reasoning).toContain('build > 50M');
+  });
+});
+
+// ── Aggregate two-trip look-ahead (JIRA-229) ────────────────────────────
+
+describe('planTripDeterministic — aggregate two-trip look-ahead (JIRA-229)', () => {
+  it('single-card hand → aggregate falls back to standalone net/turns; reasoning marks standalone', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 5, totalBuildCost: 4, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const result = planTripDeterministic(
+      makeSnapshot(),
+      makeContext([
+        makeDemand({ cardIndex: 1, loadType: 'Ham', supplyCity: 'SupplyCity', deliveryCity: 'DeliveryCity', payout: 24 }),
+      ]),
+      makeMemory(),
+    );
+    expect(result.outcome).toBe('success');
+    expect(result.reasoning).toContain('Aggregate:');
+    expect(result.reasoning).toContain('(standalone — no feasible follow-up)');
+  });
+
+  it('three non-overlapping single-card hand → aggregate chains the chosen with a disjoint follow-up', () => {
+    // Three singles, each on a distinct card. The chosen single's follow-up
+    // is one of the other two singles. (A pair would consume 2 cards and
+    // still have 1 disjoint single available as follow-up — also chains.)
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 4, totalBuildCost: 3, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const result = planTripDeterministic(
+      makeSnapshot(),
+      makeContext([
+        makeDemand({ cardIndex: 1, loadType: 'Ham', supplyCity: 'SupplyCity', deliveryCity: 'DeliveryCity', payout: 20 }),
+        makeDemand({ cardIndex: 2, loadType: 'Coal', supplyCity: 'CityA', deliveryCity: 'CityB', payout: 18 }),
+        makeDemand({ cardIndex: 3, loadType: 'Steel', supplyCity: 'CityC', deliveryCity: 'DeliveryCity', payout: 22 }),
+      ]),
+      makeMemory(),
+    );
+    expect(result.outcome).toBe('success');
+    expect(result.reasoning).toContain('Aggregate:');
+    expect(result.reasoning).toContain('chained with');
+    expect(result.reasoning).toContain('empty-leg');
+    expect(result.reasoning).not.toContain('(standalone');
+  });
+
+  it('same-cardIndex candidates do NOT chain with each other (disjoint-cards check)', () => {
+    // Both demands share cardIndex=5 — can't chain.
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 5, totalBuildCost: 2, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const result = planTripDeterministic(
+      makeSnapshot(),
+      makeContext([
+        makeDemand({ cardIndex: 5, loadType: 'Ham', supplyCity: 'SupplyCity', deliveryCity: 'DeliveryCity', payout: 20 }),
+        makeDemand({ cardIndex: 5, loadType: 'Coal', supplyCity: 'CityA', deliveryCity: 'CityB', payout: 18 }),
+      ]),
+      makeMemory(),
+    );
+    expect(result.outcome).toBe('success');
+    expect(result.reasoning).toContain('(standalone — no feasible follow-up)');
+  });
+
+  it('aggregate line appears in reasoning with expected format M/turn precision', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 5, totalBuildCost: 4, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const result = planTripDeterministic(
+      makeSnapshot(),
+      makeContext([
+        makeDemand({ cardIndex: 1, loadType: 'Ham', deliveryCity: 'DeliveryCity', payout: 24 }),
+        makeDemand({ cardIndex: 2, loadType: 'Coal', supplyCity: 'CityA', deliveryCity: 'CityB', payout: 20 }),
+        makeDemand({ cardIndex: 3, loadType: 'Steel', supplyCity: 'CityC', deliveryCity: 'DeliveryCity', payout: 18 }),
+      ]),
+      makeMemory(),
+    );
+    expect(result.outcome).toBe('success');
+    expect(result.reasoning).toMatch(/Aggregate: -?\d+\.\d{2} M\/turn/);
+  });
+
+  it('runner-up lines report aggregate (not legacy score) as Lost-by metric', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 4, totalBuildCost: 3, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const result = planTripDeterministic(
+      makeSnapshot(),
+      makeContext([
+        makeDemand({ cardIndex: 1, loadType: 'Ham', deliveryCity: 'DeliveryCity', payout: 24 }),
+        makeDemand({ cardIndex: 2, loadType: 'Coal', supplyCity: 'CityA', deliveryCity: 'CityB', payout: 20 }),
+      ]),
+      makeMemory(),
+    );
+    expect(result.outcome).toBe('success');
+    expect(result.reasoning).toContain('Runner-up #2');
+    expect(result.reasoning).toMatch(/Runner-up #2:.+aggregate -?\d+\.\d{2} M\/turn/);
+    expect(result.reasoning).toMatch(/Lost by -?\d+\.\d{2}/);
+  });
+
+  it('determinism — same snapshot twice yields identical aggregate-ranked pick', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Ham', deliveryCity: 'DeliveryCity', payout: 20 }),
+      makeDemand({ cardIndex: 2, loadType: 'Coal', supplyCity: 'CityA', deliveryCity: 'CityB', payout: 15 }),
+      makeDemand({ cardIndex: 3, loadType: 'Steel', supplyCity: 'CityC', deliveryCity: 'DeliveryCity', payout: 18 }),
+    ];
+    const r1 = planTripDeterministic(makeSnapshot(), makeContext(demands), makeMemory());
+    const r2 = planTripDeterministic(makeSnapshot(), makeContext(demands), makeMemory());
+    expect(r1.route?.stops).toEqual(r2.route?.stops);
   });
 });

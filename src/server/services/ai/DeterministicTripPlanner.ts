@@ -46,19 +46,23 @@ import {
  *   candidates that consolidate multiple cards across the bot's growing
  *   network. JIRA-227 + JIRA-228 unlocked more multi-stop candidates;
  *   lowering OCPT here lets them compete on score. Was 5.
- * - **Late (OCPT=7)** — the bot is racing to ECU 250M cash and 7 connected
- *   major cities. Each remaining turn is precious; long-haul trips that
- *   delay the win condition are penalized harder. Higher OCPT favors short,
- *   high-velocity finalizers over network-building plays.
+ * - **Late (OCPT=5)** — the bot is racing to ECU 250M cash and 7 connected
+ *   major cities. OCPT matches measured income velocity (~5 M/turn observed
+ *   post-Superfreight across recent games) so that long-haul pair/triple
+ *   trips with higher net-per-turn can compete with short singles instead of
+ *   being structurally crushed by an over-tuned opportunity cost.
  *
  * History:
  * - Originally a single constant 8 (empirically tuned). +3 above income
  *   velocity was compensating for a simulator quirk where every stop added
  *   a spurious +1 destination turn — fixed in RouteDetourEstimator.
  * - Then 5 (income-velocity match), then 3.5 (pair-friendly tilt across
- *   all phases), then phase-aware {early:2, mid:5, late:7}, now
+ *   all phases), then phase-aware {early:2, mid:5, late:7}, then
  *   {early:2, mid:4, late:7} after JIRA-227/228 unlocked pair/triple
- *   candidates that were previously pruned.
+ *   candidates that were previously pruned. Late-phase value dropped from
+ *   7 → 5 after log analysis showed Superfreight bots never selecting
+ *   triple-load routes — late OCPT=7 was ~40% above their measured income
+ *   velocity, making long trips uncompetitive regardless of net payoff.
  *
  * Do not change values without re-running scripts/ai/sweep-spatial-prune.py
  * to confirm no regression in strict-loss count. If pair-pick rate trends
@@ -69,7 +73,7 @@ import {
 export const OCPT_BY_PHASE = {
   early: 2,
   mid: 4,
-  late: 7,
+  late: 5,
 } as const;
 
 /**
@@ -180,6 +184,14 @@ interface ScoredCandidate extends Candidate {
   net: number;
   score: number;
   feasible: boolean;
+  // JIRA-229: aggregate two-trip look-ahead scoring fields.
+  // `aggregateScore` is the primary rank key — income velocity computed over
+  // this trip plus the best feasible follow-up trip (with empty-leg accounted for).
+  // Populated after the simulation/scoring pass via computeAggregateScore.
+  // When no feasible follow-up exists, falls back to per-trip net/turns.
+  aggregateScore: number;
+  aggregateFollowup: ScoredCandidate | null;
+  aggregateEmptyLegTurns: number;
 }
 
 interface GridCoord {
@@ -639,14 +651,124 @@ export function scoreCandidate(
   const turns = result.turnsToComplete;
   const net = candidate.payout - buildCost;
   const score = net - opts.ocpt * turns;
-  return { ...candidate, buildCost, turns, net, score, feasible: true };
+  // aggregateScore/aggregateFollowup are populated later by computeAggregateScore
+  // once all feasible candidates are known. Initialize to per-trip velocity so
+  // callers that don't run the aggregate pass still get a sane rank key.
+  return {
+    ...candidate,
+    buildCost,
+    turns,
+    net,
+    score,
+    feasible: true,
+    aggregateScore: net / Math.max(turns, 1),
+    aggregateFollowup: null,
+    aggregateEmptyLegTurns: 0,
+  };
+}
+
+// ── Aggregate two-trip look-ahead (JIRA-229) ───────────────────────────
+
+/**
+ * Compute the aggregate income velocity of a candidate when chained with its
+ * best feasible follow-up trip. Mutates `c1` to populate the aggregate fields.
+ *
+ * Rationale: per-trip scoring (`score = net - OCPT * turns`) treats every
+ * candidate as if it were the bot's last trip, which favors singles that
+ * leave the bot with empty-leg "tails" to other still-held cards. The
+ * aggregate considers what the bot will most plausibly do next and ranks
+ * by the combined income velocity.
+ *
+ * The follow-up must use a disjoint set of demand cards from `c1` so the
+ * same cardIndex is not consumed twice in the look-ahead.
+ *
+ * O(N²) where N is the feasible-candidate count, typically 30-100. Empty-leg
+ * is approximated via Chebyshev distance between c1's last stop city and c2's
+ * first stop city, divided by speed.
+ */
+export function computeAggregateScore(
+  c1: ScoredCandidate,
+  allFeasible: ScoredCandidate[],
+  cityToCoords: Map<string, GridCoord[]>,
+  speed: number,
+): { aggregate: number; followup: ScoredCandidate | null; emptyLegTurns: number } {
+  const c1Cards = new Set(c1.rows.map((r) => r.cardIndex));
+  const c1EndCity = c1.stops[c1.stops.length - 1]?.city;
+  // Reference position for nearestCityCoord — c1's end if known, else (0,0) origin.
+  const referencePos: GridCoord = { row: 0, col: 0 };
+  const c1EndCoords = c1EndCity ? nearestCityCoord(c1EndCity, referencePos, cityToCoords) : null;
+
+  // Search for the highest-aggregate disjoint follow-up. When ANY feasible
+  // follow-up exists, the bot's actual trajectory is "c1 then follow-up,"
+  // so we score the chained aggregate (not standalone) — the bot WILL do
+  // another trip and that future cost belongs in c1's score.
+  // Standalone is the fallback only when no follow-up is feasible (endgame).
+  let bestAggregate: number | null = null;
+  let bestFollowup: ScoredCandidate | null = null;
+  let bestEmptyLegTurns = 0;
+
+  for (const c2 of allFeasible) {
+    if (c2 === c1) continue;
+    // Disjoint-cards check: c2 must not consume any card c1 is consuming.
+    let overlap = false;
+    for (const r of c2.rows) {
+      if (c1Cards.has(r.cardIndex)) {
+        overlap = true;
+        break;
+      }
+    }
+    if (overlap) continue;
+
+    const c2StartCity = c2.stops[0]?.city;
+    const c2StartCoords = c2StartCity
+      ? nearestCityCoord(c2StartCity, c1EndCoords ?? referencePos, cityToCoords)
+      : null;
+
+    let emptyLegTurns = 0;
+    if (c1EndCoords && c2StartCoords) {
+      const hops = hexDistance(
+        c1EndCoords.row,
+        c1EndCoords.col,
+        c2StartCoords.row,
+        c2StartCoords.col,
+      );
+      emptyLegTurns = Math.ceil(hops / Math.max(speed, 1));
+    }
+
+    const aggregateTurns = Math.max(c1.turns + emptyLegTurns + c2.turns, 1);
+    const aggregateNet = c1.net + c2.net;
+    const aggregate = aggregateNet / aggregateTurns;
+
+    if (bestAggregate === null || aggregate > bestAggregate) {
+      bestAggregate = aggregate;
+      bestFollowup = c2;
+      bestEmptyLegTurns = emptyLegTurns;
+    }
+  }
+
+  // Endgame fallback: no disjoint follow-up. Use c1's standalone velocity.
+  if (bestAggregate === null) {
+    return {
+      aggregate: c1.net / Math.max(c1.turns, 1),
+      followup: null,
+      emptyLegTurns: 0,
+    };
+  }
+
+  return { aggregate: bestAggregate, followup: bestFollowup, emptyLegTurns: bestEmptyLegTurns };
 }
 
 // ── Top-1 selection (R7) ───────────────────────────────────────────────
 
 export function pickTop1(scored: ScoredCandidate[]): ScoredCandidate | null {
   if (scored.length === 0) return null;
-  const sorted = [...scored].sort((a, b) => b.score - a.score);
+  // JIRA-229: rank by aggregateScore (two-trip income velocity), tiebreak
+  // by net descending, then by id for determinism.
+  const sorted = [...scored].sort((a, b) => {
+    if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
+    if (b.net !== a.net) return b.net - a.net;
+    return a.id.localeCompare(b.id);
+  });
   return sorted[0];
 }
 
@@ -707,6 +829,14 @@ function synthesizeReasoning(
     reasoning += `  Phase: ${phase} (OCPT=${opts.ocpt})\n`;
   }
   reasoning += `  Picked: ${pattern} — payout ${top1.payout}M, build ${top1.buildCost}M, ${top1.turns} turns, NET ${top1.net.toFixed(0)}M, score ${top1.score.toFixed(1)}\n`;
+  // JIRA-229: aggregate two-trip look-ahead line. Surfaces the chained
+  // follow-up so the rank reasoning is auditable from the log.
+  const aggStr = top1.aggregateScore.toFixed(2);
+  if (top1.aggregateFollowup) {
+    reasoning += `  Aggregate: ${aggStr} M/turn (chained with ${top1.aggregateFollowup.id}, empty-leg ${top1.aggregateEmptyLegTurns} turns)\n`;
+  } else {
+    reasoning += `  Aggregate: ${aggStr} M/turn (standalone — no feasible follow-up)\n`;
+  }
   reasoning += `  Stops: ${stopsStr}\n`;
   reasoning += `  Rationale: ${patternExplanation}\n`;
 
@@ -714,8 +844,10 @@ function synthesizeReasoning(
   const runnerUps = allSorted.filter((c) => c.id !== top1.id).slice(0, 2);
   for (let i = 0; i < runnerUps.length; i++) {
     const ru = runnerUps[i];
-    const delta = (top1.score - ru.score).toFixed(1);
-    reasoning += `  Runner-up #${i + 2}: ${ru.id}, score ${ru.score.toFixed(1)}, NET ${ru.net.toFixed(0)}M, ${ru.turns} turns. Lost by ${delta}.\n`;
+    // JIRA-229: report aggregate as the rank-loss metric, since aggregateScore
+    // is now the ranking key. score is still shown for backward compatibility.
+    const delta = (top1.aggregateScore - ru.aggregateScore).toFixed(2);
+    reasoning += `  Runner-up #${i + 2}: ${ru.id}, aggregate ${ru.aggregateScore.toFixed(2)} M/turn, NET ${ru.net.toFixed(0)}M, ${ru.turns} turns. Lost by ${delta}.\n`;
   }
 
   reasoning += `  Survivors after spatial prune: ${stats.survivors} of ${stats.total} raw.\n`;
@@ -781,6 +913,21 @@ function synthesizeLlmAttempt(
 const UPGRADE_COST_M = 20;
 
 /**
+ * Cap-saturation gate for the Fast Freight → Superfreight upgrade.
+ *
+ * Superfreight over Fast Freight buys a third cargo slot (and zero extra
+ * speed). Log analysis showed Superfreight bots almost never carrying a
+ * third load, meaning the 20M upgrade was paying for a slot the planner
+ * never selected routes to fill. This threshold gates the upgrade until
+ * the bot has actually peaked at full capacity (loads == cap) on at least
+ * N turns — concrete evidence its plans want more room.
+ *
+ * Heavy Freight → Superfreight is NOT gated (that upgrade buys +3 speed
+ * for a bot already at cap=3).
+ */
+export const SUPERFREIGHT_SATURATION_THRESHOLD = 2;
+
+/**
  * Select the upgrade target for a Medium-skill bot, or undefined if no upgrade
  * should be emitted this turn.
  *
@@ -808,7 +955,8 @@ function selectUpgradeTarget(
   currentTrainType: string,
   cash: number,
   tripBuildCost: number,
-): string | undefined {
+  capSaturatedTurns: number,
+): { target?: string; gateReason?: string } {
   const current = (currentTrainType || '').toLowerCase();
   let target: string | undefined;
   if (current === 'freight') {
@@ -817,13 +965,23 @@ function selectUpgradeTarget(
     target = 'superfreight';
   } else {
     // Already at top tier (superfreight) or unknown — no upgrade.
-    return undefined;
+    return {};
+  }
+
+  // Cap-saturation gate applies only to Fast Freight → Superfreight (the
+  // upgrade that buys a cargo slot). Heavy Freight → Superfreight buys speed
+  // and is not gated.
+  if (current === 'fast_freight' && target === 'superfreight'
+      && capSaturatedTurns < SUPERFREIGHT_SATURATION_THRESHOLD) {
+    return {
+      gateReason: `superfreight gated (cap-saturated ${capSaturatedTurns}/${SUPERFREIGHT_SATURATION_THRESHOLD} turns)`,
+    };
   }
 
   if (cash >= UPGRADE_COST_M + tripBuildCost) {
-    return target;
+    return { target };
   }
-  return undefined;
+  return {};
 }
 
 // ── StrategicRoute builder ─────────────────────────────────────────────
@@ -971,22 +1129,42 @@ export function planTripDeterministic(
     };
   }
 
-  // Sort and pick top-1
-  const sorted = [...feasible].sort((a, b) => b.score - a.score);
+  // JIRA-229: aggregate two-trip look-ahead. Mutates each feasible candidate
+  // to populate aggregateScore/aggregateFollowup before sorting.
+  const cityToCoords = buildCityToCoords();
+  for (const c1 of feasible) {
+    const result = computeAggregateScore(c1, feasible, cityToCoords, speed);
+    c1.aggregateScore = result.aggregate;
+    c1.aggregateFollowup = result.followup;
+    c1.aggregateEmptyLegTurns = result.emptyLegTurns;
+  }
+
+  // Sort by aggregate score (rank key per JIRA-229) and pick top-1
+  const sorted = [...feasible].sort((a, b) => {
+    if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
+    if (b.net !== a.net) return b.net - a.net;
+    return a.id.localeCompare(b.id);
+  });
   const top1 = pickTop1(sorted)!;
 
   // JIRA-220 follow-up: deterministic upgrade decision. Upgrade as soon as the
-  // bot can afford it given the chosen trip's build cost. Emits undefined when
-  // the bot is already on Superfreight or when cash would fall short.
-  const upgradeOnRoute = selectUpgradeTarget(
+  // bot can afford it given the chosen trip's build cost. Fast → Superfreight
+  // is additionally gated by cap-saturation history (see SUPERFREIGHT_SATURATION_THRESHOLD).
+  const upgradeDecision = selectUpgradeTarget(
     snapshot.bot.trainType,
     snapshot.bot.money,
     top1.buildCost,
+    memory.capSaturatedTurns ?? 0,
   );
+  const upgradeOnRoute = upgradeDecision.target;
 
   const latencyMs = Date.now() - startMs;
-  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, phase) +
-    (upgradeOnRoute ? `\n  Upgrade emitted: ${upgradeOnRoute} (cost ${UPGRADE_COST_M}M, cash ${snapshot.bot.money}M, build ${top1.buildCost}M).` : '');
+  const upgradeNote = upgradeOnRoute
+    ? `\n  Upgrade emitted: ${upgradeOnRoute} (cost ${UPGRADE_COST_M}M, cash ${snapshot.bot.money}M, build ${top1.buildCost}M).`
+    : upgradeDecision.gateReason
+      ? `\n  Upgrade skipped: ${upgradeDecision.gateReason}.`
+      : '';
+  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, phase) + upgradeNote;
   const route = buildStrategicRoute(top1, snapshot.turnNumber, reasoning, upgradeOnRoute);
 
   return {
