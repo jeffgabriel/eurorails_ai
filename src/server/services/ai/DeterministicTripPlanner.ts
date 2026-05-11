@@ -42,9 +42,10 @@ import {
  *   accept long, expensive trips that pay off compounding. Low OCPT favors
  *   multi-stop pair/triple candidates that consolidate cards and build
  *   useful track in fewer total turns than equivalent singles would.
- * - **Mid (OCPT=5)** — matches the bot's per-turn income upper bound (~5M,
- *   CLAUDE.md "income velocity"). The strategically neutral value: pair vs
- *   single is decided purely on truthful score.
+ * - **Mid (OCPT=4)** — slightly below income velocity to favor pair/triple
+ *   candidates that consolidate multiple cards across the bot's growing
+ *   network. JIRA-227 + JIRA-228 unlocked more multi-stop candidates;
+ *   lowering OCPT here lets them compete on score. Was 5.
  * - **Late (OCPT=7)** — the bot is racing to ECU 250M cash and 7 connected
  *   major cities. Each remaining turn is precious; long-haul trips that
  *   delay the win condition are penalized harder. Higher OCPT favors short,
@@ -55,7 +56,9 @@ import {
  *   velocity was compensating for a simulator quirk where every stop added
  *   a spurious +1 destination turn — fixed in RouteDetourEstimator.
  * - Then 5 (income-velocity match), then 3.5 (pair-friendly tilt across
- *   all phases), and now this phase-aware table.
+ *   all phases), then phase-aware {early:2, mid:5, late:7}, now
+ *   {early:2, mid:4, late:7} after JIRA-227/228 unlocked pair/triple
+ *   candidates that were previously pruned.
  *
  * Do not change values without re-running scripts/ai/sweep-spatial-prune.py
  * to confirm no regression in strict-loss count. If pair-pick rate trends
@@ -65,7 +68,7 @@ import {
  */
 export const OCPT_BY_PHASE = {
   early: 2,
-  mid: 5,
+  mid: 4,
   late: 7,
 } as const;
 
@@ -95,11 +98,13 @@ export const AFFORDABILITY_FLOOR_M = 0;
 /**
  * Classify the game's strategic phase from observable bot state.
  *
- * Boundaries (matching docs/trip-candidate-menu-easy-design.md §5):
- * - LATE when the bot has connected ≥5 major cities OR turn ≥ 60.
+ * Boundaries:
+ * - LATE when the bot has connected ≥5 major cities OR turn ≥ 80.
  *   The win condition needs 7 cities + ECU 250M; at 5/7 connected the
- *   endgame is in sight regardless of turn count, and turn 60 is deep
- *   enough that finishing matters more than accumulating.
+ *   endgame is in sight regardless of turn count, and turn 80 is deep
+ *   enough that most games are close to finishing. Turn boundary was 60
+ *   before; raised to 80 to extend mid-phase OCPT=4 by 20 turns and let
+ *   pair/triple candidates compete longer.
  * - EARLY when turn < 25 OR deliveries < 3 OR citiesConnected < 2.
  *   The bot is still in network-building mode; few completed deliveries
  *   means cards in hand are largely unrealized investments.
@@ -110,7 +115,7 @@ export function classifyGamePhase(
   deliveries: number,
   citiesConnected: number,
 ): 'early' | 'mid' | 'late' {
-  if (citiesConnected >= 5 || turn >= 60) return 'late';
+  if (citiesConnected >= 5 || turn >= 80) return 'late';
   if (turn < 25 || deliveries < 3 || citiesConnected < 2) return 'early';
   return 'mid';
 }

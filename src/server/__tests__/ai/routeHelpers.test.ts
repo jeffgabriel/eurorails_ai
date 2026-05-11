@@ -566,10 +566,10 @@ describe('resolveBuildTarget — route-based targets', () => {
 });
 
 describe('resolveBuildTarget — victory build override', () => {
-  it('returns the cheapest unconnected major city as a victory build when bot has ≥250M and <7 connected cities', () => {
+  it('returns the cheapest unconnected major city as a victory build when bot has ≥230M and <7 connected cities', () => {
     const route = makeRoute({ currentStopIndex: 0 });
     const context = makeContext({
-      money: 250,
+      money: 230,
       connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
       // Only 6 connected, need 7
       unconnectedMajorCities: [
@@ -587,10 +587,22 @@ describe('resolveBuildTarget — victory build override', () => {
     expect(result!.stopIndex).toBe(-1);
   });
 
-  it('does NOT use victory override when bot has <250M', () => {
+  it('fires at 230M boundary (was 250M before; lowered to give cash-build lead time)', () => {
     const route = makeRoute({ currentStopIndex: 0 });
     const context = makeContext({
-      money: 249,
+      money: 230,
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
+      unconnectedMajorCities: [{ cityName: 'Moskva', estimatedCost: 5 }],
+      citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
+    });
+    const result = resolveBuildTarget(route, context);
+    expect(result!.isVictoryBuild).toBe(true);
+  });
+
+  it('does NOT use victory override when bot has <230M', () => {
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({
+      money: 229,
       connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
       unconnectedMajorCities: [{ cityName: 'Moskva', estimatedCost: 5 }],
       citiesOnNetwork: [],
@@ -984,8 +996,8 @@ describe('resolveBuildTarget — JIRA-165 capital allocation gate', () => {
         }),
       ],
     });
-    // Override money to victory threshold for the context check
-    context.money = 250; // victory threshold
+    // Override money to victory build trigger for the context check
+    context.money = 230; // victory build trigger
 
     const result = resolveBuildTarget(route, context);
 

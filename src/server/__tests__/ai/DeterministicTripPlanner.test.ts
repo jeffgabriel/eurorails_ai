@@ -210,19 +210,20 @@ beforeEach(() => {
 // ── Constants ──────────────────────────────────────────────────────────
 
 describe('Exported constants', () => {
-  it('OCPT_BY_PHASE has the expected phase-aware values (early=2, mid=5, late=7)', () => {
+  it('OCPT_BY_PHASE has the expected phase-aware values (early=2, mid=4, late=7)', () => {
     // OCPT now varies by game phase. Early-game favors network-building
-    // multi-stop trips (low turn cost); mid-game is income-velocity-matched
-    // neutral; late-game punishes long trips because every remaining turn
-    // matters for closing out the win condition (7 cities + ECU 250M).
+    // multi-stop trips (low turn cost); mid-game is slightly below income
+    // velocity to favor pair/triple candidates unlocked by JIRA-227/228;
+    // late-game punishes long trips because every remaining turn matters
+    // for closing out the win condition (7 cities + ECU 250M).
     expect(OCPT_BY_PHASE.early).toBe(2);
-    expect(OCPT_BY_PHASE.mid).toBe(5);
+    expect(OCPT_BY_PHASE.mid).toBe(4);
     expect(OCPT_BY_PHASE.late).toBe(7);
   });
 
   it('OCPT (default export) equals OCPT_BY_PHASE.mid for backward compatibility', () => {
     expect(OCPT).toBe(OCPT_BY_PHASE.mid);
-    expect(OCPT).toBe(5);
+    expect(OCPT).toBe(4);
   });
 
   it('PRUNE_MAX_TURNS === 12', () => {
@@ -260,9 +261,17 @@ describe('classifyGamePhase', () => {
     expect(classifyGamePhase(10, 0, 7)).toBe('late');
   });
 
-  it('turn >= 60 → late (regardless of cities)', () => {
-    expect(classifyGamePhase(60, 0, 0)).toBe('late');
+  it('turn >= 80 → late (regardless of cities)', () => {
+    expect(classifyGamePhase(80, 0, 0)).toBe('late');
     expect(classifyGamePhase(120, 5, 4)).toBe('late');
+  });
+
+  it('turn 60-79 → mid (boundary raised from 60 to 80 to extend mid-phase OCPT=4)', () => {
+    // Used to classify late at turn 60+; now stays mid until turn 80 so
+    // pair/triple candidates compete with OCPT=4 for an extra 20 turns.
+    expect(classifyGamePhase(60, 5, 4)).toBe('mid');
+    expect(classifyGamePhase(70, 8, 3)).toBe('mid');
+    expect(classifyGamePhase(79, 10, 4)).toBe('mid');
   });
 
   // EARLY triggers (none of the LATE triggers fired)
@@ -285,7 +294,7 @@ describe('classifyGamePhase', () => {
   it('turn >= 25, deliveries >= 3, citiesConnected in [2..4] → mid', () => {
     expect(classifyGamePhase(25, 3, 2)).toBe('mid');
     expect(classifyGamePhase(45, 6, 4)).toBe('mid');
-    expect(classifyGamePhase(59, 10, 4)).toBe('mid');
+    expect(classifyGamePhase(79, 10, 4)).toBe('mid');
   });
 
   it('LATE precedence over EARLY when both could match (citiesConnected=5, deliveries=0)', () => {
@@ -579,7 +588,7 @@ describe('scoreCandidate', () => {
     hopAvgCostM: HOP_AVG_COST_M,
   };
 
-  it('computes correct score: payout=31, turns=3, buildCost=22, OCPT=5 (mid-phase default) → score=-6', () => {
+  it('computes correct score: payout=31, turns=3, buildCost=22, OCPT=4 (mid-phase default) → score=-3', () => {
     mockSimulateTrip.mockReturnValueOnce({ turnsToComplete: 3, totalBuildCost: 22, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
     const snapshot = makeSnapshot();
     const candidate = {
@@ -592,11 +601,11 @@ describe('scoreCandidate', () => {
       payout: 31,
     };
     const result = scoreCandidate(candidate, { row: 5, col: 5 }, snapshot, defaultOpts);
-    // score = (31 - 22) - 5 * 3 = 9 - 15 = -6 (mid-phase OCPT)
+    // score = (31 - 22) - 4 * 3 = 9 - 12 = -3 (mid-phase OCPT after JIRA-227/228 tuning)
     expect(result.feasible).toBe(true);
     expect(result.buildCost).toBe(22);
     expect(result.turns).toBe(3);
-    expect(result.score).toBeCloseTo(-6, 5);
+    expect(result.score).toBeCloseTo(-3, 5);
     expect(result.net).toBeCloseTo(9, 5);
   });
 
@@ -1062,14 +1071,24 @@ describe('planTripDeterministic — phase-aware OCPT', () => {
     expect(result.route!.reasoning).toContain('OCPT=2');
   });
 
-  it('mid-game state (turn=30, deliveries=5, cities=3) → reasoning shows OCPT=5', () => {
+  it('mid-game state (turn=30, deliveries=5, cities=3) → reasoning shows OCPT=4', () => {
     mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
     const base = makeSnapshot();
     const snapshot = { ...base, turnNumber: 30, bot: { ...base.bot, connectedMajorCityCount: 3 } };
     const memory = { ...makeMemory(), deliveryCount: 5 };
     const result = planTripDeterministic(snapshot, makeContext(singleDemand()), memory);
     expect(result.route!.reasoning).toContain('Phase: mid');
-    expect(result.route!.reasoning).toContain('OCPT=5');
+    expect(result.route!.reasoning).toContain('OCPT=4');
+  });
+
+  it('mid-phase boundary extended — turn=70 with 4 cities still mid (was late before T80 boundary)', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const base = makeSnapshot();
+    const snapshot = { ...base, turnNumber: 70, bot: { ...base.bot, connectedMajorCityCount: 4 } };
+    const memory = { ...makeMemory(), deliveryCount: 6 };
+    const result = planTripDeterministic(snapshot, makeContext(singleDemand()), memory);
+    expect(result.route!.reasoning).toContain('Phase: mid');
+    expect(result.route!.reasoning).toContain('OCPT=4');
   });
 
   it('late-game state (cities=5) → reasoning shows OCPT=7', () => {
@@ -1077,6 +1096,16 @@ describe('planTripDeterministic — phase-aware OCPT', () => {
     const base = makeSnapshot();
     const snapshot = { ...base, turnNumber: 50, bot: { ...base.bot, connectedMajorCityCount: 5 } };
     const memory = { ...makeMemory(), deliveryCount: 8 };
+    const result = planTripDeterministic(snapshot, makeContext(singleDemand()), memory);
+    expect(result.route!.reasoning).toContain('Phase: late');
+    expect(result.route!.reasoning).toContain('OCPT=7');
+  });
+
+  it('late-game by turn (turn=80, 4 cities) → reasoning shows OCPT=7', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    const base = makeSnapshot();
+    const snapshot = { ...base, turnNumber: 80, bot: { ...base.bot, connectedMajorCityCount: 4 } };
+    const memory = { ...makeMemory(), deliveryCount: 10 };
     const result = planTripDeterministic(snapshot, makeContext(singleDemand()), memory);
     expect(result.route!.reasoning).toContain('Phase: late');
     expect(result.route!.reasoning).toContain('OCPT=7');
@@ -1093,7 +1122,7 @@ describe('planTripDeterministic — phase-aware OCPT', () => {
   it('score reflects phase-derived OCPT — same fixture scores higher in early than late', () => {
     // Fixture: payout 30, turns 4, build 8 → net = 22
     //   EARLY (OCPT=2): score = 22 - 2*4 = 14
-    //   MID   (OCPT=5): score = 22 - 5*4 = 2
+    //   MID   (OCPT=4): score = 22 - 4*4 = 6
     //   LATE  (OCPT=7): score = 22 - 7*4 = -6
     mockSimulateTrip.mockReturnValue({ turnsToComplete: 4, totalBuildCost: 8, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
     const demand = [makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 30 })];
@@ -1109,7 +1138,7 @@ describe('planTripDeterministic — phase-aware OCPT', () => {
     const lateRes = planTripDeterministic(lateSnapshot, makeContext(demand), { ...makeMemory(), deliveryCount: 8 });
 
     expect(earlyRes.route!.reasoning).toContain('score 14.0');
-    expect(midRes.route!.reasoning).toContain('score 2.0');
+    expect(midRes.route!.reasoning).toContain('score 6.0');
     expect(lateRes.route!.reasoning).toContain('score -6.0');
   });
 });

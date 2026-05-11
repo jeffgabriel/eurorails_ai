@@ -15,12 +15,25 @@ import {
   StrategicRoute,
   GameContext,
   WorldSnapshot,
-  VICTORY_INITIAL_THRESHOLD,
 } from '../../../shared/types/GameTypes';
 import { loadGridPoints } from './MapTopology';
 
 /** Number of connected major cities required to win */
 const VICTORY_CITY_COUNT = 7;
+
+/**
+ * Cash threshold (ECU M) at which the planner shifts to victory-build mode,
+ * prioritising unconnected major-city connections over delivery routing.
+ *
+ * Set below the actual game-end threshold (VICTORY_INITIAL_THRESHOLD = 250M)
+ * so the bot starts pacing toward the city goal while it still has runway to
+ * accumulate the final cash via deliveries during the build phase. Observed
+ * symptom before this lead: winner in game 38e92b14 sat at 220M cash with 4
+ * cities for ~8 turns, never triggering victory builds because the threshold
+ * was 250M. Lowering to 230M gives a 20M head-start that recovers within
+ * 1-2 deliveries during the city-build sprint.
+ */
+const VICTORY_BUILD_TRIGGER_M = 230;
 
 // ── resolveBuildTarget ─────────────────────────────────────────────────────
 
@@ -41,8 +54,9 @@ export interface BuildTargetResult {
  * what city the bot should extend its track toward this turn.
  *
  * Resolution order:
- * 1. Victory build override: if bot has ≥250M and fewer than 7 connected major
- *    cities, target the cheapest unconnected major city (bypasses JIT gate).
+ * 1. Victory build override: if bot has ≥VICTORY_BUILD_TRIGGER_M (230M) and
+ *    fewer than 7 connected major cities, target the cheapest unconnected
+ *    major city (bypasses JIT gate).
  * 2. Route-based target: iterate stops from currentStopIndex; return the first
  *    stop whose city is off-network (skipping the route's startingCity).
  * 3. Null: all remaining stops are on-network — no build needed.
@@ -57,7 +71,7 @@ export function resolveBuildTarget(
 ): BuildTargetResult | null {
   // Victory build override — bot is close to winning but needs more major cities
   const isVictoryEligible =
-    context.money >= VICTORY_INITIAL_THRESHOLD &&
+    context.money >= VICTORY_BUILD_TRIGGER_M &&
     context.connectedMajorCities.length < VICTORY_CITY_COUNT;
 
   if (isVictoryEligible) {
