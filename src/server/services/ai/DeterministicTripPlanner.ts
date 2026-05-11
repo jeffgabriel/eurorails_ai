@@ -620,11 +620,11 @@ export function scoreCandidate(
       `[DeterministicTripPlanner] scoreCandidate: simulator threw for candidate id=${candidate.id}`,
       e,
     );
-    return { ...candidate, buildCost: 999, turns: 999, net: -999, score: -9999, feasible: false };
+    return { ...candidate, buildCost: 999, turns: 999, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0 };
   }
 
   if (!result.feasible) {
-    return { ...candidate, buildCost: result.totalBuildCost, turns: result.turnsToComplete, net: -999, score: -9999, feasible: false };
+    return { ...candidate, buildCost: result.totalBuildCost, turns: result.turnsToComplete, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0 };
   }
 
   // Affordability gate (JIRA-223): reject candidates where the simulated cash
@@ -644,6 +644,9 @@ export function scoreCandidate(
       net: -999,
       score: -9999,
       feasible: false,
+      aggregateScore: -9999,
+      aggregateFollowup: null,
+      aggregateEmptyLegTurns: 0,
     };
   }
 
