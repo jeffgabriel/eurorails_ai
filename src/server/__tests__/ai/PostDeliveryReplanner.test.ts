@@ -815,8 +815,10 @@ describe('JIRA-210A: PostDeliveryReplanner activeRoute sync into replanMemory', 
       ),
     }));
 
+    // Context must have Hops in loads so isRouteImpossible does not fire prematurely
+    // (the bot picked up Hops at Rotterdam; deliver:Hops@Holland is the remaining stop).
     await PostDeliveryReplanner.replan(
-      activeRoute, makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 1, '[TEST]',
+      activeRoute, makeSnapshot(), makeContext({ loads: ['Hops'] }), makeBrain(), makeGridPoints(), 1, '[TEST]',
     );
 
     // replanMemory.activeRoute must be the parameter (referential equality), not the mocked null
@@ -911,5 +913,189 @@ describe('JIRA-210A: PostDeliveryReplanner activeRoute sync into replanMemory', 
 
     // Both assertions confirm no contradiction: empty loads + no stale plan
     expect(renderedUserPrompt).toContain('Carried loads: none');
+  });
+});
+
+// ── JIRA-233 BE-002: isRouteImpossible wiring (AC4) ───────────────────────
+
+describe('JIRA-233 BE-002: route impossibility detection wiring (AC4)', () => {
+  it('AC4: opportunistic Coal delivery leaves del:Copper@Madrid impossible → route cleared, [route-abandoned] logged', async () => {
+    // Scenario: bot just delivered Coal opportunistically. The active route's next
+    // stop is del:Copper@Madrid, but bot has no Copper and no future pickup-Copper.
+    // isRouteImpossible should fire and the replanMemory should receive null activeRoute.
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const impossibleRoute: StrategicRoute = {
+      stops: [
+        // Copper delivery is the remaining stop; no pickup-Copper anywhere
+        { action: 'deliver', loadType: 'Copper', city: 'Madrid', demandCardId: 42, payment: 30 },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel',
+      createdAtTurn: 73,
+      reasoning: 'Copper delivery route — will be abandoned',
+    };
+
+    let capturedMemory: BotMemoryState | undefined;
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockImplementation(
+        (_snap: unknown, _ctx: unknown, _gp: unknown, memory: BotMemoryState) => {
+          capturedMemory = memory;
+          return Promise.resolve({ route: null, llmLog: [] });
+        },
+      ),
+    }));
+
+    // Context: bot has no Copper (just delivered Coal, not Copper)
+    const result = await PostDeliveryReplanner.replan(
+      impossibleRoute,
+      makeSnapshot(),
+      makeContext({ loads: [] }), // empty cargo — no Copper
+      makeBrain(),
+      makeGridPoints(),
+      1,
+      '[TEST]',
+    );
+
+    // 1. replanMemory.activeRoute must be null (route was cleared before replanning)
+    expect(capturedMemory).toBeDefined();
+    expect(capturedMemory!.activeRoute).toBeNull();
+
+    // 2. routeWasAbandoned must be true in the ReplanResult
+    expect(result.routeWasAbandoned).toBe(true);
+
+    // 3. [route-abandoned] warn must have been emitted exactly once
+    const abandonedLogs = warnSpy.mock.calls.filter(
+      call => typeof call[0] === 'string' && call[0].includes('[route-abandoned]'),
+    );
+    expect(abandonedLogs).toHaveLength(1);
+    expect(abandonedLogs[0][0]).toContain('Copper');
+    expect(abandonedLogs[0][0]).toContain('Madrid');
+
+    warnSpy.mockRestore();
+  });
+
+  it('AC4-b: route with Copper in cargo does NOT trigger abandonment', async () => {
+    const achievableRoute: StrategicRoute = {
+      stops: [
+        { action: 'deliver', loadType: 'Copper', city: 'Madrid', demandCardId: 42, payment: 30 },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel',
+      createdAtTurn: 73,
+      reasoning: 'Copper delivery — achievable',
+    };
+
+    let capturedMemory: BotMemoryState | undefined;
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockImplementation(
+        (_snap: unknown, _ctx: unknown, _gp: unknown, memory: BotMemoryState) => {
+          capturedMemory = memory;
+          return Promise.resolve({ route: null });
+        },
+      ),
+    }));
+
+    const result = await PostDeliveryReplanner.replan(
+      achievableRoute,
+      makeSnapshot(),
+      makeContext({ loads: ['Copper'] }), // Copper in cargo — achievable
+      makeBrain(),
+      makeGridPoints(),
+      1,
+      '[TEST]',
+    );
+
+    // Route NOT cleared — activeRoute passed through to planner
+    expect(capturedMemory!.activeRoute).toBe(achievableRoute);
+    expect(result.routeWasAbandoned).toBeFalsy();
+  });
+});
+
+// ── JIRA-233 BE-002: t73-t80 regression test (AC5) ───────────────────────
+
+describe('JIRA-233 BE-002: t73-t80 regression — opportunistic delivery leaves impossible route (AC5)', () => {
+  it('AC5: synthetic scenario — Coal@Madrid delivery leaves del:Copper@Madrid impossible → replanner sees null route, no PassTurn lock', async () => {
+    // Synthetic minimal fixture that demonstrates the same impossibility scenario
+    // from game 85f3bef2 s1 t79: bot delivered Coal at Madrid via opportunistic delivery,
+    // leaving its active route's del:Copper@Madrid stop impossible (no Copper in cargo,
+    // no future pickup-Copper in the route).
+    //
+    // BE-001 prevents the impossible route from being generated in many cases,
+    // but BE-002 handles the case where it still arises (e.g., opportunistic delivery).
+    //
+    // What matters: after the post-delivery replan call with an impossible route,
+    // the replanner clears the activeRoute and sets routeWasAbandoned=true.
+    // On the NEXT turn the planner starts fresh (no stuck PassTurn loop).
+
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Route post-Coal-delivery: del:Copper@Madrid is the only remaining stop.
+    // The bot has no Copper in cargo and no remaining pickup-Copper stop.
+    const stuckRoute: StrategicRoute = {
+      stops: [
+        { action: 'deliver', loadType: 'Copper', city: 'Madrid', demandCardId: 55, payment: 25 },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel',
+      createdAtTurn: 73,
+      reasoning: 'JIRA-233 regression: del:Copper@Madrid after opportunistic Coal delivery',
+    };
+
+    let capturedMemory: BotMemoryState | undefined;
+    // Planner mock: returns a FRESH route (the new plan after abandonment)
+    const freshRoute: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Katowice' },
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 60, payment: 20 },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel',
+      createdAtTurn: 80,
+      reasoning: 'Fresh plan post-abandonment',
+    };
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockImplementation(
+        (_snap: unknown, _ctx: unknown, _gp: unknown, memory: BotMemoryState) => {
+          capturedMemory = memory;
+          return Promise.resolve({ route: freshRoute });
+        },
+      ),
+    }));
+
+    // Context after opportunistic Coal@Madrid delivery: no Copper in cargo
+    const postCoalDeliveryContext = makeContext({
+      loads: [], // Coal was delivered, Copper was never picked up
+      money: 175, // matches game log's ~$175M
+    });
+
+    const result = await PostDeliveryReplanner.replan(
+      stuckRoute,
+      makeSnapshot(),
+      postCoalDeliveryContext,
+      makeBrain(),
+      makeGridPoints(),
+      1,
+      '[TEST]',
+    );
+
+    // AC5 assertion 1: planner saw null activeRoute (impossible route cleared)
+    expect(capturedMemory).toBeDefined();
+    expect(capturedMemory!.activeRoute).toBeNull();
+
+    // AC5 assertion 2: routeWasAbandoned is signaled back to the caller
+    expect(result.routeWasAbandoned).toBe(true);
+
+    // AC5 assertion 3: planner returned a fresh route (not PassTurn!)
+    expect(result.route).not.toBeNull();
+    expect(result.route.stops[0].action).toBe('pickup');
+
+    // AC5 assertion 4: [route-abandoned] was logged exactly once
+    const abandonedLogs = warnSpy.mock.calls.filter(
+      call => typeof call[0] === 'string' && call[0].includes('[route-abandoned]'),
+    );
+    expect(abandonedLogs).toHaveLength(1);
+
+    warnSpy.mockRestore();
   });
 });

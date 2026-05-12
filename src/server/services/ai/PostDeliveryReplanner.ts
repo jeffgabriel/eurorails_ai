@@ -30,6 +30,7 @@ import { TripPlanner } from './TripPlanner';
 import { getMemory } from './BotMemory';
 import { TurnExecutorPlanner } from './TurnExecutorPlanner';
 import { NewRoutePlanner } from './NewRoutePlanner';
+import { isRouteImpossible } from './routeHelpers';
 import type { TurnPlanUpgradeTrain } from '../../../shared/types/GameTypes';
 
 // ── ReplanResult ──────────────────────────────────────────────────────────
@@ -68,6 +69,12 @@ export interface ReplanResult {
    * Undefined when no upgrade was requested or when the upgrade was accepted.
    */
   upgradeSuppressionReason?: string | null;
+  /**
+   * True when the active route was abandoned because its next stop became
+   * impossible to complete (JIRA-233, R2). Callers must propagate this flag
+   * so AIStrategyEngine can record the abandonment in routeHistory.
+   */
+  routeWasAbandoned?: boolean;
 }
 
 // ── PostDeliveryReplanner ─────────────────────────────────────────────────
@@ -100,31 +107,51 @@ export class PostDeliveryReplanner {
     deliveriesThisTurn: number,
     tag: string,
   ): Promise<ReplanResult> {
-    // Sub-path 4: No brain available — revalidate existing route
+    // Sub-path 4: No brain available — revalidate existing route.
+    // Also check for impossibility even in the no-brain path (JIRA-233).
     if (!brain || !gridPoints || gridPoints.length === 0) {
       const revalidated = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
       const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);
+      if (skipped.currentStopIndex < skipped.stops.length && isRouteImpossible(skipped, context)) {
+        const nextStop = skipped.stops[skipped.currentStopIndex];
+        const remainingCount = skipped.stops.length - skipped.currentStopIndex;
+        console.warn(
+          `[route-abandoned] route impossible: next stop=${JSON.stringify(nextStop)}, ` +
+          `cargo=${JSON.stringify(context.loads)}, remaining stops=${remainingCount}`,
+        );
+        return { route: skipped, moveTargetInvalidated: true, routeWasAbandoned: true };
+      }
       console.log(`${tag} [PostDeliveryReplanner] No brain/gridPoints — revalidating existing route`);
       return { route: skipped, moveTargetInvalidated: true };
     }
 
-    // Sub-paths 1–3: brain is available
+    // Sub-paths 1–3: brain is available.
+    // JIRA-233: Compute impossibility check OUTSIDE the try block so routeWasAbandoned
+    // is accessible from both the try body and the catch handler.
+    let postDeliveryRoute: StrategicRoute | null = activeRoute.currentStopIndex < activeRoute.stops.length
+      ? activeRoute    // route still has remaining stops — show them in CURRENT PLAN
+      : null;          // route fully completed — render "(no current plan in flight)"
+
+    // JIRA-233 R2/R3: Check for route impossibility BEFORE passing to the downstream
+    // planner. If the next stop requires a load that is neither in cargo nor reachable
+    // via a remaining pickup stop, the route is dead. Clear it and flag abandonment so
+    // AIStrategyEngine can record the event in routeHistory.
+    let routeWasAbandoned = false;
+    if (postDeliveryRoute && isRouteImpossible(postDeliveryRoute, context)) {
+      const nextStop = postDeliveryRoute.stops[postDeliveryRoute.currentStopIndex];
+      const remainingCount = postDeliveryRoute.stops.length - postDeliveryRoute.currentStopIndex;
+      console.warn(
+        `[route-abandoned] route impossible: next stop=${JSON.stringify(nextStop)}, ` +
+        `cargo=${JSON.stringify(context.loads)}, remaining stops=${remainingCount}`,
+      );
+      postDeliveryRoute = null;
+      routeWasAbandoned = true;
+    }
+
     try {
       const memory = await getMemory(snapshot.gameId, snapshot.bot.playerId);
       const tripPlanner = new TripPlanner(brain);
 
-      // JIRA-185: Build a patched memory copy with deliveryCount reflecting
-      // deliveries already executed this turn so the LLM prompt's CURRENT STATE
-      // block shows the correct count. Do NOT call updateMemory() here — the
-      // authoritative write remains in AIStrategyEngine.ts at turn-end (R4).
-      //
-      // JIRA-210A: Patch activeRoute into replanMemory from the post-advance parameter.
-      // When the just-completed delivery was the route's last stop, currentStopIndex equals
-      // stops.length → set null so CURRENT PLAN renders "(no current plan in flight)".
-      // Otherwise, pass the post-advance route through so remaining stops are visible.
-      const postDeliveryRoute = activeRoute.currentStopIndex < activeRoute.stops.length
-        ? activeRoute    // route still has remaining stops — show them in CURRENT PLAN
-        : null;          // route fully completed — render "(no current plan in flight)"
       const replanMemory: BotMemoryState = {
         ...memory,
         deliveryCount: (memory.deliveryCount ?? 0) + deliveriesThisTurn,
@@ -178,6 +205,7 @@ export class PostDeliveryReplanner {
           replanUserPrompt,
           pendingUpgradeAction,
           upgradeSuppressionReason,
+          routeWasAbandoned: routeWasAbandoned || undefined, // JIRA-233: propagate impossibility signal
         };
       }
 
@@ -194,6 +222,7 @@ export class PostDeliveryReplanner {
           replanLlmLog,
           replanSystemPrompt,
           replanUserPrompt,
+          routeWasAbandoned: routeWasAbandoned || undefined,
         };
       }
 
@@ -207,6 +236,7 @@ export class PostDeliveryReplanner {
         replanLlmLog,
         replanSystemPrompt,
         replanUserPrompt,
+        routeWasAbandoned: routeWasAbandoned || undefined,
       };
     } catch (err) {
       // Sub-path 3: TripPlanner threw
@@ -216,6 +246,7 @@ export class PostDeliveryReplanner {
       return {
         route: skipped,
         moveTargetInvalidated: true, // JIRA-194: route shape replaced — clear stale move target
+        routeWasAbandoned: routeWasAbandoned || undefined,
       };
     }
   }

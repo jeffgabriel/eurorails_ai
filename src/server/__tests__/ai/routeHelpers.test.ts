@@ -6,7 +6,7 @@
  * - resolveBuildTarget: route-based targets, victory build override, null (all on-network)
  */
 
-import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState, isDeliveryComplete } from '../../services/ai/routeHelpers';
+import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState, isDeliveryComplete, isRouteImpossible } from '../../services/ai/routeHelpers';
 import { GameContext, RouteStop, StrategicRoute, TrainType, WorldSnapshot, TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1005,5 +1005,123 @@ describe('resolveBuildTarget — JIRA-165 capital allocation gate', () => {
     expect(result).not.toBeNull();
     expect(result!.isVictoryBuild).toBe(true);
     expect(result!.targetCity).toBe('Roma');
+  });
+});
+
+// ── isRouteImpossible (JIRA-233 BE-002, AC2, AC3) ─────────────────────────
+
+/** Helper: create a StrategicRoute with explicit stops + currentStopIndex for isRouteImpossible tests */
+function makeImpRoute(stops: RouteStop[], currentStopIndex = 0): StrategicRoute {
+  return {
+    stops,
+    currentStopIndex,
+    phase: 'travel',
+    createdAtTurn: 1,
+    reasoning: 'test route',
+  };
+}
+
+describe('isRouteImpossible — AC2: baseline cases (R3)', () => {
+  it('empty remaining slice (currentStopIndex === stops.length) → false (route done, not impossible)', () => {
+    const stops = [makeDeliverStop('Copper', 'Madrid', 1)];
+    const route = makeImpRoute(stops, 1); // past last stop
+    const ctx = makeContext({ loads: [] });
+    expect(isRouteImpossible(route, ctx)).toBe(false);
+  });
+
+  it('next stop is pickup → false (pickups are always achievable)', () => {
+    const stops = [makePickupStop('Copper', 'Warsaw'), makeDeliverStop('Copper', 'Madrid', 1)];
+    const route = makeImpRoute(stops, 0); // next stop is pickup
+    const ctx = makeContext({ loads: [] });
+    expect(isRouteImpossible(route, ctx)).toBe(false);
+  });
+
+  it('next stop is deliver with required load in context.loads → false', () => {
+    const stops = [makeDeliverStop('Copper', 'Madrid', 1)];
+    const route = makeImpRoute(stops, 0);
+    const ctx = makeContext({ loads: ['Copper'] }); // Copper in cargo
+    expect(isRouteImpossible(route, ctx)).toBe(false);
+  });
+
+  it('next stop is deliver, required load NOT in cargo, but remaining pickup exists → false', () => {
+    const stops = [
+      makeDeliverStop('Copper', 'Madrid', 1),
+      makePickupStop('Copper', 'Beograd'), // future pickup in route
+    ];
+    const route = makeImpRoute(stops, 0);
+    const ctx = makeContext({ loads: [] }); // no Copper yet, but pickup is coming
+    expect(isRouteImpossible(route, ctx)).toBe(false);
+  });
+
+  it('next stop is deliver, required load NOT in cargo, no remaining pickup → true (impossible)', () => {
+    const stops = [makeDeliverStop('Copper', 'Madrid', 1)];
+    const route = makeImpRoute(stops, 0);
+    const ctx = makeContext({ loads: [] }); // no Copper, no pickup stop
+    expect(isRouteImpossible(route, ctx)).toBe(true);
+  });
+
+  it('route is null → false (fail-safe)', () => {
+    // TypeScript guard — test null safety
+    expect(isRouteImpossible(null as unknown as StrategicRoute, makeContext())).toBe(false);
+  });
+
+  it('context.loads missing → false (fail-safe)', () => {
+    const stops = [makeDeliverStop('Copper', 'Madrid', 1)];
+    const route = makeImpRoute(stops, 0);
+    const ctx = makeContext({ loads: undefined as unknown as string[] });
+    expect(isRouteImpossible(route, ctx)).toBe(false);
+  });
+});
+
+describe('isRouteImpossible — AC3: multi-instance edge case', () => {
+  it('route has two deliver:Copper, bot carries 1 Copper, no pickup-Copper — second deliver is impossible when idx is on second', () => {
+    // Route: deliver:Copper@Madrid, deliver:Copper@Lisbon (both carry-only, no pickups)
+    // Bot carries 1 Copper. First deliver is achievable (cargo covers it).
+    // When currentStopIndex is on second deliver:Copper (after first was done),
+    // cargo is empty (consumed by first) and no remaining pickup → impossible.
+    const stops = [
+      makeDeliverStop('Copper', 'Madrid', 1),
+      makeDeliverStop('Copper', 'Lisbon', 2),
+    ];
+
+    // idx=0: 1 Copper in cargo, 2 deliver:Copper demands, 0 pickups
+    // totalAvailable=1 < deliverDemandCount=2 → impossible because 1 < 2
+    const routeAtFirst = makeImpRoute(stops, 0);
+    const ctxWith1Copper = makeContext({ loads: ['Copper'] });
+    // At idx=0: 1 available, 2 needed — SHOULD be impossible
+    expect(isRouteImpossible(routeAtFirst, ctxWith1Copper)).toBe(true);
+
+    // idx=1: 0 Copper in cargo (first was delivered), 1 deliver:Copper remaining, 0 pickups
+    // totalAvailable=0 < deliverDemandCount=1 → impossible
+    const routeAtSecond = makeImpRoute(stops, 1);
+    const ctxEmpty = makeContext({ loads: [] });
+    expect(isRouteImpossible(routeAtSecond, ctxEmpty)).toBe(true);
+  });
+
+  it('route has two deliver:Copper, bot carries 2 Copper, no pickup — both achievable, not impossible', () => {
+    const stops = [
+      makeDeliverStop('Copper', 'Madrid', 1),
+      makeDeliverStop('Copper', 'Lisbon', 2),
+    ];
+    const route = makeImpRoute(stops, 0);
+    const ctx = makeContext({ loads: ['Copper', 'Copper'] }); // 2 Copper carried
+    // totalAvailable=2, deliverDemandCount=2 → 2 >= 2 → not impossible
+    expect(isRouteImpossible(route, ctx)).toBe(false);
+  });
+
+  it('route: deliver:Coal→deliver:Copper, bot carries Coal only, no Copper pickup — Coal stop ok but Copper impossible', () => {
+    const stops = [
+      makeDeliverStop('Coal', 'Paris', 1),
+      makeDeliverStop('Copper', 'Madrid', 2),
+    ];
+    // At idx=0 (deliver:Coal): totalAvailable(Coal)=1, deliverCount(Coal)=1 → ok, not impossible
+    const routeAtCoal = makeImpRoute(stops, 0);
+    const ctxCoal = makeContext({ loads: ['Coal'] });
+    expect(isRouteImpossible(routeAtCoal, ctxCoal)).toBe(false);
+
+    // At idx=1 (deliver:Copper): totalAvailable(Copper)=0, deliverCount(Copper)=1 → impossible
+    const routeAtCopper = makeImpRoute(stops, 1);
+    const ctxEmpty = makeContext({ loads: [] }); // Coal was delivered
+    expect(isRouteImpossible(routeAtCopper, ctxEmpty)).toBe(true);
   });
 });

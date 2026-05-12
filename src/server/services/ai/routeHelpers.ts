@@ -237,6 +237,65 @@ export function isDeliveryComplete(stop: RouteStop, context: GameContext): boole
 }
 
 /**
+ * Detect when the active route has become impossible to complete from the current
+ * cargo + remaining pickup stops (JIRA-233, R3).
+ *
+ * Returns `true` only when the route's NEXT UNFINISHED stop is a `deliver` action
+ * and the required load is NEITHER in `context.loads` NOR reachable via a remaining
+ * `pickup` stop in the route. Returns `false` for all undecidable or safe cases
+ * (fail-safe: prefer false to avoid phantom abandonments).
+ *
+ * Multi-instance accounting (AC3): for routes with N deliver:X stops, the helper
+ * checks that the available Copper-count (cargo + future pickups) is enough to
+ * satisfy ALL deliver stops up to and including the current one. If the route has
+ * already consumed the only Copper instance at an earlier deliver stop, the second
+ * deliver:Copper is impossible.
+ *
+ * @param route   Active route with currentStopIndex pointing at the next stop to execute.
+ * @param context Current game context — `context.loads` is the authoritative cargo list.
+ * @returns true  if the next deliver stop cannot be satisfied; false otherwise.
+ */
+export function isRouteImpossible(route: StrategicRoute, context: GameContext): boolean {
+  // Edge guard: no route or missing stops
+  if (!route || !route.stops || !context?.loads) return false;
+
+  const remainingStops = route.stops.slice(route.currentStopIndex);
+
+  // Empty slice → route is done (not impossible)
+  if (remainingStops.length === 0) return false;
+
+  const nextStop = remainingStops[0];
+
+  // Only deliver stops can be cargo-impossible; pickups are always achievable
+  if (nextStop.action !== 'deliver') return false;
+
+  const requiredLoad = nextStop.loadType;
+
+  // No loadType on the stop → fail-safe false (can't determine impossibility)
+  if (!requiredLoad) return false;
+
+  // Count available Copper-equivalent instances across cargo + future pickup stops
+  // (multi-instance AC3): we need enough to satisfy ALL deliver:requiredLoad stops
+  // in the remaining slice INCLUDING the current one.
+  const cargoCount = context.loads.filter(l => l === requiredLoad).length;
+  const futurePickupCount = remainingStops.filter(
+    s => s.action === 'pickup' && s.loadType === requiredLoad,
+  ).length;
+  const totalAvailable = cargoCount + futurePickupCount;
+
+  // Count how many deliver:requiredLoad stops exist in the remaining slice
+  const deliverDemandCount = remainingStops.filter(
+    s => s.action === 'deliver' && s.loadType === requiredLoad,
+  ).length;
+
+  // If we have enough to cover all deliver stops, the route is not impossible
+  if (totalAvailable >= deliverDemandCount) return false;
+
+  // Available < demand → impossible
+  return true;
+}
+
+/**
  * Apply the effect of a successfully-executed route stop to the planner's working state.
  *
  * This is the single source of truth for load-state mutation after a stop is executed.

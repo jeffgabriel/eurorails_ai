@@ -111,6 +111,8 @@ export class MovementPhasePlanner {
     // "last non-null action wins" — a later null does NOT clobber a prior non-null.
     let pendingUpgradeAction: TurnPlanUpgradeTrain | null | undefined;
     let upgradeSuppressionReason: string | null | undefined;
+    // JIRA-233: Track route abandonment from impossibility check in PostDeliveryReplanner.
+    let routeAbandonedByImpossibility = false;
 
     // ── Phase A: Movement loop ────────────────────────────────────────────
     let loopIter = 0;
@@ -333,6 +335,10 @@ export class MovementPhasePlanner {
           if (replanResult.moveTargetInvalidated) {
             lastMoveTargetCity = null; // JIRA-194: clear stale move target
           }
+          // JIRA-233: propagate route abandonment from impossibility check
+          if (replanResult.routeWasAbandoned) {
+            routeAbandonedByImpossibility = true;
+          }
           if (replanResult.replanLlmLog) replanLlmLog = replanResult.replanLlmLog;
           if (replanResult.replanSystemPrompt) replanSystemPrompt = replanResult.replanSystemPrompt;
           if (replanResult.replanUserPrompt) replanUserPrompt = replanResult.replanUserPrompt;
@@ -518,6 +524,12 @@ export class MovementPhasePlanner {
       console.log(`${tag} Route complete after movement loop`);
       trace.a2.terminationReason = 'route_complete';
       return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, true, false, replanLlmLog, replanSystemPrompt, replanUserPrompt, pendingUpgradeAction, upgradeSuppressionReason);
+    }
+
+    // JIRA-233: surface route abandonment from impossibility check
+    if (routeAbandonedByImpossibility) {
+      trace.a2.terminationReason = 'route_impossible';
+      return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, false, true, replanLlmLog, replanSystemPrompt, replanUserPrompt, pendingUpgradeAction, upgradeSuppressionReason);
     }
 
     return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, false, false, replanLlmLog, replanSystemPrompt, replanUserPrompt, pendingUpgradeAction, upgradeSuppressionReason);
