@@ -695,7 +695,7 @@ function computeSingleSupplyDemandContext(
   return result;
 }
 
-function computeBestDemandContext(
+export function computeBestDemandContext(
   cardIndex: number,
   demand: { city: string; loadType: string; payment: number },
   snapshot: WorldSnapshot,

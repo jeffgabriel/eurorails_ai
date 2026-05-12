@@ -603,6 +603,80 @@ describe('cheapPrune', () => {
   });
 });
 
+// ── cheapPrune AC9: graph-aware buildCost survives high-hex-distance prune ──
+
+describe('cheapPrune — AC9: graph-aware cost keeps high-hex-distance / low-build-cost candidate', () => {
+  const defaultOpts = {
+    ocpt: OCPT,
+    pruneMaxTurns: PRUNE_MAX_TURNS,
+    pruneMaxBuildM: PRUNE_MAX_BUILD_M,
+    hopAvgCostM: HOP_AVG_COST_M,
+  };
+
+  beforeEach(() => {
+    mockEstimateGraphPathCost.mockReset();
+  });
+
+  it('AC9: 3-stop candidate with hex build > 130M but graph buildCost=30M → keep: true', () => {
+    /**
+     * Pre-change (hex-distance): candidate spans ~100 hops × 1.3 = 130M → boundary prune.
+     * Post-change (graph-aware): route follows existing track, buildCost=10M per leg.
+     *
+     * Candidate stops: SupplyCity → DeliveryCity → CityA (3 stops from startPos)
+     * Leg 1 (startPos → SupplyCity):  buildCost=10, estimatedTurns=1
+     * Leg 2 (SupplyCity → DeliveryCity): buildCost=10, estimatedTurns=1
+     * Leg 3 (DeliveryCity → CityA):   buildCost=10, estimatedTurns=1
+     * Total: estBuild=30, estTurns=3 → keep: true (both ≤ thresholds)
+     */
+    mockEstimateGraphPathCost
+      .mockReturnValueOnce({ reachable: true, buildCost: 10, pathLength: 8, estimatedTurns: 1 })
+      .mockReturnValueOnce({ reachable: true, buildCost: 10, pathLength: 8, estimatedTurns: 1 })
+      .mockReturnValueOnce({ reachable: true, buildCost: 10, pathLength: 8, estimatedTurns: 1 });
+
+    const candidate = {
+      id: 'ac9-test',
+      rows: [],
+      stops: [
+        { action: 'pickup' as const, loadType: 'Coal', city: 'SupplyCity' },
+        { action: 'deliver' as const, loadType: 'Coal', city: 'DeliveryCity' },
+        { action: 'pickup' as const, loadType: 'Iron', city: 'CityA' },
+      ],
+      payout: 50,
+    };
+
+    const result = cheapPrune(candidate, { row: 5, col: 5 }, 9, defaultOpts, makeSnapshot());
+    expect(result.keep).toBe(true);
+    expect(result.estBuild).toBe(30);
+    expect(result.estTurns).toBe(3);
+  });
+
+  it('AC9 contrast: same candidate with high build cost would have been pruned by hex-distance', () => {
+    /**
+     * This test documents the pre-change behavior for contrast.
+     * With mock returning buildCost=50 per leg, total=150 > PRUNE_MAX_BUILD_M(130) → pruned.
+     */
+    mockEstimateGraphPathCost
+      .mockReturnValueOnce({ reachable: true, buildCost: 50, pathLength: 8, estimatedTurns: 1 })
+      .mockReturnValueOnce({ reachable: true, buildCost: 50, pathLength: 8, estimatedTurns: 1 })
+      .mockReturnValueOnce({ reachable: true, buildCost: 50, pathLength: 8, estimatedTurns: 1 });
+
+    const candidate = {
+      id: 'ac9-contrast',
+      rows: [],
+      stops: [
+        { action: 'pickup' as const, loadType: 'Coal', city: 'SupplyCity' },
+        { action: 'deliver' as const, loadType: 'Coal', city: 'DeliveryCity' },
+        { action: 'pickup' as const, loadType: 'Iron', city: 'CityA' },
+      ],
+      payout: 50,
+    };
+
+    const result = cheapPrune(candidate, { row: 5, col: 5 }, 9, defaultOpts, makeSnapshot());
+    expect(result.keep).toBe(false);
+    expect(result.estBuild).toBe(150);
+  });
+});
+
 // ── scoreCandidate ─────────────────────────────────────────────────────
 
 describe('scoreCandidate', () => {
