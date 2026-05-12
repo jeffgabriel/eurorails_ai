@@ -1430,3 +1430,200 @@ describe('planTripDeterministic — aggregate two-trip look-ahead (JIRA-229)', (
     expect(r1.route?.stops).toEqual(r2.route?.stops);
   });
 });
+
+// ── JIRA-230 TEST-001: t46 regression (AC10, AC11) ────────────────────
+// Reproduces S3's t46 hand in game ad976b38-f43e-420d-bd57-775549f5a23e.
+// Bot at Budapest, fast_freight, cash=45M. Demand cards include:
+//   Bauxite → Berlin (payout 14), DemandContext.supplyCity = 'Budapest'
+//   Labor   → Holland (payout 23), DemandContext.supplyCity = 'Sarajevo' (legacy default)
+//   (filler card for 3-card hand)
+// LoadService returns Labor supplies: [Beograd, Sarajevo, Zagreb].
+// estimateGraphPathCost mocked: Budapest↔Beograd/Sarajevo → buildCost=0 (existing track),
+//                                Budapest↔Zagreb → buildCost=25 (new track needed).
+// Expected: top-1 picks pair with Labor pickup at Beograd (closest on existing track).
+// AC11: reasoning contains "Supply chosen: Labor via Beograd (DemandContext default: Sarajevo)"
+
+describe('planTripDeterministic — JIRA-230 t46 regression (AC10, AC11)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (mockGrid as any).clear();
+
+    // Add cities needed for the t46 scenario
+    addCity('Budapest', 40, 59);
+    addCity('Berlin', 28, 55);
+    addCity('Holland', 22, 46);
+    addCity('Beograd', 52, 64);
+    addCity('Sarajevo', 54, 60);
+    addCity('Zagreb', 46, 56);
+    addCity('SupplyCity', 3, 3);
+    addCity('DeliveryCity', 7, 7);
+
+    // LoadService: Labor has 3 supply cities; other loads are single-supply
+    mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+      if (loadType === 'Labor') return ['Beograd', 'Sarajevo', 'Zagreb'];
+      if (loadType === 'Bauxite') return ['Budapest'];
+      return [];
+    });
+
+    // estimateGraphPathCost: Beograd and Sarajevo reachable via existing track
+    // (buildCost=0); Zagreb requires new track (buildCost=25, still reachable).
+    // All other city pairs get a small default cost.
+    mockEstimateGraphPathCost.mockImplementation(
+      (from: unknown, to: unknown, _snapshot: unknown, _speed: unknown) => {
+        const dest = typeof to === 'string' ? to : '';
+        if (dest === 'Zagreb') {
+          return { reachable: true, buildCost: 25, pathLength: 5, estimatedTurns: 1 };
+        }
+        return { reachable: true, buildCost: 0, pathLength: 3, estimatedTurns: 1 };
+      },
+    );
+
+    // simulateTrip: feasible for all candidates; buildCost reflects the mock above.
+    // Beograd-supply pair gets a slightly better score (lower build cost = higher net).
+    mockSimulateTrip.mockImplementation(
+      (startPos: unknown, stops: RouteStop[], _snapshot: unknown) => {
+        const hasZagreb = (stops as RouteStop[]).some((s) => s.city === 'Zagreb');
+        return {
+          turnsToComplete: 4,
+          totalBuildCost: hasZagreb ? 25 : 0,
+          feasible: true,
+          minCashRelative: hasZagreb ? -25 : 0,
+          finalCashRelative: hasZagreb ? -2 : 23,
+        };
+      },
+    );
+  });
+
+  it('AC10: top-1 picks pair with Labor pickup at Beograd (not Sarajevo or Zagreb)', () => {
+    const snapshot = makeSnapshot({
+      position: { row: 40, col: 59 },
+      trainType: 'fast_freight',
+      money: 45,
+    });
+    const demands: DemandContext[] = [
+      // Bauxite: Budapest → Berlin (single supply = Budapest)
+      makeDemand({ cardIndex: 1, loadType: 'Bauxite', supplyCity: 'Budapest', deliveryCity: 'Berlin', payout: 14 }),
+      // Labor: → Holland (legacy DemandContext.supplyCity = Sarajevo)
+      makeDemand({ cardIndex: 2, loadType: 'Labor', supplyCity: 'Sarajevo', deliveryCity: 'Holland', payout: 23 }),
+      // Filler card (3-card hand)
+      makeDemand({ cardIndex: 3, loadType: 'Potatoes', supplyCity: 'SupplyCity', deliveryCity: 'DeliveryCity', payout: 10 }),
+    ];
+
+    const result = planTripDeterministic(
+      snapshot,
+      makeContext(demands, { speed: 12, capacity: 2, trainType: 'fast_freight' }),
+      makeMemory(),
+    );
+
+    expect(result.outcome).toBe('success');
+    const laborPickup = result.route?.stops.find(
+      (s) => s.action === 'pickup' && s.loadType === 'Labor',
+    );
+    expect(laborPickup).toBeDefined();
+    expect(laborPickup?.city).toBe('Beograd');
+  });
+
+  it('AC11: reasoning contains supply-chosen line when Labor supply differs from DemandContext default', () => {
+    const snapshot = makeSnapshot({
+      position: { row: 40, col: 59 },
+      trainType: 'fast_freight',
+      money: 45,
+    });
+    const demands: DemandContext[] = [
+      makeDemand({ cardIndex: 1, loadType: 'Bauxite', supplyCity: 'Budapest', deliveryCity: 'Berlin', payout: 14 }),
+      makeDemand({ cardIndex: 2, loadType: 'Labor', supplyCity: 'Sarajevo', deliveryCity: 'Holland', payout: 23 }),
+      makeDemand({ cardIndex: 3, loadType: 'Potatoes', supplyCity: 'SupplyCity', deliveryCity: 'DeliveryCity', payout: 10 }),
+    ];
+
+    const result = planTripDeterministic(
+      snapshot,
+      makeContext(demands, { speed: 12, capacity: 2, trainType: 'fast_freight' }),
+      makeMemory(),
+    );
+
+    expect(result.outcome).toBe('success');
+    expect(result.reasoning).toContain('Supply chosen: Labor via Beograd (DemandContext default: Sarajevo)');
+  });
+});
+
+// ── JIRA-230 TEST-002: perf budget warning (AC12) ─────────────────────
+
+describe('planTripDeterministic — JIRA-230 perf budget (AC12)', () => {
+  let warnSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (mockGrid as any).clear();
+    addCity('SupplyCity', 3, 3);
+    addCity('DeliveryCity', 7, 7);
+
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    mockGetSourceCitiesForLoad.mockReturnValue([]);
+    mockEstimateGraphPathCost.mockReturnValue({
+      reachable: true, buildCost: 5, pathLength: 4, estimatedTurns: 1,
+    });
+    mockSimulateTrip.mockReturnValue({
+      turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0,
+    });
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('AC12 happy path: small candidate count — reasoning includes Candidates line, no perf-budget warn', () => {
+    const result = planTripDeterministic(
+      makeSnapshot(),
+      makeContext([
+        makeDemand({ cardIndex: 1, loadType: 'Ham', deliveryCity: 'DeliveryCity', payout: 20 }),
+      ]),
+      makeMemory(),
+    );
+    expect(result.outcome).toBe('success');
+    expect(result.reasoning).toMatch(/Candidates: raw=\d+ survivors=\d+ enumerationMs=\d+/);
+    const perfWarnCalls = warnSpy.mock.calls.filter(
+      (args: unknown[]) => typeof args[0] === 'string' && (args[0] as string).includes('perf-budget'),
+    );
+    expect(perfWarnCalls.length).toBe(0);
+  });
+
+  it('AC12 perf-budget warn: console.warn emitted with [perf-budget] when enumerationMs > 200', () => {
+    // Mock Date.now() to simulate slow enumeration (>200ms elapsed).
+    // First call returns t=0 (enumStartMs), second returns t=250 (after enumeration).
+    const originalDateNow = Date.now;
+    let callCount = 0;
+    Date.now = jest.fn(() => {
+      callCount++;
+      // The first Date.now in planTripDeterministic is `startMs` (line ~1042).
+      // The second is `enumStartMs` (before enumerateCandidates).
+      // The third is used for `enumerationMs = Date.now() - enumStartMs`.
+      // We want enumStartMs → 0, and the subtraction call → 250.
+      // Approximate: return 0 for first 2 calls, then 250, then 300 for latencyMs.
+      if (callCount === 1) return 0;    // startMs
+      if (callCount === 2) return 100;  // enumStartMs
+      if (callCount === 3) return 350;  // enumerationMs = 350-100 = 250 > 200
+      return 400;                       // latencyMs
+    });
+
+    const result = planTripDeterministic(
+      makeSnapshot(),
+      makeContext([
+        makeDemand({ cardIndex: 1, loadType: 'Ham', deliveryCity: 'DeliveryCity', payout: 20 }),
+      ]),
+      makeMemory(),
+    );
+
+    // Restore Date.now
+    Date.now = originalDateNow;
+
+    // enumerationMs=250 > 200 → warn fires
+    const perfWarnCalls = warnSpy.mock.calls.filter(
+      (args: unknown[]) => typeof args[0] === 'string' && (args[0] as string).includes('perf-budget'),
+    );
+    expect(perfWarnCalls.length).toBeGreaterThan(0);
+    expect(perfWarnCalls[0][0]).toContain('[perf-budget]');
+    // Reasoning includes Candidates line
+    expect(result.reasoning).toMatch(/Candidates: raw=\d+/);
+  });
+});

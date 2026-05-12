@@ -1242,7 +1242,8 @@ export function planTripDeterministic(
     const reasoning =
       `[deterministic-top-1] All ${allCandidates.length} candidates pruned.\n` +
       `  Discarded by prune: ${prunedByTurns} (turns > ${opts.pruneMaxTurns}) | ${prunedByBuild} (build > ${opts.pruneMaxBuildM}M).\n` +
-      `  Survivors after spatial prune: 0 of ${allCandidates.length} raw.`;
+      `  Survivors after spatial prune: 0 of ${allCandidates.length} raw.\n` +
+      `  Candidates: raw=${rawCount} survivors=0 enumerationMs=${enumerationMs}`;
     return {
       route: null,
       reasoning,
