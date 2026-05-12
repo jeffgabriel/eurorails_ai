@@ -527,6 +527,32 @@ describe('enumerateCandidates', () => {
     // 1 carry + 2 fresh → 1c2f variants
     expect(triples.some((t) => t.id.includes('1c2f'))).toBe(true);
   });
+
+  // ── JIRA-230 AC8: multi-supply load enumeration ──────────────────────
+  it('AC8: hand with Labor (3 supplies) + Iron (2 supplies) emits ≥24 fresh+fresh pair candidates for that pair', () => {
+    // Mock LoadService to return multi-supply lists for Labor and Iron
+    mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+      if (loadType === 'Labor') return ['Beograd', 'Sarajevo', 'Zagreb'];
+      if (loadType === 'Iron') return ['Birmingham', 'Kaliningrad'];
+      return [];
+    });
+    // Mock estimateGraphPathCost: all supplies reachable
+    mockEstimateGraphPathCost.mockReturnValue({
+      reachable: true, buildCost: 5, pathLength: 4, estimatedTurns: 1,
+    });
+    type Row = { loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number; isCarry: boolean };
+    const demands: Row[] = [
+      { loadType: 'Labor', supplyCity: 'Sarajevo', deliveryCity: 'Holland', payout: 23, cardIndex: 1, isCarry: false },
+      { loadType: 'Iron', supplyCity: 'Birmingham', deliveryCity: 'Frankfurt', payout: 18, cardIndex: 2, isCarry: false },
+    ];
+    const candidates = enumerateCandidates(demands, 2, makeSnapshot(), 12);
+    // Labor has 3 supply variants, Iron has 2 → 6 supply combos × 4 fresh+fresh orderings = 24
+    const laborIronPairs = candidates.filter(
+      (c) => c.id.startsWith('pair:') &&
+        (c.id.includes('Labor') || c.id.includes('Iron')),
+    );
+    expect(laborIronPairs.length).toBeGreaterThanOrEqual(24);
+  });
 });
 
 // ── cheapPrune (BE-003: graph-aware) ──────────────────────────────────
