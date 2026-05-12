@@ -33,6 +33,7 @@ import {
   makeKey,
   loadGridPoints,
 } from '../MapTopology';
+import { estimateGraphPathCost } from '../PathCostEstimator';
 
 // ── Geographic region constants ─────────────────────────────────────────────
 
@@ -507,6 +508,13 @@ function computeSingleSupplyDemandContext(
   let optimalStartingCity: string | undefined;
   // JIRA-209: hold cold-start mode throughout initialBuild phase; also covers post-restart (mercy rule) when segments are wiped
   const isColdStart = snapshot.gameStatus === 'initialBuild' || snapshot.bot.existingSegments.length === 0;
+  // Hoist speed so it can be referenced in graph-aware cost calls below
+  const speed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType].speed;
+
+  // Graph-aware leg results for the non-cold-start branch (BE-002)
+  let botToSupply: ReturnType<typeof estimateGraphPathCost> | null = null;
+  let supplyToDelivery: ReturnType<typeof estimateGraphPathCost> | null = null;
+  let nonColdStartLegUnreachable = false;
 
   if (isColdStart && supplyCity && !isLoadOnTrain) {
     const coldStartResult = estimateColdStartRouteCost(supplyCity, deliveryCity, gridPoints);
@@ -518,13 +526,28 @@ function computeSingleSupplyDemandContext(
       estimatedTrackCostToSupply = estimateTrackCost(supplyCity, snapshot.bot.existingSegments, gridPoints);
       estimatedTrackCostToDelivery = estimateTrackCost(deliveryCity, snapshot.bot.existingSegments, gridPoints, supplyCity);
     }
+  } else if (supplyCity && !isLoadOnTrain) {
+    // Non-cold-start: use graph-aware cost for both legs (R3)
+    const botPos = snapshot.bot.position;
+    const fromInput: string | { row: number; col: number } = botPos
+      ? { row: botPos.row, col: botPos.col }
+      : supplyCity; // fallback: treat supply as start if no position
+    botToSupply = estimateGraphPathCost(fromInput, supplyCity, snapshot, speed);
+    supplyToDelivery = estimateGraphPathCost(supplyCity, deliveryCity, snapshot, speed);
+    if (!botToSupply.reachable || !supplyToDelivery.reachable) {
+      nonColdStartLegUnreachable = true;
+    } else {
+      estimatedTrackCostToSupply = botToSupply.buildCost;
+      estimatedTrackCostToDelivery = supplyToDelivery.buildCost;
+    }
   } else {
-    estimatedTrackCostToSupply = isSupplyOnNetwork || !supplyCity || isLoadOnTrain
-      ? 0
-      : estimateTrackCost(supplyCity, snapshot.bot.existingSegments, gridPoints);
-    estimatedTrackCostToDelivery = isDeliveryOnNetwork
-      ? 0
-      : estimateTrackCost(deliveryCity, snapshot.bot.existingSegments, gridPoints);
+    // isLoadOnTrain or !supplyCity: no supply leg needed
+    if (!isLoadOnTrain && !supplyCity) {
+      estimatedTrackCostToDelivery = isDeliveryOnNetwork
+        ? 0
+        : estimateTrackCost(deliveryCity, snapshot.bot.existingSegments, gridPoints);
+    }
+    // isLoadOnTrain: supply cost stays 0, delivery cost stays 0 (handled below)
   }
 
   const isLoadAvailable = isLoadRuntimeAvailable(loadType, snapshot);
@@ -533,7 +556,6 @@ function computeSingleSupplyDemandContext(
   const carriedCount = countCarriedLoads(loadType, snapshot);
 
   const totalTrackCost = estimatedTrackCostToSupply + estimatedTrackCostToDelivery;
-  const speed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType].speed;
   const buildTurns = totalTrackCost > 0 ? Math.ceil(totalTrackCost / 20) : 0;
 
   let travelTurns = 0;
@@ -582,44 +604,11 @@ function computeSingleSupplyDemandContext(
           + (hopSupplyToDelivery < Infinity ? hopSupplyToDelivery : 0);
         if (totalHops > 0) travelTurns = Math.ceil(totalHops / speed);
       }
-    } else if (supplyPoints.length > 0 && deliveryPoints.length > 0) {
-      const botPos = snapshot.bot.position;
-      let hopBotToSupply = 0;
-      if (botPos) {
-        hopBotToSupply = Infinity;
-        for (const sp of supplyPoints) {
-          const d = estimateHopDistance(botPos.row, botPos.col, sp.row, sp.col);
-          if (d >= 0 && d < hopBotToSupply) hopBotToSupply = d;
-        }
-        if (hopBotToSupply === Infinity) {
-          let minEuc = Infinity;
-          for (const sp of supplyPoints) {
-            const d = Math.sqrt((sp.row - botPos.row) ** 2 + (sp.col - botPos.col) ** 2);
-            if (d < minEuc) minEuc = d;
-          }
-          if (minEuc < Infinity) hopBotToSupply = minEuc;
-        }
-        if (hopBotToSupply === Infinity) hopBotToSupply = 0;
+    } else {
+      // Non-cold-start: use graph-aware turn estimates from botToSupply/supplyToDelivery (R3)
+      if (botToSupply !== null && supplyToDelivery !== null) {
+        travelTurns = botToSupply.estimatedTurns + supplyToDelivery.estimatedTurns;
       }
-      let hopSupplyToDelivery = Infinity;
-      for (const sp of supplyPoints) {
-        for (const dp of deliveryPoints) {
-          const d = estimateHopDistance(sp.row, sp.col, dp.row, dp.col);
-          if (d >= 0 && d < hopSupplyToDelivery) hopSupplyToDelivery = d;
-        }
-      }
-      if (hopSupplyToDelivery === Infinity) {
-        let minEuc = Infinity;
-        for (const sp of supplyPoints) {
-          for (const dp of deliveryPoints) {
-            const d = Math.sqrt((dp.row - sp.row) ** 2 + (dp.col - sp.col) ** 2);
-            if (d < minEuc) minEuc = d;
-          }
-        }
-        if (minEuc < Infinity) hopSupplyToDelivery = minEuc;
-      }
-      const totalHops = hopBotToSupply + (hopSupplyToDelivery < Infinity ? hopSupplyToDelivery : 0);
-      if (totalHops > 0) travelTurns = Math.ceil(totalHops / speed);
     }
   } else if (isLoadOnTrain && snapshot.bot.position) {
     const botPos = snapshot.bot.position as { row: number; col: number };
@@ -643,7 +632,12 @@ function computeSingleSupplyDemandContext(
   }
 
   const ferryCrossings = ferryRequired ? countFerryCrossings(supplyCity, deliveryCity, gridPoints) : 0;
-  const estimatedTurns = buildTurns + travelTurns + (ferryCrossings * 2) + 1;
+  // In non-cold-start branch, estimateGraphPathCost already accounts for ferry overhead
+  // via pathLength — do NOT double-count with ferryCrossings * 2 (ADR-3).
+  // Cold-start branch uses estimateHopDistance which does NOT include ferry overhead,
+  // so ferryCrossings * 2 is still applied there.
+  const ferryAdd = isColdStart ? ferryCrossings * 2 : 0;
+  const estimatedTurns = buildTurns + travelTurns + ferryAdd + 1;
 
   // Build affordability
   let projectedIncome = 0;
@@ -663,7 +657,7 @@ function computeSingleSupplyDemandContext(
   const demandScore = scoreDemand(demand.payment, totalTrackCost, estimatedTurns, isAffordable, projectedFunds);
   const efficiencyPerTurn = (demand.payment - totalTrackCost) / estimatedTurns;
 
-  return {
+  const result = {
     cardIndex,
     loadType,
     supplyCity: supplyCity ?? null,
@@ -689,6 +683,16 @@ function computeSingleSupplyDemandContext(
     projectedFundsAfterDelivery: projectedFunds,
     optimalStartingCity,
   };
+
+  // Mark unreachable when non-cold-start graph path couldn't reach supply or delivery (R3)
+  if (nonColdStartLegUnreachable) {
+    result.supplyCity = 'NoSupply';
+    result.estimatedTurns = 99;
+    result.demandScore = -999;
+    result.efficiencyPerTurn = -999;
+  }
+
+  return result;
 }
 
 function computeBestDemandContext(
