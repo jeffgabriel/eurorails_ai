@@ -11,6 +11,22 @@ import * as path from 'path';
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 
+// Mock LoadService so getSupplyVariants resolves to the row's own supplyCity
+// by default. Individual tests that need multi-supply behavior override
+// mockGetSourceCitiesForLoad per-call.
+const mockGetSourceCitiesForLoad = jest.fn((loadType: string) => {
+  // Default: treat each load as single-supply so existing tests are unaffected.
+  // The actual supplyCity comes from the row; return it if known, else empty.
+  return [] as string[];
+});
+jest.mock('../../services/loadService', () => ({
+  LoadService: {
+    getInstance: jest.fn(() => ({
+      getSourceCitiesForLoad: mockGetSourceCitiesForLoad,
+    })),
+  },
+}));
+
 // Mock RouteDetourEstimator to control simulateTrip output per test
 jest.mock('../../services/ai/RouteDetourEstimator', () => ({
   simulateTrip: jest.fn(),
@@ -432,6 +448,8 @@ describe('enumerateCandidates', () => {
   });
 
   // ── JIRA-228: fresh-fresh backhaul variants ─────────────────────────
+  // Note: JIRA-230 adds supply suffix to IDs (e.g. ":AB-sup:Wroclaw-Valencia").
+  // Tests now use .includes() to match the variant token within the full ID.
   it('JIRA-228: fresh-fresh pair emits four variants (:AB, :BA, :A-then-B, :B-then-A)', () => {
     type Row = { loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number; isCarry: boolean };
     const demands: Row[] = [
@@ -442,8 +460,11 @@ describe('enumerateCandidates', () => {
     const pairs = candidates.filter((c) => c.id.startsWith('pair:'));
     expect(pairs.length).toBe(4);
 
-    const suffixes = pairs.map((p) => p.id.split(':').pop()).sort();
-    expect(suffixes).toEqual(['A-then-B', 'AB', 'B-then-A', 'BA']);
+    // Extract variant token: the segment between the second ':' and '-sup:' suffix
+    // ID format: pair:<cardA>-<loadA>+<cardB>-<loadB>:<variant>-sup:<supA>-<supB>
+    const getVariant = (id: string) => id.split('-sup:')[0].split(':').at(-1) ?? '';
+    const variants = pairs.map((p) => getVariant(p.id)).sort();
+    expect(variants).toEqual(['A-then-B', 'AB', 'B-then-A', 'BA']);
   });
 
   it('JIRA-228: :A-then-B variant has stops [pickA, delA, pickB, delB]', () => {
@@ -453,7 +474,7 @@ describe('enumerateCandidates', () => {
       { loadType: 'Oranges', supplyCity: 'Valencia', deliveryCity: 'Manchester', payout: 40, cardIndex: 122, isCarry: false },
     ];
     const candidates = enumerateCandidates(demands, 2);
-    const aThenB = candidates.find((c) => c.id.endsWith(':A-then-B'));
+    const aThenB = candidates.find((c) => c.id.includes(':A-then-B'));
     expect(aThenB).toBeDefined();
     expect(aThenB!.stops.map((s) => `${s.action}:${s.loadType}@${s.city}`)).toEqual([
       'pickup:Copper@Wroclaw',
@@ -470,7 +491,7 @@ describe('enumerateCandidates', () => {
       { loadType: 'Oranges', supplyCity: 'Valencia', deliveryCity: 'Manchester', payout: 40, cardIndex: 122, isCarry: false },
     ];
     const candidates = enumerateCandidates(demands, 2);
-    const bThenA = candidates.find((c) => c.id.endsWith(':B-then-A'));
+    const bThenA = candidates.find((c) => c.id.includes(':B-then-A'));
     expect(bThenA).toBeDefined();
     expect(bThenA!.stops.map((s) => `${s.action}:${s.loadType}@${s.city}`)).toEqual([
       'pickup:Oranges@Valencia',
@@ -489,7 +510,9 @@ describe('enumerateCandidates', () => {
     const candidates = enumerateCandidates(demands, 2);
     const pairs = candidates.filter((c) => c.id.startsWith('pair:'));
     expect(pairs.length).toBe(3);
-    const suffixes = pairs.map((p) => p.id.split(':').pop()).sort();
+    // Extract variant token from ID (JIRA-230: IDs now include '-sup:' suffix)
+    const getVariant = (id: string) => id.split('-sup:')[0].split(':').at(-1) ?? '';
+    const suffixes = pairs.map((p) => getVariant(p.id)).sort();
     expect(suffixes).toEqual(['cA-pB', 'delAfirst', 'pB-cA']);
   });
 

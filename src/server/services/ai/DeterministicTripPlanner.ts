@@ -20,6 +20,7 @@ import { simulateTrip } from './RouteDetourEstimator';
 import { hexDistance, loadGridPoints } from './MapTopology';
 import type { GridPointData } from './MapTopology';
 import { estimateGraphPathCost } from './PathCostEstimator';
+import { LoadService } from '../loadService';
 import {
   WorldSnapshot,
   GameContext,
@@ -322,115 +323,165 @@ function normalizeRows(
   }));
 }
 
-// ── Candidate enumeration (R4) ─────────────────────────────────────────
+// ── Supply variant expansion (JIRA-230 BE-001) ─────────────────────────
 
-function genSingles(rows: NormalizedDemandRow[]): Candidate[] {
-  return rows.map((r) => {
-    const stops: RouteStop[] = r.isCarry
-      ? [
-          {
-            action: 'deliver',
-            loadType: r.loadType,
-            city: r.deliveryCity,
-            demandCardId: r.cardIndex,
-            payment: r.payout,
-          },
-        ]
-      : [
-          { action: 'pickup', loadType: r.loadType, city: r.supplyCity! },
-          {
-            action: 'deliver',
-            loadType: r.loadType,
-            city: r.deliveryCity,
-            demandCardId: r.cardIndex,
-            payment: r.payout,
-          },
-        ];
-    return {
-      id: `${r.isCarry ? 'carry' : 'single'}:${r.cardIndex}:${r.loadType}`,
-      rows: [r],
-      stops,
-      payout: r.payout,
-    };
-  });
+/**
+ * For a single normalized demand row, return one row per valid supply city.
+ * - Carry rows (load already on train): return single row with supplyCity=null.
+ * - Empty supply list (guard): return single row with supplyCity=null.
+ * - Otherwise: one row per source city, filtering unreachable variants.
+ */
+function getSupplyVariants(
+  row: NormalizedDemandRow,
+  snapshot: WorldSnapshot,
+  speed: number,
+): NormalizedDemandRow[] {
+  if (row.isCarry) {
+    return [{ ...row, supplyCity: null }];
+  }
+  const sourceCities = LoadService.getInstance().getSourceCitiesForLoad(row.loadType);
+  if (!sourceCities || sourceCities.length === 0) {
+    // No supply data from LoadService — fall back to the row's pre-computed
+    // supplyCity (preserves single-supply behavior for legacy/test contexts).
+    return [row];
+  }
+  const botPos = snapshot.bot.position ?? { row: 0, col: 0 };
+  const variants: NormalizedDemandRow[] = [];
+  for (const city of sourceCities) {
+    const cost = estimateGraphPathCost(botPos, city, snapshot, speed);
+    if (!cost.reachable) continue;
+    variants.push({ ...row, supplyCity: city });
+  }
+  // If all were filtered as unreachable, fall back to original row
+  if (variants.length === 0) {
+    return [row];
+  }
+  return variants;
 }
 
-function genPairs(rows: NormalizedDemandRow[], cap: number): Candidate[] {
+// ── Candidate enumeration (R4) ─────────────────────────────────────────
+
+function genSingles(rows: NormalizedDemandRow[], snapshot: WorldSnapshot, speed: number): Candidate[] {
+  const candidates: Candidate[] = [];
+  for (const r of rows) {
+    const variants = getSupplyVariants(r, snapshot, speed);
+    for (const variant of variants) {
+      const stops: RouteStop[] = variant.isCarry
+        ? [
+            {
+              action: 'deliver',
+              loadType: variant.loadType,
+              city: variant.deliveryCity,
+              demandCardId: variant.cardIndex,
+              payment: variant.payout,
+            },
+          ]
+        : [
+            { action: 'pickup', loadType: variant.loadType, city: variant.supplyCity! },
+            {
+              action: 'deliver',
+              loadType: variant.loadType,
+              city: variant.deliveryCity,
+              demandCardId: variant.cardIndex,
+              payment: variant.payout,
+            },
+          ];
+      const supSuffix = variant.isCarry ? '' : `-sup:${variant.supplyCity}`;
+      candidates.push({
+        id: `${variant.isCarry ? 'carry' : 'single'}:${variant.cardIndex}:${variant.loadType}${supSuffix}`,
+        rows: [variant],
+        stops,
+        payout: variant.payout,
+      });
+    }
+  }
+  return candidates;
+}
+
+function genPairs(rows: NormalizedDemandRow[], cap: number, snapshot: WorldSnapshot, speed: number): Candidate[] {
   if (cap < 2) return [];
   const pairs: Candidate[] = [];
+  const variantsByRow = rows.map((r) => getSupplyVariants(r, snapshot, speed));
   for (let i = 0; i < rows.length; i++) {
     for (let j = i + 1; j < rows.length; j++) {
-      const a = rows[i], b = rows[j];
-      if (a.cardIndex === b.cardIndex) continue;
-      const aCarry = a.isCarry, bCarry = b.isCarry;
-      const delA: RouteStop = {
-        action: 'deliver',
-        loadType: a.loadType,
-        city: a.deliveryCity,
-        demandCardId: a.cardIndex,
-        payment: a.payout,
-      };
-      const delB: RouteStop = {
-        action: 'deliver',
-        loadType: b.loadType,
-        city: b.deliveryCity,
-        demandCardId: b.cardIndex,
-        payment: b.payout,
-      };
-      const pickA: RouteStop = { action: 'pickup', loadType: a.loadType, city: a.supplyCity! };
-      const pickB: RouteStop = { action: 'pickup', loadType: b.loadType, city: b.supplyCity! };
+      if (rows[i].cardIndex === rows[j].cardIndex) continue;
+      for (const a of variantsByRow[i]) {
+        for (const b of variantsByRow[j]) {
+          const aCarry = a.isCarry, bCarry = b.isCarry;
+          const delA: RouteStop = {
+            action: 'deliver',
+            loadType: a.loadType,
+            city: a.deliveryCity,
+            demandCardId: a.cardIndex,
+            payment: a.payout,
+          };
+          const delB: RouteStop = {
+            action: 'deliver',
+            loadType: b.loadType,
+            city: b.deliveryCity,
+            demandCardId: b.cardIndex,
+            payment: b.payout,
+          };
+          const pickA: RouteStop = { action: 'pickup', loadType: a.loadType, city: a.supplyCity! };
+          const pickB: RouteStop = { action: 'pickup', loadType: b.loadType, city: b.supplyCity! };
 
-      const variants: { suffix: string; stops: RouteStop[] }[] = [];
-      if (aCarry && bCarry) {
-        variants.push({ suffix: 'cAcB', stops: [delA, delB] });
-        variants.push({ suffix: 'cBcA', stops: [delB, delA] });
-      } else if (aCarry) {
-        variants.push({ suffix: 'cA-pB', stops: [pickB, delA, delB] });
-        variants.push({ suffix: 'pB-cA', stops: [pickB, delB, delA] });
-        variants.push({ suffix: 'delAfirst', stops: [delA, pickB, delB] });
-      } else if (bCarry) {
-        variants.push({ suffix: 'cB-pA', stops: [pickA, delB, delA] });
-        variants.push({ suffix: 'pA-cB', stops: [pickA, delA, delB] });
-        variants.push({ suffix: 'delBfirst', stops: [delB, pickA, delA] });
-      } else {
-        // Both fresh: enumerate four geometrically-distinct orderings.
-        // :AB / :BA pickup both, then deliver — minimal capacity usage.
-        // :A-then-B / :B-then-A interleave — drop one before grabbing the
-        // other. Wins when the second supply lies past the first delivery
-        // (e.g., Wroclaw→Madrid then Valencia→Manchester routes through
-        // Madrid before Valencia, so deliver Copper before picking up
-        // Oranges). JIRA-228.
-        variants.push({ suffix: 'AB',       stops: [pickA, pickB, delA, delB] });
-        variants.push({ suffix: 'BA',       stops: [pickA, pickB, delB, delA] });
-        variants.push({ suffix: 'A-then-B', stops: [pickA, delA, pickB, delB] });
-        variants.push({ suffix: 'B-then-A', stops: [pickB, delB, pickA, delA] });
-      }
-      for (const v of variants) {
-        pairs.push({
-          id: `pair:${a.cardIndex}-${a.loadType}+${b.cardIndex}-${b.loadType}:${v.suffix}`,
-          rows: [a, b],
-          stops: v.stops,
-          payout: a.payout + b.payout,
-        });
+          const variants: { suffix: string; stops: RouteStop[] }[] = [];
+          if (aCarry && bCarry) {
+            variants.push({ suffix: 'cAcB', stops: [delA, delB] });
+            variants.push({ suffix: 'cBcA', stops: [delB, delA] });
+          } else if (aCarry) {
+            variants.push({ suffix: 'cA-pB', stops: [pickB, delA, delB] });
+            variants.push({ suffix: 'pB-cA', stops: [pickB, delB, delA] });
+            variants.push({ suffix: 'delAfirst', stops: [delA, pickB, delB] });
+          } else if (bCarry) {
+            variants.push({ suffix: 'cB-pA', stops: [pickA, delB, delA] });
+            variants.push({ suffix: 'pA-cB', stops: [pickA, delA, delB] });
+            variants.push({ suffix: 'delBfirst', stops: [delB, pickA, delA] });
+          } else {
+            // Both fresh: enumerate four geometrically-distinct orderings.
+            // :AB / :BA pickup both, then deliver — minimal capacity usage.
+            // :A-then-B / :B-then-A interleave — drop one before grabbing the
+            // other. Wins when the second supply lies past the first delivery
+            // (e.g., Wroclaw→Madrid then Valencia→Manchester routes through
+            // Madrid before Valencia, so deliver Copper before picking up
+            // Oranges). JIRA-228.
+            variants.push({ suffix: 'AB',       stops: [pickA, pickB, delA, delB] });
+            variants.push({ suffix: 'BA',       stops: [pickA, pickB, delB, delA] });
+            variants.push({ suffix: 'A-then-B', stops: [pickA, delA, pickB, delB] });
+            variants.push({ suffix: 'B-then-A', stops: [pickB, delB, pickA, delA] });
+          }
+          const supSuffix = `-sup:${a.supplyCity ?? 'null'}-${b.supplyCity ?? 'null'}`;
+          for (const v of variants) {
+            pairs.push({
+              id: `pair:${a.cardIndex}-${a.loadType}+${b.cardIndex}-${b.loadType}:${v.suffix}${supSuffix}`,
+              rows: [a, b],
+              stops: v.stops,
+              payout: a.payout + b.payout,
+            });
+          }
+        }
       }
     }
   }
   return pairs;
 }
 
-function genTriples(rows: NormalizedDemandRow[], cap: number): Candidate[] {
+function genTriples(rows: NormalizedDemandRow[], cap: number, snapshot: WorldSnapshot, speed: number): Candidate[] {
   const triples: Candidate[] = [];
+  const variantsByRow = rows.map((r) => getSupplyVariants(r, snapshot, speed));
   for (let i = 0; i < rows.length; i++) {
     for (let j = i + 1; j < rows.length; j++) {
       for (let k = j + 1; k < rows.length; k++) {
-        const a = rows[i], b = rows[j], c = rows[k];
         if (
-          a.cardIndex === b.cardIndex ||
-          b.cardIndex === c.cardIndex ||
-          a.cardIndex === c.cardIndex
+          rows[i].cardIndex === rows[j].cardIndex ||
+          rows[j].cardIndex === rows[k].cardIndex ||
+          rows[i].cardIndex === rows[k].cardIndex
         ) {
           continue;
         }
+        for (const a of variantsByRow[i]) {
+          for (const b of variantsByRow[j]) {
+            for (const c of variantsByRow[k]) {
         const carryCount = [a.isCarry, b.isCarry, c.isCarry].filter(Boolean).length;
 
         const stop = (kind: 'pickup' | 'deliver', r: NormalizedDemandRow): RouteStop =>
@@ -533,28 +584,68 @@ function genTriples(rows: NormalizedDemandRow[], cap: number): Candidate[] {
           });
         }
 
+        const supSuffix = `-sup:${a.supplyCity ?? 'null'}-${b.supplyCity ?? 'null'}-${c.supplyCity ?? 'null'}`;
         for (const v of variants) {
           triples.push({
-            id: `triple:${a.cardIndex}-${a.loadType}+${b.cardIndex}-${b.loadType}+${c.cardIndex}-${c.loadType}:${v.suffix}`,
+            id: `triple:${a.cardIndex}-${a.loadType}+${b.cardIndex}-${b.loadType}+${c.cardIndex}-${c.loadType}:${v.suffix}${supSuffix}`,
             rows: [a, b, c],
             stops: v.stops,
             payout: a.payout + b.payout + c.payout,
           });
         }
+            } // end for c variants
+          } // end for b variants
+        } // end for a variants
       }
     }
   }
   return triples;
 }
 
+// Minimal stub snapshot used when callers don't supply one (e.g., legacy tests).
+// getSupplyVariants never reads the snapshot when LoadService returns [] (its
+// early-return path), so this is safe for pre-JIRA-230 call sites.
+const EMPTY_SNAPSHOT: WorldSnapshot = {
+  gameId: '',
+  gameStatus: 'active' as const,
+  turnNumber: 0,
+  bot: {
+    playerId: '',
+    userId: '',
+    money: 0,
+    position: { row: 0, col: 0 },
+    existingSegments: [],
+    demandCards: [],
+    resolvedDemands: [],
+    trainType: 'freight',
+    loads: [],
+    botConfig: null,
+    connectedMajorCityCount: 0,
+  },
+  allPlayerTracks: [],
+  loadAvailability: {},
+};
+
 /**
  * Enumerate all single, pair, and triple demand-fulfillment candidates.
+ * JIRA-230 BE-002: supply-aware — one candidate per (route shape × supply choice).
+ * `snapshot` and `speed` are optional for backward compatibility with pre-230
+ * call sites (e.g., existing unit tests). When absent, getSupplyVariants falls
+ * back to single-supply per-row behavior.
  */
 export function enumerateCandidates(
   rows: NormalizedDemandRow[],
   cap: number,
+  snapshot?: WorldSnapshot,
+  speed?: number,
 ): Candidate[] {
-  return [...genSingles(rows), ...genPairs(rows, cap), ...genTriples(rows, cap)];
+  const snap = snapshot ?? EMPTY_SNAPSHOT;
+  const spd = speed ?? 9;
+  return [
+    ...genSingles(rows, snap, spd),
+    ...genPairs(rows, cap, snap, spd),
+    ...genTriples(rows, cap, snap, spd),
+  ];
 }
 
 // ── Spatial prune (R5) ─────────────────────────────────────────────────
@@ -842,6 +933,8 @@ function synthesizeReasoning(
   stats: PruneStats,
   opts: ResolvedOptions,
   phase?: 'early' | 'mid' | 'late',
+  supplyDiffLines?: string[],
+  enumerationMs?: number,
 ): string {
   const pattern = inferPatternLabel(top1);
   const stopsStr = top1.stops
@@ -865,6 +958,13 @@ function synthesizeReasoning(
   reasoning += `  Stops: ${stopsStr}\n`;
   reasoning += `  Rationale: ${patternExplanation}\n`;
 
+  // JIRA-230 BE-003: chosen-supply surface lines
+  if (supplyDiffLines && supplyDiffLines.length > 0) {
+    for (const line of supplyDiffLines) {
+      reasoning += `  ${line}\n`;
+    }
+  }
+
   // Runner-ups (positions 2 and 3)
   const runnerUps = allSorted.filter((c) => c.id !== top1.id).slice(0, 2);
   for (let i = 0; i < runnerUps.length; i++) {
@@ -877,6 +977,11 @@ function synthesizeReasoning(
 
   reasoning += `  Survivors after spatial prune: ${stats.survivors} of ${stats.total} raw.\n`;
   reasoning += `  Discarded by prune: ${stats.prunedByTurns} (turns > ${opts.pruneMaxTurns}) | ${stats.prunedByBuild} (build > ${opts.pruneMaxBuildM}M).`;
+
+  // JIRA-230 BE-004: per-replan enumeration telemetry
+  if (enumerationMs !== undefined) {
+    reasoning += `\n  Candidates: raw=${stats.total} survivors=${stats.survivors} enumerationMs=${enumerationMs}`;
+  }
 
   return reasoning;
 }
@@ -1087,8 +1192,9 @@ export function planTripDeterministic(
   const carried = detectCarriedLoads(memory.activeRoute, context.demands);
   const rows = normalizeRows(context.demands, carried);
 
-  // Enumerate all candidates
-  const allCandidates = enumerateCandidates(rows, cap);
+  // Enumerate all candidates (JIRA-230 BE-002: supply-aware, threaded snapshot/speed)
+  const enumStartMs = Date.now();
+  const allCandidates = enumerateCandidates(rows, cap, snapshot, speed);
 
   // Spatial prune
   let prunedByTurns = 0;
@@ -1108,6 +1214,19 @@ export function planTripDeterministic(
         prunedByBuild++;
       }
     }
+  }
+
+  const enumerationMs = Date.now() - enumStartMs;
+  const rawCount = allCandidates.length;
+
+  // JIRA-230 BE-004: perf budget alarm
+  console.log(
+    `[deterministic-top-1] Candidates: raw=${rawCount} survivors=${survivors.length} enumerationMs=${enumerationMs}`,
+  );
+  if (rawCount > 5000 || enumerationMs > 200) {
+    console.warn(
+      `[perf-budget] planTripDeterministic overrun: raw=${rawCount} survivors=${survivors.length} enumerationMs=${enumerationMs}`,
+    );
   }
 
   const stats: PruneStats = {
@@ -1183,13 +1302,32 @@ export function planTripDeterministic(
   );
   const upgradeOnRoute = upgradeDecision.target;
 
+  // JIRA-230 BE-003: compute chosen-supply surface lines.
+  // For each pickup stop whose load has multiple supply cities, if the chosen
+  // supply differs from the original DemandContext.supplyCity, emit a line.
+  const supplyDiffLines: string[] = [];
+  for (const stop of top1.stops) {
+    if (stop.action !== 'pickup') continue;
+    const allSources = LoadService.getInstance().getSourceCitiesForLoad(stop.loadType);
+    if (!allSources || allSources.length <= 1) continue;
+    // Find the original demand context for this load type
+    const origDemand = context.demands.find((d) => d.loadType === stop.loadType);
+    if (!origDemand) continue;
+    const legacySupply = origDemand.supplyCity;
+    if (legacySupply && legacySupply !== stop.city) {
+      supplyDiffLines.push(
+        `Supply chosen: ${stop.loadType} via ${stop.city} (DemandContext default: ${legacySupply}) — closer along existing track.`,
+      );
+    }
+  }
+
   const latencyMs = Date.now() - startMs;
   const upgradeNote = upgradeOnRoute
     ? `\n  Upgrade emitted: ${upgradeOnRoute} (cost ${UPGRADE_COST_M}M, cash ${snapshot.bot.money}M, build ${top1.buildCost}M).`
     : upgradeDecision.gateReason
       ? `\n  Upgrade skipped: ${upgradeDecision.gateReason}.`
       : '';
-  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, phase) + upgradeNote;
+  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, phase, supplyDiffLines, enumerationMs) + upgradeNote;
   const route = buildStrategicRoute(top1, snapshot.turnNumber, reasoning, upgradeOnRoute);
 
   return {
