@@ -19,6 +19,7 @@
 import { simulateTrip } from './RouteDetourEstimator';
 import { hexDistance, loadGridPoints } from './MapTopology';
 import type { GridPointData } from './MapTopology';
+import { estimateGraphPathCost } from './PathCostEstimator';
 import {
   WorldSnapshot,
   GameContext,
@@ -559,26 +560,29 @@ export function enumerateCandidates(
 // ── Spatial prune (R5) ─────────────────────────────────────────────────
 
 /**
- * O(1) per candidate: compute optimistic turn + build estimates.
- * Returns keep=false if either threshold is exceeded.
+ * Graph-aware spatial prune: compute turn + build estimates using PathCostEstimator.
+ * Returns keep=false if either threshold is exceeded or any leg is unreachable.
+ * JIRA-230 BE-003: replaced hex-distance sum with iterated estimateGraphPathCost calls.
  */
 export function cheapPrune(
   candidate: Candidate,
   startPos: GridCoord,
   speed: number,
   opts: ResolvedOptions,
+  snapshot: WorldSnapshot,
 ): { keep: boolean; estTurns: number; estBuild: number } {
-  const cityToCoords = buildCityToCoords();
-  let totalHops = 0;
-  let cur = startPos;
+  let totalBuild = 0;
+  let totalTurns = 0;
+  let prevCity: string | { row: number; col: number } = startPos;
   for (const s of candidate.stops) {
-    const dest = nearestCityCoord(s.city, cur, cityToCoords);
-    if (!dest) return { keep: false, estTurns: 999, estBuild: 999 };
-    totalHops += hexDistance(cur.row, cur.col, dest.row, dest.col);
-    cur = dest;
+    const leg = estimateGraphPathCost(prevCity, s.city, snapshot, speed);
+    if (!leg.reachable) return { keep: false, estTurns: 999, estBuild: 999 };
+    totalBuild += leg.buildCost;
+    totalTurns += leg.estimatedTurns;
+    prevCity = s.city;
   }
-  const estTurns = Math.max(1, Math.ceil(totalHops / speed));
-  const estBuild = totalHops * opts.hopAvgCostM;
+  const estTurns = Math.max(1, totalTurns);
+  const estBuild = totalBuild;
   const keep = estTurns <= opts.pruneMaxTurns && estBuild <= opts.pruneMaxBuildM;
   return { keep, estTurns, estBuild };
 }
@@ -1092,7 +1096,7 @@ export function planTripDeterministic(
   const survivors: Candidate[] = [];
 
   for (const cand of allCandidates) {
-    const { keep, estTurns, estBuild } = cheapPrune(cand, startPos, speed, opts);
+    const { keep, estTurns, estBuild } = cheapPrune(cand, startPos, speed, opts, snapshot);
     if (keep) {
       survivors.push(cand);
     } else {

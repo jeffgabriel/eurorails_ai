@@ -16,6 +16,13 @@ jest.mock('../../services/ai/RouteDetourEstimator', () => ({
   simulateTrip: jest.fn(),
 }));
 
+// Mock PathCostEstimator to control estimateGraphPathCost output per test
+// BE-003: cheapPrune now calls estimateGraphPathCost internally
+jest.mock('../../services/ai/PathCostEstimator', () => ({
+  estimateGraphPathCost: jest.fn(),
+  clearPathCostCache: jest.fn(),
+}));
+
 // Mock MapTopology to control grid + city lookup
 // Using Map<string, any> since the mock grid is just for test fixtures
 const mockGrid = new Map<string, { row: number; col: number; terrain: number; name?: string }>();
@@ -31,6 +38,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────
 
 import { simulateTrip } from '../../services/ai/RouteDetourEstimator';
+import { estimateGraphPathCost } from '../../services/ai/PathCostEstimator';
 import {
   OCPT,
   OCPT_BY_PHASE,
@@ -59,6 +67,7 @@ import {
 } from '../../../shared/types/GameTypes';
 
 const mockSimulateTrip = simulateTrip as jest.MockedFunction<typeof simulateTrip>;
+const mockEstimateGraphPathCost = estimateGraphPathCost as jest.MockedFunction<typeof estimateGraphPathCost>;
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -205,6 +214,15 @@ beforeEach(() => {
 
   // Default: simulateTrip returns feasible result
   mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+
+  // Default: estimateGraphPathCost returns a reachable, low-cost result
+  // so candidates are NOT pruned by cheapPrune in planTripDeterministic tests.
+  mockEstimateGraphPathCost.mockReturnValue({
+    reachable: true,
+    buildCost: 5,
+    pathLength: 4,
+    estimatedTurns: 1,
+  });
 });
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -488,7 +506,7 @@ describe('enumerateCandidates', () => {
   });
 });
 
-// ── cheapPrune ─────────────────────────────────────────────────────────
+// ── cheapPrune (BE-003: graph-aware) ──────────────────────────────────
 
 describe('cheapPrune', () => {
   const defaultOpts = {
@@ -498,16 +516,21 @@ describe('cheapPrune', () => {
     hopAvgCostM: HOP_AVG_COST_M,
   };
 
+  const defaultSnapshot = (): WorldSnapshot => makeSnapshot();
+
   beforeEach(() => {
-    // Use cities added in the outer beforeEach
-    // SupplyCity at (3,3), DeliveryCity at (7,7)
+    // Reset estimateGraphPathCost mock before each cheapPrune test
+    mockEstimateGraphPathCost.mockReset();
   });
 
   it('candidate with build cost > PRUNE_MAX_BUILD_M returns keep: false', () => {
-    // hexDistance from (5,5) to (3,3) = max(2,2)=2; to (7,7) = max(2,2)=2; total=4 hops
-    // But we need estBuild > 130: need totalHops * 1.3 > 130 → totalHops > 100
-    // Let's put the delivery city very far away
-    addCity('FarCity', 200, 200);
+    // Mock estimateGraphPathCost to return total buildCost exceeding 130M
+    // Leg 1 (startPos → SupplyCity): buildCost=70
+    // Leg 2 (SupplyCity → FarCity):  buildCost=70
+    // Total = 140 > PRUNE_MAX_BUILD_M(130) → pruned
+    mockEstimateGraphPathCost
+      .mockReturnValueOnce({ reachable: true, buildCost: 70, pathLength: 10, estimatedTurns: 2 })
+      .mockReturnValueOnce({ reachable: true, buildCost: 70, pathLength: 10, estimatedTurns: 2 });
     const candidate = {
       id: 'test',
       rows: [],
@@ -517,19 +540,16 @@ describe('cheapPrune', () => {
       ],
       payout: 50,
     };
-    // hexDistance mock: max(|200-3|, |200-3|) = 197 from SupplyCity to FarCity
-    // from startPos (5,5) to SupplyCity (3,3): max(2,2)=2
-    // from SupplyCity (3,3) to FarCity (200,200): max(197,197)=197
-    // total = 199; estBuild = 199 * 1.3 = 258.7 > 130 → pruned
-    const result = cheapPrune(candidate, { row: 5, col: 5 }, 9, defaultOpts);
+    const result = cheapPrune(candidate, { row: 5, col: 5 }, 9, defaultOpts, defaultSnapshot());
     expect(result.keep).toBe(false);
+    expect(result.estBuild).toBe(140);
   });
 
   it('candidate with turns > PRUNE_MAX_TURNS returns keep: false', () => {
-    // To exceed 12 turns at speed 9: need totalHops > 108
-    // Place cities at row/col offset 60
-    addCity('FarSupply', 65, 65);
-    addCity('FarDelivery', 130, 130);
+    // Mock: 7 turns per leg → total = 14 > PRUNE_MAX_TURNS(12)
+    mockEstimateGraphPathCost
+      .mockReturnValueOnce({ reachable: true, buildCost: 5, pathLength: 63, estimatedTurns: 7 })
+      .mockReturnValueOnce({ reachable: true, buildCost: 5, pathLength: 63, estimatedTurns: 7 });
     const candidate = {
       id: 'test2',
       rows: [],
@@ -539,18 +559,16 @@ describe('cheapPrune', () => {
       ],
       payout: 50,
     };
-    // from (5,5) to (65,65): 60 hops; to (130,130): 65 hops; total = 125
-    // estTurns = ceil(125/9) = 14 > 12 → pruned
-    const result = cheapPrune(candidate, { row: 5, col: 5 }, 9, defaultOpts);
+    const result = cheapPrune(candidate, { row: 5, col: 5 }, 9, defaultOpts, defaultSnapshot());
     expect(result.keep).toBe(false);
     expect(result.estTurns).toBeGreaterThan(PRUNE_MAX_TURNS);
   });
 
   it('candidate just below thresholds returns keep: true', () => {
-    // SupplyCity at (3,3), DeliveryCity at (7,7)
-    // from (5,5) to (3,3): 2 hops; to (7,7): 4 hops; total = 6
-    // estTurns = ceil(6/9) = 1 ≤ 12 ✓
-    // estBuild = 6 * 1.3 = 7.8 ≤ 130 ✓
+    // Mock: buildCost=5 per leg, estimatedTurns=1 per leg → total build=10, turns=2
+    mockEstimateGraphPathCost
+      .mockReturnValueOnce({ reachable: true, buildCost: 5, pathLength: 4, estimatedTurns: 1 })
+      .mockReturnValueOnce({ reachable: true, buildCost: 5, pathLength: 4, estimatedTurns: 1 });
     const candidate = {
       id: 'test3',
       rows: [],
@@ -560,11 +578,16 @@ describe('cheapPrune', () => {
       ],
       payout: 50,
     };
-    const result = cheapPrune(candidate, { row: 5, col: 5 }, 9, defaultOpts);
+    const result = cheapPrune(candidate, { row: 5, col: 5 }, 9, defaultOpts, defaultSnapshot());
     expect(result.keep).toBe(true);
+    expect(result.estBuild).toBe(10);
+    expect(result.estTurns).toBe(2);
   });
 
-  it('candidate with unknown city returns keep: false', () => {
+  it('candidate with unreachable leg returns keep: false with estTurns=999', () => {
+    // Mock: first leg unreachable → immediate prune
+    mockEstimateGraphPathCost
+      .mockReturnValueOnce({ reachable: false, buildCost: 0, pathLength: 0, estimatedTurns: 0 });
     const candidate = {
       id: 'test4',
       rows: [],
@@ -573,8 +596,10 @@ describe('cheapPrune', () => {
       ],
       payout: 10,
     };
-    const result = cheapPrune(candidate, { row: 5, col: 5 }, 9, defaultOpts);
+    const result = cheapPrune(candidate, { row: 5, col: 5 }, 9, defaultOpts, defaultSnapshot());
     expect(result.keep).toBe(false);
+    expect(result.estTurns).toBe(999);
+    expect(result.estBuild).toBe(999);
   });
 });
 
@@ -860,7 +885,13 @@ describe('planTripDeterministic', () => {
   });
 
   it('all candidates pruned → outcome: no_feasible_candidates, route null', () => {
-    // Create demands with cities not in the grid (will fail prune)
+    // Override default mock: return unreachable so all candidates are pruned
+    mockEstimateGraphPathCost.mockReturnValue({
+      reachable: false,
+      buildCost: 0,
+      pathLength: 0,
+      estimatedTurns: 0,
+    });
     const demands = [
       makeDemand({
         cardIndex: 1,
