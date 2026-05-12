@@ -6,6 +6,7 @@
  *  - Per-replan module-scoped caching keyed by (fromCity, toCity, segmentsHash, speed)
  *
  * JIRA-230 Project 1 (R1): graph-aware path-cost primitive for upstream callers.
+ * JIRA-230 Project 2 BE-001: extended to accept GridCoord inputs for from/to.
  *
  * NOTE: The exported function is named `estimateGraphPathCost` to avoid collision
  * with `estimatePathCost` in MapTopology.ts (ADR-2).
@@ -16,6 +17,12 @@ import { loadGridPoints } from './MapTopology';
 import { WorldSnapshot } from '../../../shared/types/GameTypes';
 
 // ── Public types ───────────────────────────────────────────────────────
+
+/** A grid coordinate (row, col) pair — used as an alternative to city names. */
+export interface GridCoord {
+  row: number;
+  col: number;
+}
 
 /** Result of a graph-aware path cost estimate between two named cities. */
 export interface PathCost {
@@ -58,8 +65,14 @@ function hashSegments(segments: Array<{ from: { row: number; col: number }; to: 
   return parts.join('|');
 }
 
-function makeCacheKey(fromCity: string, toCity: string, segmentsHash: string, trainSpeed: number): string {
-  return `${fromCity}|${toCity}|${segmentsHash}|${trainSpeed}`;
+/** Serialize a city name or GridCoord to a stable string for cache keying. */
+function serializeInput(input: string | GridCoord): string {
+  if (typeof input === 'string') return `name:${input}`;
+  return `coord:${input.row},${input.col}`;
+}
+
+function makeCacheKey(from: string | GridCoord, to: string | GridCoord, segmentsHash: string, trainSpeed: number): string {
+  return `${serializeInput(from)}|${serializeInput(to)}|${segmentsHash}|${trainSpeed}`;
 }
 
 // ── City resolution ────────────────────────────────────────────────────
@@ -83,38 +96,43 @@ const UNREACHABLE: PathCost = { buildCost: 0, pathLength: 0, estimatedTurns: 0, 
 // ── Main function ──────────────────────────────────────────────────────
 
 /**
- * Estimate the graph-aware cost of traveling from `fromCity` to `toCity`.
+ * Estimate the graph-aware cost of traveling from `from` to `to`.
  *
- * Resolution:
+ * Accepts either a city name (string) or a raw grid coordinate (GridCoord) for
+ * each endpoint. When a GridCoord is passed, city-name resolution is skipped and
+ * the coord is used directly with `estimateRouteSegment`. This allows callers to
+ * pass bot mid-track positions without resolving them to a city name first.
+ *
+ * Resolution (string inputs):
  * - Looks up all grid coordinates for each city name via `loadGridPoints()`.
  * - For major cities with multiple outposts, selects the (from, to) pair that
  *   minimises `estimateRouteSegment(...).pathLength`.
  * - If either city resolves to no coordinates, returns `{ reachable: false, ... }`.
  *
  * Caching:
- * - Results are cached per (fromCity, toCity, existingSegmentsHash, trainSpeed).
+ * - Results are cached per (from, to, existingSegmentsHash, trainSpeed).
  * - Cache is module-scoped and cleared via `clearPathCostCache()`.
  *
- * @param fromCity - Source city name (as it appears in the grid data)
- * @param toCity   - Destination city name
- * @param snapshot - WorldSnapshot providing bot track and opponent tracks
+ * @param from       - Source: city name string or GridCoord
+ * @param to         - Destination: city name string or GridCoord
+ * @param snapshot   - WorldSnapshot providing bot track and opponent tracks
  * @param trainSpeed - Train speed in mileposts/turn (used to compute estimatedTurns)
  */
 export function estimateGraphPathCost(
-  fromCity: string,
-  toCity: string,
+  from: string | GridCoord,
+  to: string | GridCoord,
   snapshot: WorldSnapshot,
   trainSpeed: number,
 ): PathCost {
   const segmentsHash = hashSegments(snapshot.bot.existingSegments);
-  const cacheKey = makeCacheKey(fromCity, toCity, segmentsHash, trainSpeed);
+  const cacheKey = makeCacheKey(from, to, segmentsHash, trainSpeed);
 
   const cached = cache.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
 
-  const result = computePathCost(fromCity, toCity, snapshot, trainSpeed);
+  const result = computePathCost(from, to, snapshot, trainSpeed);
   cache.set(cacheKey, result);
   return result;
 }
@@ -123,15 +141,18 @@ export function estimateGraphPathCost(
  * Internal: compute path cost without caching.
  */
 function computePathCost(
-  fromCity: string,
-  toCity: string,
+  from: string | GridCoord,
+  to: string | GridCoord,
   snapshot: WorldSnapshot,
   trainSpeed: number,
 ): PathCost {
-  const fromCoords = resolveCityCoords(fromCity);
-  const toCoords = resolveCityCoords(toCity);
+  // Resolve inputs to arrays of coords
+  const fromCoords: Array<{ row: number; col: number }> =
+    typeof from === 'string' ? resolveCityCoords(from) : [from];
+  const toCoords: Array<{ row: number; col: number }> =
+    typeof to === 'string' ? resolveCityCoords(to) : [to];
 
-  // Either city is unresolvable → unreachable
+  // Either endpoint is unresolvable → unreachable
   if (fromCoords.length === 0 || toCoords.length === 0) {
     return { ...UNREACHABLE };
   }
@@ -152,10 +173,10 @@ function computePathCost(
   // minimises pathLength (nearest outpost heuristic).
   let bestResult: PathCost | null = null;
 
-  for (const from of fromCoords) {
-    for (const to of toCoords) {
+  for (const fromCoord of fromCoords) {
+    for (const toCoord of toCoords) {
       // Skip trivial same-point case early
-      if (from.row === to.row && from.col === to.col) {
+      if (fromCoord.row === toCoord.row && fromCoord.col === toCoord.col) {
         const trivial: PathCost = { buildCost: 0, pathLength: 1, estimatedTurns: 1, reachable: true };
         if (bestResult === null || trivial.pathLength < bestResult.pathLength) {
           bestResult = trivial;
@@ -163,7 +184,7 @@ function computePathCost(
         continue;
       }
 
-      const estimate = estimateRouteSegment(from, to, snapshotInput);
+      const estimate = estimateRouteSegment(fromCoord, toCoord, snapshotInput);
 
       if (!estimate.reachable) {
         // This pair is blocked; continue trying other outpost combinations

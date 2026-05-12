@@ -37,6 +37,7 @@ import {
   estimateGraphPathCost,
   clearPathCostCache,
   PathCost,
+  GridCoord,
 } from '../../services/ai/PathCostEstimator';
 import { computeAggregateScore } from '../../services/ai/DeterministicTripPlanner';
 import { WorldSnapshot } from '../../../shared/types/GameTypes';
@@ -336,6 +337,73 @@ describe('estimateGraphPathCost', () => {
 
     // ceil(5/1) = 5
     expect(result!.estimatedTurns).toBe(5);
+  });
+
+  // ── BE-001: GridCoord input tests ─────────────────────────────────────
+
+  it('BE-001: accepts GridCoord for from (skips city name resolution)', () => {
+    mockEstimateRouteSegment.mockReturnValue(makeSegmentEstimate({ reachable: true, buildCost: 5, pathLength: 7 }));
+
+    const fromCoord: GridCoord = { row: 5, col: 5 };
+    const result = estimateGraphPathCost(fromCoord, 'CityB', makeSnapshot(), 9);
+
+    expect(result.reachable).toBe(true);
+    expect(result.buildCost).toBe(5);
+    expect(result.pathLength).toBe(7);
+    // estimateRouteSegment should be called with the coord directly (not via grid resolution)
+    expect(mockEstimateRouteSegment).toHaveBeenCalledTimes(1);
+    const callArgs = mockEstimateRouteSegment.mock.calls[0];
+    expect(callArgs[0]).toEqual({ row: 5, col: 5 });
+  });
+
+  it('BE-001: accepts GridCoord for to (skips city name resolution)', () => {
+    mockEstimateRouteSegment.mockReturnValue(makeSegmentEstimate({ reachable: true, buildCost: 3, pathLength: 6 }));
+
+    const toCoord: GridCoord = { row: 10, col: 10 };
+    const result = estimateGraphPathCost('CityA', toCoord, makeSnapshot(), 9);
+
+    expect(result.reachable).toBe(true);
+    expect(result.buildCost).toBe(3);
+    const callArgs = mockEstimateRouteSegment.mock.calls[0];
+    expect(callArgs[1]).toEqual({ row: 10, col: 10 });
+  });
+
+  it('BE-001: accepts GridCoord for both from and to', () => {
+    mockEstimateRouteSegment.mockReturnValue(makeSegmentEstimate({ reachable: true, buildCost: 0, pathLength: 4 }));
+
+    const fromCoord: GridCoord = { row: 3, col: 3 };
+    const toCoord: GridCoord = { row: 7, col: 7 };
+    const result = estimateGraphPathCost(fromCoord, toCoord, makeSnapshot(), 9);
+
+    expect(result.reachable).toBe(true);
+    expect(result.estimatedTurns).toBe(1); // ceil(4/9)=1
+    // Called once with the exact coords
+    expect(mockEstimateRouteSegment).toHaveBeenCalledTimes(1);
+    expect(mockEstimateRouteSegment.mock.calls[0][0]).toEqual({ row: 3, col: 3 });
+    expect(mockEstimateRouteSegment.mock.calls[0][1]).toEqual({ row: 7, col: 7 });
+  });
+
+  it('BE-001: GridCoord input caches correctly — second identical call uses cache', () => {
+    mockEstimateRouteSegment.mockReturnValue(makeSegmentEstimate({ reachable: true, buildCost: 0, pathLength: 5 }));
+
+    const fromCoord: GridCoord = { row: 3, col: 3 };
+    const snapshot = makeSnapshot();
+    estimateGraphPathCost(fromCoord, 'CityB', snapshot, 9);
+    estimateGraphPathCost(fromCoord, 'CityB', snapshot, 9);
+
+    // Cache hit: estimateRouteSegment only called once
+    expect(mockEstimateRouteSegment).toHaveBeenCalledTimes(1);
+  });
+
+  it('BE-001: GridCoord same-point returns trivial result without calling estimateRouteSegment', () => {
+    const coord: GridCoord = { row: 5, col: 5 };
+    const result = estimateGraphPathCost(coord, coord, makeSnapshot(), 9);
+
+    expect(result.reachable).toBe(true);
+    expect(result.buildCost).toBe(0);
+    expect(result.pathLength).toBe(1);
+    expect(result.estimatedTurns).toBe(1);
+    expect(mockEstimateRouteSegment).not.toHaveBeenCalled();
   });
 });
 
