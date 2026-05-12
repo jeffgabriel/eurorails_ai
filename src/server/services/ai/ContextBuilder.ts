@@ -40,6 +40,7 @@ import { MIN_DELIVERIES_BEFORE_UPGRADE } from './AIStrategyEngine';
 import { NetworkContext } from './context/NetworkContext';
 import { BuildContext } from './context/BuildContext';
 import { UpgradeContext } from './context/UpgradeContext';
+import { TurnValidator } from './TurnValidator';
 import {
   computeAllDemandContexts,
   computeCanDeliverFromSnapshot,
@@ -103,9 +104,12 @@ export class ContextBuilder {
     // Compute connected major cities
     const connectedMajorCities = getConnectedMajorCities(snapshot.bot.existingSegments).map(c => c.name);
 
+    // JIRA-231: Compute saturated city keys once per turn and forward to demand engine
+    const saturatedCityKeys = TurnValidator.computeSaturatedCityKeys(snapshot);
+
     // Compute demand context for each demand card
     const demands = computeAllDemandContexts(
-      snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities,
+      snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities, saturatedCityKeys,
     );
 
     // Compute immediate delivery opportunities
@@ -242,8 +246,10 @@ export class ContextBuilder {
       ? ContextBuilder.computeCitiesOnNetwork(network, gridPoints)
       : [];
     const connectedMajorCities = getConnectedMajorCities(snapshot.bot.existingSegments).map(c => c.name);
+    // JIRA-231: Compute saturated city keys and forward to demand engine
+    const saturatedCityKeys = TurnValidator.computeSaturatedCityKeys(snapshot);
     return computeAllDemandContexts(
-      snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities,
+      snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities, saturatedCityKeys,
     );
   }
 

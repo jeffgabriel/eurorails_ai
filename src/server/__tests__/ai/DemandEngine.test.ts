@@ -52,8 +52,8 @@ jest.mock('../../../shared/services/TrackNetworkService', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────
 
 import { estimateGraphPathCost } from '../../services/ai/PathCostEstimator';
-import { computeBestDemandContext } from '../../services/ai/context/DemandEngine';
-import { WorldSnapshot, GridPoint, TerrainType } from '../../../shared/types/GameTypes';
+import { computeBestDemandContext, computeAllDemandContexts } from '../../services/ai/context/DemandEngine';
+import { WorldSnapshot, GridPoint, TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
 // Note: buildTrackNetwork is mocked above but we need its return type
 
 const mockEstimateGraphPathCost = estimateGraphPathCost as jest.MockedFunction<typeof estimateGraphPathCost>;
@@ -296,5 +296,222 @@ describe('AC7: ferry overhead comes only from estimateGraphPathCost, not ferryCr
 
     // buildTurns=0 (totalTrackCost=0), travelTurns=3+3=6, ferryAdd=0, +1
     expect(ctx.estimatedTurns).toBe(7);
+  });
+});
+
+// ── JIRA-231: Feasibility producer (AC1–AC4) ─────────────────────────────────
+
+/** Create a small-city GridPoint (entry limit = 2 players). */
+function makeSmallCityPoint(
+  row: number,
+  col: number,
+  name: string,
+  availableLoads: string[] = [],
+): GridPoint {
+  return {
+    id: `gp-${row}-${col}`,
+    x: col * 40,
+    y: row * 40,
+    row,
+    col,
+    terrain: TerrainType.SmallCity,
+    city: { type: TerrainType.SmallCity, name, availableLoads },
+  };
+}
+
+/** Create a TrackSegment endpoint at a given row/col with given terrain. */
+function makeSegment(
+  fromRow: number,
+  fromCol: number,
+  toRow: number,
+  toCol: number,
+  terrain: TerrainType = TerrainType.Clear,
+): TrackSegment {
+  return {
+    from: { x: fromCol * 40, y: fromRow * 40, row: fromRow, col: fromCol, terrain },
+    to: { x: toCol * 40, y: toRow * 40, row: toRow, col: toCol, terrain },
+    cost: 1,
+  };
+}
+
+describe('JIRA-231: Feasibility producer — supply city saturated', () => {
+  /**
+   * AC1: Supply city (48,44) is saturated (two other players already there) and bot has
+   * no track at (48,44). Expected: isFeasible === false, infeasibleReason === 'supplyCitySaturated'.
+   */
+  it('AC1: supply city saturated and not on bot network → isFeasible false, supplyCitySaturated', () => {
+    // Bot has track at (5,5)→(6,6) only — NOT at (48,44)
+    const snapshot = makeSnapshot({
+      existingSegments: [
+        makeSegment(5, 5, 6, 6),
+      ],
+    });
+
+    const demand = { city: 'Ruhr', loadType: 'Marble', payment: 20 };
+
+    // Grid: supply city Firenze at (48,44), delivery city Ruhr at (20,20)
+    const gridPoints: GridPoint[] = [
+      makeSmallCityPoint(48, 44, 'Firenze', ['Marble']),
+      makeSmallCityPoint(20, 20, 'Ruhr'),
+    ];
+
+    // Firenze is saturated for the bot
+    const saturatedCityKeys = new Set<string>(['48,44']);
+
+    // Network with no nodes at (48,44) — mocked to return empty nodes
+    const network = { nodes: new Map<string, unknown>(), edges: new Map<string, unknown>() };
+
+    mockEstimateGraphPathCost.mockReturnValue({ reachable: true, buildCost: 5, pathLength: 20, estimatedTurns: 3 });
+
+    const ctx = computeBestDemandContext(
+      1,
+      demand,
+      snapshot,
+      network as ReturnType<typeof import('../../../shared/services/TrackNetworkService').buildTrackNetwork>,
+      gridPoints,
+      ['Firenze', 'Ruhr'],
+      ['Ruhr'],
+      [],
+      saturatedCityKeys,
+    );
+
+    expect(ctx.isFeasible).toBe(false);
+    expect(ctx.infeasibleReason).toBe('supplyCitySaturated');
+  });
+
+  /**
+   * AC2: Supply city saturated, but bot already has track at (48,44) (grandfathered).
+   * Expected: isFeasible !== false (the demand is feasible).
+   */
+  it('AC2: supply city saturated but bot already has track there → isFeasible not false (grandfathered)', () => {
+    // Bot has track touching (48,44)
+    const snapshot = makeSnapshot({
+      existingSegments: [
+        makeSegment(48, 44, 49, 45, TerrainType.SmallCity),
+      ],
+    });
+
+    const demand = { city: 'Ruhr', loadType: 'Marble', payment: 20 };
+
+    const gridPoints: GridPoint[] = [
+      makeSmallCityPoint(48, 44, 'Firenze', ['Marble']),
+      makeSmallCityPoint(20, 20, 'Ruhr'),
+    ];
+
+    const saturatedCityKeys = new Set<string>(['48,44']);
+
+    // Network DOES have node at (48,44) — bot is grandfathered
+    const networkNodes = new Map<string, unknown>();
+    networkNodes.set('48,44', {});
+    const network = { nodes: networkNodes, edges: new Map<string, unknown>() };
+
+    mockEstimateGraphPathCost.mockReturnValue({ reachable: true, buildCost: 5, pathLength: 20, estimatedTurns: 3 });
+
+    const ctx = computeBestDemandContext(
+      1,
+      demand,
+      snapshot,
+      network as ReturnType<typeof import('../../../shared/services/TrackNetworkService').buildTrackNetwork>,
+      gridPoints,
+      ['Firenze', 'Ruhr'],
+      ['Firenze', 'Ruhr'],
+      [],
+      saturatedCityKeys,
+    );
+
+    expect(ctx.isFeasible).not.toBe(false);
+  });
+
+  /**
+   * AC3: Delivery city is saturated and not on bot's network.
+   * Expected: isFeasible === false, infeasibleReason === 'deliveryCitySaturated'.
+   */
+  it('AC3: delivery city saturated and not on bot network → isFeasible false, deliveryCitySaturated', () => {
+    const snapshot = makeSnapshot({
+      existingSegments: [
+        makeSegment(5, 5, 6, 6),
+      ],
+    });
+
+    const demand = { city: 'Firenze', loadType: 'Marble', payment: 20 };
+
+    // Supply at Hamburg (large, not saturated), delivery at Firenze (48,44) which is saturated
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Hamburg', ['Marble']),   // major city, not saturated
+      makeSmallCityPoint(48, 44, 'Firenze'),
+    ];
+
+    // Only delivery city is saturated
+    const saturatedCityKeys = new Set<string>(['48,44']);
+    const network = { nodes: new Map<string, unknown>(), edges: new Map<string, unknown>() };
+
+    mockEstimateGraphPathCost.mockReturnValue({ reachable: true, buildCost: 5, pathLength: 20, estimatedTurns: 3 });
+
+    const ctx = computeBestDemandContext(
+      1,
+      demand,
+      snapshot,
+      network as ReturnType<typeof import('../../../shared/services/TrackNetworkService').buildTrackNetwork>,
+      gridPoints,
+      ['Hamburg', 'Firenze'],
+      ['Hamburg'],
+      [],
+      saturatedCityKeys,
+    );
+
+    expect(ctx.isFeasible).toBe(false);
+    expect(ctx.infeasibleReason).toBe('deliveryCitySaturated');
+  });
+
+  /**
+   * AC4: saturatedCityKeys parameter omitted from computeAllDemandContexts.
+   * Expected: all demands have isFeasible !== false (backwards compatibility).
+   */
+  it('AC4: saturatedCityKeys omitted → all demands have isFeasible not false (backwards compatible)', () => {
+    const snapshot: WorldSnapshot = {
+      ...makeSnapshot(),
+      bot: {
+        ...makeSnapshot().bot,
+        existingSegments: [makeSegment(5, 5, 6, 6)],
+        resolvedDemands: [
+          {
+            cardId: 1,
+            demands: [
+              { city: 'Firenze', loadType: 'Marble', payment: 15 },
+            ],
+          },
+          {
+            cardId: 2,
+            demands: [
+              { city: 'Hamburg', loadType: 'Coal', payment: 20 },
+            ],
+          },
+        ],
+      },
+    };
+
+    const gridPoints: GridPoint[] = [
+      makeSmallCityPoint(48, 44, 'Firenze'),
+      makeCityPoint(10, 10, 'Hamburg'),
+      makeCityPoint(15, 15, 'Berlin', ['Marble', 'Coal']),
+    ];
+
+    mockEstimateGraphPathCost.mockReturnValue({ reachable: true, buildCost: 5, pathLength: 20, estimatedTurns: 3 });
+
+    // Call WITHOUT saturatedCityKeys parameter
+    const contexts = computeAllDemandContexts(
+      snapshot,
+      null,
+      gridPoints,
+      ['Firenze', 'Hamburg', 'Berlin'],
+      ['Firenze', 'Hamburg', 'Berlin'],
+      [],
+      // no saturatedCityKeys
+    );
+
+    // All demands should be feasible (isFeasible not set to false)
+    for (const ctx of contexts) {
+      expect(ctx.isFeasible).not.toBe(false);
+    }
   });
 });

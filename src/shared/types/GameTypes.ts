@@ -524,6 +524,14 @@ export interface BotMemoryState {
      * Used by StrategicContextBuilder to compute hand staleness for Medium bots.
      */
     cardAcquisitionTurn?: Record<number, number>;
+    /**
+     * Cumulative count of turns the bot ended with its train at full cargo
+     * capacity (loads.length >= cap). Gates the Fast Freight → Superfreight
+     * upgrade: only emit the cargo-slot upgrade once the bot has demonstrated
+     * it actually saturates its current slots. Heavy Freight → Superfreight is
+     * not gated (that upgrade buys speed, not a slot).
+     */
+    capSaturatedTurns?: number;
 }
 
 /** Simplified option summary for decision logging */
@@ -717,6 +725,18 @@ export interface DemandContext {
     projectedFundsAfterDelivery: number;
     /** On cold-start (no track), the major city that minimizes total route cost as a hub (JIRA-72) */
     optimalStartingCity?: string;
+    /**
+     * JIRA-231: Whether this demand card is structurally feasible for the bot to fulfill.
+     * false when the supply or delivery city is at its player-entry cap and the bot has no
+     * existing track there. Undefined when the saturation check was not performed
+     * (backwards compatible — treat as feasible when absent).
+     */
+    isFeasible?: boolean;
+    /**
+     * JIRA-231: Why the demand was marked infeasible.
+     * Only set when isFeasible === false.
+     */
+    infeasibleReason?: 'supplyCitySaturated' | 'deliveryCitySaturated';
 }
 
 /** An immediately completable delivery at the bot's current position */

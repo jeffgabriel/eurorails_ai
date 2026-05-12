@@ -86,7 +86,7 @@ export interface BotTurnResult {
   guardrailOverride?: boolean;
   guardrailReason?: string;
   // JIRA-13: demand ranking for debug overlay
-  demandRanking?: Array<{ loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean; efficiencyPerTurn?: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number; ferryRequired?: boolean }>;
+  demandRanking?: Array<{ loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean; efficiencyPerTurn?: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number; ferryRequired?: boolean; isFeasible?: boolean; infeasibleReason?: string }>;
   // JIRA-32: Strategic context and composition trace for NDJSON game log
   gamePhase?: string;
   cash?: number;
@@ -577,6 +577,17 @@ export class AIStrategyEngine {
       const strippedGateThisTurn = phaseBWasStripped
         ? (firstValidationHardGates?.find(g => !g.passed)?.gate ?? null)
         : null;
+      // Gate for Fast Freight → Superfreight upgrade: count turns where the
+      // bot peaked at full cargo capacity. End-of-turn loads + deliveries
+      // this turn is a lower bound on peak (every delivered load was carried
+      // earlier in the turn). Undercounts when pickups happen strictly after
+      // deliveries, but that's an acceptable conservative bias for the gate.
+      const endLoads = snapshot.bot.loads?.length ?? 0;
+      const deliveredThisTurn = composedSteps.filter(s => s.type === AIActionType.DeliverLoad).length;
+      const peakLoads = endLoads + deliveredThisTurn;
+      const trainCap = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+      const saturatedThisTurn = peakLoads >= trainCap;
+
       const memoryPatch: Partial<typeof memory> = {
         lastAction: executedAction,
         consecutiveDiscards: executedAction === AIActionType.DiscardHand
@@ -592,6 +603,7 @@ export class AIStrategyEngine {
         // JIRA-203: Persist strip context for next turn's stuck-state detector
         lastPhaseBStrippedGate: strippedGateThisTurn,
         lastPositionWhenStripped: phaseBWasStripped ? (snapshot.bot.position ?? null) : null,
+        capSaturatedTurns: (memory.capSaturatedTurns ?? 0) + (saturatedThisTurn ? 1 : 0),
       };
 
       // Update route state in memory
@@ -774,6 +786,8 @@ export class AIStrategyEngine {
             trackCostToSupply: d.estimatedTrackCostToSupply,
             trackCostToDelivery: d.estimatedTrackCostToDelivery,
             ferryRequired: d.ferryRequired,
+            isFeasible: d.isFeasible,
+            infeasibleReason: d.infeasibleReason,
           };
         });
 

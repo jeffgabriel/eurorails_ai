@@ -494,6 +494,7 @@ function computeSingleSupplyDemandContext(
   reachableCities: string[],
   citiesOnNetwork: string[],
   connectedMajorCities: string[],
+  saturatedCityKeys?: Set<string>,
 ): DemandContext {
   const deliveryCity = demand.city;
   const loadType = demand.loadType;
@@ -657,7 +658,7 @@ function computeSingleSupplyDemandContext(
   const demandScore = scoreDemand(demand.payment, totalTrackCost, estimatedTurns, isAffordable, projectedFunds);
   const efficiencyPerTurn = (demand.payment - totalTrackCost) / estimatedTurns;
 
-  const result = {
+  const result: DemandContext = {
     cardIndex,
     loadType,
     supplyCity: supplyCity ?? null,
@@ -692,6 +693,42 @@ function computeSingleSupplyDemandContext(
     result.efficiencyPerTurn = -999;
   }
 
+  // JIRA-231: Compute structural feasibility based on saturated city keys.
+  // A demand is infeasible when the supply or delivery city is at its player-entry cap
+  // AND the bot does not already have track at that city (not grandfathered).
+  if (saturatedCityKeys && saturatedCityKeys.size > 0) {
+    // Resolve supply city name to grid key (row,col) — use first match
+    let isSupplyInfeasible = false;
+    if (supplyCity !== null) {
+      for (const gp of gridPoints) {
+        if (gp.city?.name === supplyCity) {
+          const supplyKey = `${gp.row},${gp.col}`;
+          if (saturatedCityKeys.has(supplyKey) && !network?.nodes.has(supplyKey)) {
+            isSupplyInfeasible = true;
+          }
+          break; // use first match
+        }
+      }
+    }
+
+    // Resolve delivery city name to grid key
+    let isDeliveryInfeasible = false;
+    for (const gp of gridPoints) {
+      if (gp.city?.name === deliveryCity) {
+        const deliveryKey = `${gp.row},${gp.col}`;
+        if (saturatedCityKeys.has(deliveryKey) && !network?.nodes.has(deliveryKey)) {
+          isDeliveryInfeasible = true;
+        }
+        break; // use first match
+      }
+    }
+
+    if (isSupplyInfeasible || isDeliveryInfeasible) {
+      result.isFeasible = false;
+      result.infeasibleReason = isSupplyInfeasible ? 'supplyCitySaturated' : 'deliveryCitySaturated';
+    }
+  }
+
   return result;
 }
 
@@ -704,6 +741,7 @@ export function computeBestDemandContext(
   reachableCities: string[],
   citiesOnNetwork: string[],
   connectedMajorCities: string[],
+  saturatedCityKeys?: Set<string>,
 ): DemandContext {
   const supplyCityNames = new Set<string>();
   for (const gp of gridPoints) {
@@ -713,12 +751,12 @@ export function computeBestDemandContext(
   }
   if (snapshot.bot.loads.includes(demand.loadType)) {
     return computeSingleSupplyDemandContext(
-      cardIndex, demand, null, snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities,
+      cardIndex, demand, null, snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities, saturatedCityKeys,
     );
   }
   if (supplyCityNames.size === 0) {
     const ctx = computeSingleSupplyDemandContext(
-      cardIndex, demand, null, snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities,
+      cardIndex, demand, null, snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities, saturatedCityKeys,
     );
     ctx.supplyCity = 'NoSupply';
     ctx.estimatedTurns = 99;
@@ -729,7 +767,7 @@ export function computeBestDemandContext(
   let bestContext: DemandContext | null = null;
   for (const supplyCity of supplyCityNames) {
     const ctx = computeSingleSupplyDemandContext(
-      cardIndex, demand, supplyCity, snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities,
+      cardIndex, demand, supplyCity, snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities, saturatedCityKeys,
     );
     if (!bestContext || ctx.demandScore > bestContext.demandScore) bestContext = ctx;
   }
@@ -745,14 +783,20 @@ export function computeAllDemandContexts(
   reachableCities: string[],
   citiesOnNetwork: string[],
   connectedMajorCities: string[],
+  saturatedCityKeys?: Set<string>,
 ): DemandContext[] {
   const contexts: DemandContext[] = [];
   for (const resolved of snapshot.bot.resolvedDemands) {
     for (const demand of resolved.demands) {
       contexts.push(
-        computeBestDemandContext(resolved.cardId, demand, snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities),
+        computeBestDemandContext(resolved.cardId, demand, snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities, saturatedCityKeys),
       );
     }
+  }
+  // JIRA-231: Log infeasible demand count once per turn (no per-demand noise)
+  const infeasibleCount = contexts.filter(c => c.isFeasible === false).length;
+  if (infeasibleCount > 0) {
+    console.log(`[DemandEngine] JIRA-231: ${infeasibleCount} demand(s) marked infeasible — supply/delivery cities saturated`);
   }
   return contexts;
 }
