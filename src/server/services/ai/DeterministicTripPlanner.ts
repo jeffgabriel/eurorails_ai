@@ -694,6 +694,7 @@ export function computeAggregateScore(
   allFeasible: ScoredCandidate[],
   cityToCoords: Map<string, GridCoord[]>,
   speed: number,
+  botStartPos: GridCoord,
 ): { aggregate: number; followup: ScoredCandidate | null; emptyLegTurns: number } {
   const c1Cards = new Set(c1.rows.map((r) => r.cardIndex));
   const c1EndCity = c1.stops[c1.stops.length - 1]?.city;
@@ -738,7 +739,24 @@ export function computeAggregateScore(
       emptyLegTurns = Math.ceil(hops / Math.max(speed, 1));
     }
 
-    const aggregateTurns = Math.max(c1.turns + emptyLegTurns + c2.turns, 1);
+    // JIRA-230 R2: c2.turns was scored by simulateTrip starting from bot.position,
+    // so it already includes the bot→c2.start travel segment. Adding emptyLegTurns
+    // (c1.end→c2.start) on top double-counts that leg. Subtract the bot→c2.start
+    // segment from c2.turns before summing. Use hexDistance for symmetry with how
+    // simulateTrip computed c2.turns (ADR-5: symmetry required).
+    let c2BotToStartTurns = 0;
+    if (c2StartCoords) {
+      const botToC2Hops = hexDistance(
+        botStartPos.row,
+        botStartPos.col,
+        c2StartCoords.row,
+        c2StartCoords.col,
+      );
+      c2BotToStartTurns = Math.ceil(botToC2Hops / Math.max(speed, 1));
+    }
+    const c2ExecutionTurns = Math.max(c2.turns - c2BotToStartTurns, 1);
+
+    const aggregateTurns = Math.max(c1.turns + emptyLegTurns + c2ExecutionTurns, 1);
     const aggregateNet = c1.net + c2.net;
     const aggregate = aggregateNet / aggregateTurns;
 
@@ -1136,7 +1154,7 @@ export function planTripDeterministic(
   // to populate aggregateScore/aggregateFollowup before sorting.
   const cityToCoords = buildCityToCoords();
   for (const c1 of feasible) {
-    const result = computeAggregateScore(c1, feasible, cityToCoords, speed);
+    const result = computeAggregateScore(c1, feasible, cityToCoords, speed, startPos);
     c1.aggregateScore = result.aggregate;
     c1.aggregateFollowup = result.followup;
     c1.aggregateEmptyLegTurns = result.emptyLegTurns;
