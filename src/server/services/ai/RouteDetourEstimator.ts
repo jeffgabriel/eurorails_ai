@@ -516,6 +516,7 @@ export function simulateTrip(
   startPos: GridCoord,
   stopsInOrder: RouteStop[],
   snapshot: SnapshotInput,
+  options?: { pendingUpgradeCost?: number },
 ): TripSimulation {
   const TURN_BUILD_BUDGET = 20; // ECU 20M max per turn
 
@@ -545,6 +546,15 @@ export function simulateTrip(
   // turn the stop is reached. Safe-defaults: 0 for both fields.
   let cashRelative = 0;
   let minCashRelative = 0;
+
+  // JIRA-232 Defect A: subtract pending upgrade cost on turn 0 before any
+  // build/move work begins. This ensures the affordability gate sees the true
+  // cash floor when an upgrade will be emitted alongside this route.
+  const upgradeCost = options?.pendingUpgradeCost ?? 0;
+  if (upgradeCost > 0) {
+    cashRelative -= upgradeCost;
+    minCashRelative = Math.min(minCashRelative, cashRelative);
+  }
 
   // Segments that are "built" (traversable from next turn onward)
   const simulatedSegments: TrackSegment[] = [...snapshot.bot.existingSegments];

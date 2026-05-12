@@ -460,6 +460,55 @@ describe('simulateTrip cash-flow tracking (JIRA-223)', () => {
   });
 });
 
+// ── JIRA-232: simulateTrip pendingUpgradeCost ─────────────────────────
+
+describe('simulateTrip pendingUpgradeCost (JIRA-232)', () => {
+  beforeEach(() => {
+    // Grid: linear path (0,0) → (0,1) → ... → (0,14) with cities at ends
+    for (let col = 0; col <= 14; col++) {
+      addGridPoint(0, col, TerrainType.Clear, col === 0 ? 'CityA' : col === 14 ? 'CityB' : undefined);
+    }
+  });
+
+  it('AC1: pendingUpgradeCost=20 shifts minCashRelative down by exactly 20', () => {
+    // Route: CityA → CityB (new track to build).
+    // With no upgrade: minCashRelative = negative (build cost).
+    // With pendingUpgradeCost=20: minCashRelative shifts down by exactly 20.
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'CityB' },
+    ];
+
+    const resultBase = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot());
+    const resultUpgrade = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot(), { pendingUpgradeCost: 20 });
+
+    expect(resultBase.feasible).toBe(true);
+    expect(resultUpgrade.feasible).toBe(true);
+    // The upgrade cost shifts minCashRelative down by exactly 20
+    expect(resultUpgrade.minCashRelative).toBe(resultBase.minCashRelative - 20);
+  });
+
+  it('AC2: simulateTrip without options is identical to pre-change behavior (regression guard)', () => {
+    // Calling without options must not change any return value.
+    const stops: RouteStop[] = [
+      { action: 'deliver', loadType: 'Coal', city: 'CityB', payment: 10 },
+    ];
+
+    const resultWithout = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot());
+    const resultExplicitUndefined = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot(), undefined);
+    const resultZeroUpgrade = simulateTrip({ row: 0, col: 0 }, stops, makeSnapshot(), { pendingUpgradeCost: 0 });
+
+    // All three calls must produce identical results
+    expect(resultWithout.turnsToComplete).toBe(resultExplicitUndefined.turnsToComplete);
+    expect(resultWithout.totalBuildCost).toBe(resultExplicitUndefined.totalBuildCost);
+    expect(resultWithout.feasible).toBe(resultExplicitUndefined.feasible);
+    expect(resultWithout.minCashRelative).toBe(resultExplicitUndefined.minCashRelative);
+    expect(resultWithout.finalCashRelative).toBe(resultExplicitUndefined.finalCashRelative);
+
+    expect(resultWithout.minCashRelative).toBe(resultZeroUpgrade.minCashRelative);
+    expect(resultWithout.finalCashRelative).toBe(resultZeroUpgrade.finalCashRelative);
+  });
+});
+
 // ── AC3: computeCandidateDetourCosts ──────────────────────────────────
 
 describe('computeCandidateDetourCosts (AC3)', () => {

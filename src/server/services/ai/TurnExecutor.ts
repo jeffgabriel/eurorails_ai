@@ -311,6 +311,11 @@ export class TurnExecutor {
     const allSegments = [...snapshot.bot.existingSegments, ...newSegments];
     const totalCost = allSegments.reduce((s, seg) => s + seg.cost, 0);
 
+    // JIRA-232 Defect B: emit actual build cost for post-game diff against predicted.
+    console.log(
+      `[JIRA-232][actual] gameId=${snapshot.gameId} playerId=${snapshot.bot.playerId} turn=${snapshot.turnNumber} actualBuildCost=${cost}M`,
+    );
+
     const client = await db.connect();
     let remainingMoney = snapshot.bot.money - cost;
 
