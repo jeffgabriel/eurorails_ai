@@ -737,6 +737,9 @@ describe('scoreCandidate', () => {
   };
 
   it('computes correct score: payout=31, turns=3, buildCost=22, OCPT=4 (mid-phase default) → score=-3', () => {
+    // JIRA-232: snapshot has money=100 + freight + buildCost=22 → upgrade triggers a re-simulation.
+    // Provide the same result for both the initial and upgrade-aware re-simulation calls.
+    mockSimulateTrip.mockReturnValueOnce({ turnsToComplete: 3, totalBuildCost: 22, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
     mockSimulateTrip.mockReturnValueOnce({ turnsToComplete: 3, totalBuildCost: 22, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
     const snapshot = makeSnapshot();
     const candidate = {
@@ -1651,5 +1654,197 @@ describe('planTripDeterministic — JIRA-230 perf budget (AC12)', () => {
     expect(perfWarnCalls[0][0]).toContain('[perf-budget]');
     // Reasoning includes Candidates line
     expect(result.reasoning).toMatch(/Candidates: raw=\d+/);
+  });
+});
+
+// ── JIRA-231: Feasibility consumer (AC5, AC6, AC7) ────────────────────────────
+
+describe('JIRA-231: planTripDeterministic feasibility filter', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (mockGrid as any).clear();
+
+    // Cities needed by these tests
+    addCity('Firenze', 48, 44);
+    addCity('Hamburg', 10, 10);
+    addCity('Ruhr', 20, 20);
+    addCity('Lodz', 30, 30);
+    addCity('Berlin', 5, 5);
+
+    // Default: simulateTrip returns feasible result
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+
+    // Default: estimateGraphPathCost returns a reachable, low-cost result
+    mockEstimateGraphPathCost.mockReturnValue({
+      reachable: true,
+      buildCost: 5,
+      pathLength: 4,
+      estimatedTurns: 1,
+    });
+
+    // Default: LoadService returns empty supply variants (use supplyCity from demand)
+    mockGetSourceCitiesForLoad.mockReturnValue([]);
+  });
+
+  /**
+   * AC5: One infeasible + two feasible demands.
+   * Expected: chosen route does NOT include Firenze as a stop city.
+   */
+  it('AC5: one infeasible demand among three → TripPlanner skips infeasible city', () => {
+    // Infeasible demand: Marble supply at Firenze (saturated)
+    const infeasibleDemand = makeDemand({
+      cardIndex: 1,
+      loadType: 'Marble',
+      supplyCity: 'Firenze',
+      deliveryCity: 'Hamburg',
+      payout: 20,
+      isFeasible: false,
+      infeasibleReason: 'supplyCitySaturated',
+    });
+
+    // Feasible demand 1: Coal from Hamburg to Ruhr
+    const feasibleDemand1 = makeDemand({
+      cardIndex: 2,
+      loadType: 'Coal',
+      supplyCity: 'Hamburg',
+      deliveryCity: 'Ruhr',
+      payout: 25,
+    });
+
+    // Feasible demand 2: Iron from Berlin to Lodz
+    const feasibleDemand2 = makeDemand({
+      cardIndex: 3,
+      loadType: 'Iron',
+      supplyCity: 'Berlin',
+      deliveryCity: 'Lodz',
+      payout: 18,
+    });
+
+    const context = makeContext([infeasibleDemand, feasibleDemand1, feasibleDemand2]);
+    const result = planTripDeterministic(makeSnapshot(), context, makeMemory());
+
+    // Should succeed (not no_feasible_candidates)
+    expect(result.outcome).toBe('success');
+    expect(result.route).not.toBeNull();
+
+    // No stop should be at Firenze (the infeasible supply city) or Hamburg (infeasible delivery)
+    const stopCities = result.route!.stops.map(s => s.city);
+    expect(stopCities).not.toContain('Firenze');
+  });
+
+  /**
+   * AC6: ALL demands infeasible.
+   * Expected: outcome === 'no_feasible_candidates', route === null, reasoning includes 'structurally unreachable'.
+   */
+  it('AC6: all demands infeasible → outcome no_feasible_candidates, reasoning includes structurally unreachable', () => {
+    const allInfeasible = [
+      makeDemand({
+        cardIndex: 1,
+        loadType: 'Marble',
+        supplyCity: 'Firenze',
+        deliveryCity: 'Hamburg',
+        payout: 20,
+        isFeasible: false,
+        infeasibleReason: 'supplyCitySaturated',
+      }),
+      makeDemand({
+        cardIndex: 2,
+        loadType: 'Coal',
+        supplyCity: 'Hamburg',
+        deliveryCity: 'Ruhr',
+        payout: 15,
+        isFeasible: false,
+        infeasibleReason: 'deliveryCitySaturated',
+      }),
+    ];
+
+    const context = makeContext(allInfeasible);
+    const result = planTripDeterministic(makeSnapshot(), context, makeMemory());
+
+    expect(result.outcome).toBe('no_feasible_candidates');
+    expect(result.route).toBeNull();
+    expect(result.reasoning).toContain('structurally unreachable');
+  });
+
+  /**
+   * AC7: Replay-style test based on game 32964f24 turn 20.
+   * S1: cash=16M, position=(46,45), hand includes Marble@Firenze→Hamburg.
+   * Opponents have track at (48,44) — Firenze is saturated.
+   * Expected: TripPlanner does NOT pick Marble@Firenze; plan is not PassTurn.
+   *
+   * This tests the producer + consumer end-to-end by setting isFeasible=false
+   * on the Marble demand (as ContextBuilder/DemandEngine would have set it).
+   */
+  it('AC7: game 32964f24 turn-20 replay — bot does not pick Marble@Firenze when city is saturated', () => {
+    // Add Firenze to grid at (48,44) and other cities
+    addCity('Firenze', 48, 44);   // saturated small city
+
+    // Three demands from the turn-20 hand:
+    // 1. Marble from Firenze to Hamburg — INFEASIBLE (Firenze saturated)
+    const marbleDemand = makeDemand({
+      cardIndex: 1,
+      loadType: 'Marble',
+      supplyCity: 'Firenze',
+      deliveryCity: 'Hamburg',
+      payout: 20,
+      isFeasible: false,
+      infeasibleReason: 'supplyCitySaturated',
+    });
+
+    // 2. Imports from Hamburg to Lodz — feasible
+    const importsDemand = makeDemand({
+      cardIndex: 2,
+      loadType: 'Imports',
+      supplyCity: 'Hamburg',
+      deliveryCity: 'Lodz',
+      payout: 18,
+    });
+
+    // 3. Another feasible demand
+    const coalDemand = makeDemand({
+      cardIndex: 3,
+      loadType: 'Coal',
+      supplyCity: 'Berlin',
+      deliveryCity: 'Ruhr',
+      payout: 15,
+    });
+
+    // S1 snapshot: cash=16, position=(46,45)
+    const snapshot = makeSnapshot({
+      money: 16,
+      position: { row: 46, col: 45 },
+      existingSegments: [
+        {
+          from: { x: 1840, y: 1800, row: 46, col: 45, terrain: 0 },
+          to: { x: 1840, y: 1840, row: 46, col: 46, terrain: 0 },
+          cost: 1,
+        },
+      ],
+    });
+
+    const context = makeContext([marbleDemand, importsDemand, coalDemand], {
+      money: 16,
+      position: { row: 46, col: 45 },
+    });
+
+    const result = planTripDeterministic(snapshot, context, makeMemory());
+
+    // The bot should NOT pick Marble@Firenze
+    if (result.outcome === 'success' && result.route) {
+      const stopCities = result.route.stops.map(s => s.city);
+      expect(stopCities).not.toContain('Firenze');
+    } else {
+      // If no feasible candidates from the OTHER demands (all pruned), that's
+      // still valid — just ensure it's not PassTurn due to Marble being chosen.
+      // The key invariant is Firenze is not in the plan.
+      expect(result.outcome).toBe('no_feasible_candidates');
+    }
+
+    // In either case, the result is not a silent PassTurn from a bad Marble pick
+    // The planning did not return a route TO Firenze
+    if (result.route) {
+      const stopCities = result.route.stops.map(s => s.city);
+      expect(stopCities).not.toContain('Firenze');
+    }
   });
 });

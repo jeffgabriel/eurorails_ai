@@ -696,6 +696,7 @@ export function scoreCandidate(
   snapshot: WorldSnapshot,
   opts: ResolvedOptions,
   affordabilityOptions?: { affordabilityFloorM?: number },
+  memory?: BotMemoryState,
 ): ScoredCandidate {
   const snapshotInput = {
     bot: {
@@ -720,6 +721,29 @@ export function scoreCandidate(
 
   if (!result.feasible) {
     return { ...candidate, buildCost: result.totalBuildCost, turns: result.turnsToComplete, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0 };
+  }
+
+  // JIRA-232 Defect A: proactively check whether the planner will emit an
+  // upgrade alongside this route. If it will, re-simulate with the upgrade cost
+  // subtracted so the affordability gate sees the true cash floor.
+  const capSaturatedTurns = memory?.capSaturatedTurns ?? 0;
+  const upgradeCheck = selectUpgradeTarget(
+    snapshot.bot.trainType,
+    snapshot.bot.money,
+    result.totalBuildCost,
+    capSaturatedTurns,
+  );
+  if (upgradeCheck.target) {
+    // An upgrade will be emitted — re-simulate with the upgrade cost included
+    try {
+      result = simulateTrip(startPos, candidate.stops, snapshotInput, { pendingUpgradeCost: UPGRADE_COST_M });
+    } catch (e) {
+      console.warn(
+        `[DeterministicTripPlanner] scoreCandidate: upgrade-aware re-simulation threw for candidate id=${candidate.id}`,
+        e,
+      );
+      return { ...candidate, buildCost: 999, turns: 999, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0 };
+    }
   }
 
   // Affordability gate (JIRA-223): reject candidates where the simulated cash
@@ -1182,15 +1206,27 @@ export function planTripDeterministic(
     };
   }
 
+  // JIRA-231: Filter out structurally infeasible demands (supply/delivery city saturated)
+  const feasibleDemands = context.demands.filter(d => d.isFeasible !== false);
+  if (feasibleDemands.length === 0) {
+    const latencyMs = Date.now() - startMs;
+    return {
+      route: null,
+      reasoning: '[deterministic-top-1] All demand cards point to structurally unreachable cities — discard recommended.',
+      outcome: 'no_feasible_candidates',
+      synthesizedAttempt: synthesizeLlmAttempt(null, latencyMs),
+    };
+  }
+
   const trainTypeRaw = (snapshot.bot.trainType ?? 'freight').toLowerCase();
   const cap = TRAIN_CAP[trainTypeRaw] ?? 2;
   const speed = context.speed ?? TRAIN_SPEED[trainTypeRaw] ?? 9;
 
   const startPos: GridCoord = snapshot.bot.position ?? { row: 0, col: 0 };
 
-  // Carry detection
-  const carried = detectCarriedLoads(memory.activeRoute, context.demands);
-  const rows = normalizeRows(context.demands, carried);
+  // Carry detection (use feasibleDemands to avoid detecting carries for infeasible demands)
+  const carried = detectCarriedLoads(memory.activeRoute, feasibleDemands);
+  const rows = normalizeRows(feasibleDemands, carried);
 
   // Enumerate all candidates (JIRA-230 BE-002: supply-aware, threaded snapshot/speed)
   const enumStartMs = Date.now();
@@ -1255,7 +1291,7 @@ export function planTripDeterministic(
   // Simulate survivors (R6)
   const feasible: ScoredCandidate[] = [];
   for (const cand of survivors) {
-    const scored = scoreCandidate(cand, startPos, snapshot, opts);
+    const scored = scoreCandidate(cand, startPos, snapshot, opts, undefined, memory);
     if (scored.feasible) feasible.push(scored);
   }
 
@@ -1291,6 +1327,12 @@ export function planTripDeterministic(
     return a.id.localeCompare(b.id);
   });
   const top1 = pickTop1(sorted)!;
+
+  // JIRA-232 Defect B: emit predicted build cost for post-game diff against actual.
+  console.log(
+    `[JIRA-232][predict] id=${top1.id} predictedBuildCost=${top1.buildCost}M stops=${top1.stops.map((s) => `${s.action}:${s.city}`).join(',')}`,
+  );
+
 
   // JIRA-220 follow-up: deterministic upgrade decision. Upgrade as soon as the
   // bot can afford it given the chosen trip's build cost. Fast → Superfreight
