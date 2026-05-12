@@ -251,26 +251,46 @@ function nearestCityCoord(
 // ── Carry detection (R3) ───────────────────────────────────────────────
 
 /**
- * Returns the set of loadTypes the bot is currently carrying.
+ * Returns a Map<loadType, count> representing how many instances of each load
+ * the bot is actually carrying.
  *
  * Combines two signals:
- *  1. demand.isLoadOnTrain === true (canonical carry marker).
+ *  1. cargoLoads (from snapshot.bot.loads) — canonical, per-instance source of
+ *     truth for multiplicity. If the bot carries ['Copper', 'Coal'], the map
+ *     contains { Copper: 1, Coal: 1 }.
  *  2. activeRoute stops where a `deliver <load>` appears with no preceding
- *     `pickup <load>` in the same plan — implies the bot already has that load.
+ *     `pickup <load>` in the same plan — implicit carry, used when isLoadOnTrain
+ *     flags are stale or missing.
  *
- * When signals disagree, logs a console.warn and treats as carry (union).
+ * Multiplicity guarantee (R1): the count per loadType is the maximum of
+ * cargoLoads count and implicit-carry signal (1 when implicit, 0 otherwise).
+ * This prevents two demand cards sharing the same loadType from both getting
+ * isCarry=true when the bot only carries one instance.
+ *
+ * When signals disagree, logs a console.warn and takes the union (conservative).
  */
 export function detectCarriedLoads(
   activeRoute: StrategicRoute | null,
   demands: DemandContext[],
-): Set<string> {
-  // Signal 1: canonical isLoadOnTrain flag
-  const canonicalCarry = new Set<string>();
-  for (const d of demands) {
-    if (d.isLoadOnTrain) canonicalCarry.add(d.loadType);
+  cargoLoads: string[] = [],
+): Map<string, number> {
+  // Build per-loadType count from canonical cargo array (snapshot.bot.loads).
+  // Array allows duplicates — e.g. ['Copper', 'Coal', 'Copper'] → {Copper:2, Coal:1}.
+  const cargoCount = new Map<string, number>();
+  for (const loadType of cargoLoads) {
+    cargoCount.set(loadType, (cargoCount.get(loadType) ?? 0) + 1);
   }
 
-  // Signal 2: implicit carry from activeRoute stops
+  // Signal 1: canonical isLoadOnTrain flag (legacy — may not reflect multiplicity).
+  // Ensures any loadType flagged by isLoadOnTrain shows at least count=1.
+  for (const d of demands) {
+    if (d.isLoadOnTrain && !cargoCount.has(d.loadType)) {
+      cargoCount.set(d.loadType, 1);
+    }
+  }
+
+  // Signal 2: implicit carry from activeRoute stops (deliver with no preceding pickup).
+  // Only fires when cargoLoads is empty or lacks the loadType (stale snapshot defense).
   const implicitCarry = new Set<string>();
   if (activeRoute?.stops) {
     const pickedUp = new Set<string>();
@@ -283,19 +303,25 @@ export function detectCarriedLoads(
     }
   }
 
-  // Union: false positive on carry is recoverable; false negative leads to unnecessary pickup
-  const carried = new Set<string>([...canonicalCarry, ...implicitCarry]);
-
-  // Warn when signals disagree
+  // Merge implicit signal — but only if cargoCount is 0 for that loadType.
+  // Preserves multiplicity from cargoLoads while still catching stale states.
   for (const loadType of implicitCarry) {
-    if (!canonicalCarry.has(loadType)) {
+    if (!cargoCount.has(loadType)) {
+      cargoCount.set(loadType, 1);
+    }
+  }
+
+  // Warn when signals disagree (for debugging signal-source divergence)
+  const canonicalTypes = new Set(demands.filter(d => d.isLoadOnTrain).map(d => d.loadType));
+  for (const loadType of implicitCarry) {
+    if (!canonicalTypes.has(loadType) && !cargoLoads.includes(loadType)) {
       console.warn(
         `[DeterministicTripPlanner] detectCarriedLoads signal mismatch: ` +
         `loadType=${loadType} canonical=false implicit=true — treating as carry`,
       );
     }
   }
-  for (const loadType of canonicalCarry) {
+  for (const loadType of canonicalTypes) {
     if (!implicitCarry.has(loadType) && activeRoute?.stops?.some(s => s.action === 'deliver' && s.loadType === loadType)) {
       console.warn(
         `[DeterministicTripPlanner] detectCarriedLoads signal mismatch: ` +
@@ -304,22 +330,57 @@ export function detectCarriedLoads(
     }
   }
 
-  return carried;
+  return cargoCount;
 }
 
 // ── Row normalization ──────────────────────────────────────────────────
 
-function normalizeRows(
+/**
+ * Normalize demand rows into NormalizedDemandRow[] with multiplicity-aware isCarry flags.
+ *
+ * Multiplicity rule (R1, ADR-4): when multiple demand rows share a loadType,
+ * mark isCarry=true only on the top-N rows (N = cargo count for that loadType).
+ * Tie-breaking rule: highest payout wins. This maximizes expected utility of
+ * the carried instance. Rows with equal payout keep stable insertion order.
+ *
+ * Example: bot.loads=['Copper'], demands=[{Copper,50M},{Copper,20M},{Coal,15M}]
+ *   → {Copper,50M}: isCarry=true  (highest-payout Copper wins the slot)
+ *   → {Copper,20M}: isCarry=false (slot exhausted by the 50M demand)
+ *   → {Coal,15M}:   isCarry=false (Coal not in cargo)
+ */
+export function normalizeRows(
   demands: DemandContext[],
-  carried: Set<string>,
+  carried: Map<string, number>,
 ): NormalizedDemandRow[] {
+  // For each loadType with carry count > 0, determine which N demand rows
+  // (sorted descending by payout) get isCarry=true.
+  const carryWinners = new Set<number>();
+
+  // Group demands by loadType to pick the top-N per type.
+  const byLoadType = new Map<string, DemandContext[]>();
+  for (const d of demands) {
+    if (!byLoadType.has(d.loadType)) byLoadType.set(d.loadType, []);
+    byLoadType.get(d.loadType)!.push(d);
+  }
+
+  for (const [loadType, rows] of byLoadType) {
+    const count = carried.get(loadType) ?? 0;
+    if (count <= 0) continue;
+
+    // Sort descending by payout; stable sort preserves insertion order for ties.
+    const sorted = [...rows].sort((a, b) => b.payout - a.payout);
+    for (let i = 0; i < Math.min(count, sorted.length); i++) {
+      carryWinners.add(sorted[i].cardIndex);
+    }
+  }
+
   return demands.map((d) => ({
     loadType: d.loadType,
     supplyCity: d.supplyCity,
     deliveryCity: d.deliveryCity,
     payout: d.payout,
     cardIndex: d.cardIndex,
-    isCarry: d.isLoadOnTrain || carried.has(d.loadType),
+    isCarry: carryWinners.has(d.cardIndex),
   }));
 }
 
@@ -1224,8 +1285,9 @@ export function planTripDeterministic(
 
   const startPos: GridCoord = snapshot.bot.position ?? { row: 0, col: 0 };
 
-  // Carry detection (use feasibleDemands to avoid detecting carries for infeasible demands)
-  const carried = detectCarriedLoads(memory.activeRoute, feasibleDemands);
+  // Carry detection (use feasibleDemands to avoid detecting carries for infeasible demands).
+  // Pass snapshot.bot.loads as canonical cargo for multiplicity-aware counting (R1, JIRA-233).
+  const carried = detectCarriedLoads(memory.activeRoute, feasibleDemands, snapshot.bot.loads ?? []);
   const rows = normalizeRows(feasibleDemands, carried);
 
   // Enumerate all candidates (JIRA-230 BE-002: supply-aware, threaded snapshot/speed)

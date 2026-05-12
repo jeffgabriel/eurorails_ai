@@ -64,6 +64,7 @@ import {
   AFFORDABILITY_FLOOR_M,
   classifyGamePhase,
   detectCarriedLoads,
+  normalizeRows,
   enumerateCandidates,
   cheapPrune,
   scoreCandidate,
@@ -388,6 +389,86 @@ describe('detectCarriedLoads', () => {
     ]);
     const result = detectCarriedLoads(route, demands);
     expect(result.has('Coal')).toBe(false);
+  });
+});
+
+// ── normalizeRows multiplicity (AC1, R1) ──────────────────────────────
+
+describe('normalizeRows multiplicity-aware carry detection (JIRA-233 BE-001)', () => {
+  it('AC1: two Copper demands + 1 Copper in cargo → highest-payout Copper row wins isCarry=true', () => {
+    // Fixture: bot carries 1 Copper. Two demand cards for Copper (50M and 20M).
+    // Tie-break rule: highest payout wins the isCarry slot.
+    const demands: DemandContext[] = [
+      makeDemand({ cardIndex: 10, loadType: 'Copper', deliveryCity: 'Madrid', payout: 50 }),
+      makeDemand({ cardIndex: 11, loadType: 'Copper', deliveryCity: 'Lisbon', payout: 20 }),
+      makeDemand({ cardIndex: 12, loadType: 'Coal', deliveryCity: 'Paris', payout: 15 }),
+    ];
+    const cargoLoads = ['Copper']; // bot carries exactly 1 Copper
+    const carried = detectCarriedLoads(null, demands, cargoLoads);
+    const rows = normalizeRows(demands, carried);
+
+    const copper50 = rows.find(r => r.cardIndex === 10)!;
+    const copper20 = rows.find(r => r.cardIndex === 11)!;
+    const coal = rows.find(r => r.cardIndex === 12)!;
+
+    // Highest-payout Copper (50M) wins the carried slot
+    expect(copper50.isCarry).toBe(true);
+    // Lower-payout Copper (20M) does NOT get isCarry=true even though Copper is in cargo
+    expect(copper20.isCarry).toBe(false);
+    // Coal not in cargo → not carry
+    expect(coal.isCarry).toBe(false);
+  });
+
+  it('single-supply: 1 Copper in cargo, 1 Copper demand → isCarry=true (canonical case)', () => {
+    const demands: DemandContext[] = [
+      makeDemand({ cardIndex: 1, loadType: 'Copper', deliveryCity: 'Madrid', payout: 30 }),
+    ];
+    const carried = detectCarriedLoads(null, demands, ['Copper']);
+    const rows = normalizeRows(demands, carried);
+    expect(rows[0].isCarry).toBe(true);
+  });
+
+  it('0 Copper in cargo, 2 Copper demands → both isCarry=false', () => {
+    const demands: DemandContext[] = [
+      makeDemand({ cardIndex: 1, loadType: 'Copper', deliveryCity: 'Madrid', payout: 50 }),
+      makeDemand({ cardIndex: 2, loadType: 'Copper', deliveryCity: 'Lisbon', payout: 20 }),
+    ];
+    const carried = detectCarriedLoads(null, demands, []); // empty cargo
+    const rows = normalizeRows(demands, carried);
+    expect(rows[0].isCarry).toBe(false);
+    expect(rows[1].isCarry).toBe(false);
+  });
+
+  it('2 Copper in cargo, 3 Copper demands → top-2 by payout get isCarry=true', () => {
+    const demands: DemandContext[] = [
+      makeDemand({ cardIndex: 1, loadType: 'Copper', deliveryCity: 'Madrid', payout: 50 }),
+      makeDemand({ cardIndex: 2, loadType: 'Copper', deliveryCity: 'Lisbon', payout: 35 }),
+      makeDemand({ cardIndex: 3, loadType: 'Copper', deliveryCity: 'Paris', payout: 10 }),
+    ];
+    const carried = detectCarriedLoads(null, demands, ['Copper', 'Copper']); // 2 Copper
+    const rows = normalizeRows(demands, carried);
+
+    const row50 = rows.find(r => r.cardIndex === 1)!;
+    const row35 = rows.find(r => r.cardIndex === 2)!;
+    const row10 = rows.find(r => r.cardIndex === 3)!;
+
+    expect(row50.isCarry).toBe(true);
+    expect(row35.isCarry).toBe(true);
+    // Third Copper demand does NOT get isCarry — only 2 carried
+    expect(row10.isCarry).toBe(false);
+  });
+
+  it('detectCarriedLoads with cargoLoads returns correct Map counts', () => {
+    const demands: DemandContext[] = [
+      makeDemand({ cardIndex: 1, loadType: 'Copper', deliveryCity: 'Madrid', payout: 30 }),
+      makeDemand({ cardIndex: 2, loadType: 'Coal', deliveryCity: 'Paris', payout: 15 }),
+    ];
+    const cargoLoads = ['Copper', 'Coal', 'Copper']; // 2 Copper, 1 Coal
+    const carried = detectCarriedLoads(null, demands, cargoLoads);
+
+    expect(carried.get('Copper')).toBe(2);
+    expect(carried.get('Coal')).toBe(1);
+    expect(carried.has('Steel')).toBe(false);
   });
 });
 
@@ -927,6 +1008,146 @@ describe('scoreCandidate — affordability gate (JIRA-223)', () => {
 
   it('AFFORDABILITY_FLOOR_M constant is exported and equals 0', () => {
     expect(AFFORDABILITY_FLOOR_M).toBe(0);
+  });
+});
+
+// ── JIRA-232: scoreCandidate upgrade-aware affordability gate ──────────
+
+describe('scoreCandidate — upgrade-aware affordability gate (JIRA-232)', () => {
+  const defaultOpts = {
+    ocpt: OCPT,
+    pruneMaxTurns: PRUNE_MAX_TURNS,
+    pruneMaxBuildM: PRUNE_MAX_BUILD_M,
+    hopAvgCostM: HOP_AVG_COST_M,
+  };
+
+  const makeCandidate = (id: string) => ({
+    id,
+    rows: [],
+    stops: [
+      { action: 'pickup' as const, loadType: 'Wine', city: 'Porto' },
+      { action: 'deliver' as const, loadType: 'Wine', city: 'Paris', demandCardId: 1, payment: 30 },
+    ],
+    payout: 30,
+  });
+
+  it('AC3 no-upgrade: Freight bot, cash=30M, buildCost=14M — upgrade NOT triggered (30 < 34), gate uses base sim', () => {
+    // freight + cash=30 + buildCost=14 → 30 < 20+14=34 → no upgrade trigger
+    mockSimulateTrip.mockReturnValueOnce({
+      turnsToComplete: 5, totalBuildCost: 14, feasible: true,
+      minCashRelative: -14, finalCashRelative: 16,
+    });
+    const snapshot = makeSnapshot({ money: 30, trainType: 'freight' as any });
+    const result = scoreCandidate(makeCandidate('ac3-no-upgrade'), { row: 5, col: 5 }, snapshot, defaultOpts);
+    // projectedMin = 30 + (-14) = 16 >= 0 → feasible (no upgrade subtraction)
+    expect(result.feasible).toBe(true);
+  });
+
+  it('AC3 canonical: Freight bot, cash=50M, buildCost=14M → upgrade triggers → projectedMin=50+(-34)=16 → feasible: true', () => {
+    // freight + cash=50 + buildCost=14 → 50 >= 34 → upgrade triggers
+    mockSimulateTrip.mockReturnValueOnce({
+      turnsToComplete: 5, totalBuildCost: 14, feasible: true,
+      minCashRelative: -14, finalCashRelative: 16,
+    });
+    // Re-simulation with pendingUpgradeCost=20: minCashRelative=-34
+    mockSimulateTrip.mockReturnValueOnce({
+      turnsToComplete: 5, totalBuildCost: 14, feasible: true,
+      minCashRelative: -34, finalCashRelative: -4,
+    });
+    const snapshot = makeSnapshot({ money: 50, trainType: 'freight' as any });
+    const result = scoreCandidate(makeCandidate('ac3-with-upgrade-pass'), { row: 5, col: 5 }, snapshot, defaultOpts);
+    // projectedMin = 50 + (-34) = 16 >= 0 → feasible
+    expect(result.feasible).toBe(true);
+  });
+
+  it('AC3 strict infeasible: upgrade triggers + minCashRelative makes projectedMin < 0 → feasible: false', () => {
+    // freight + cash=40 + buildCost=14 → 40 >= 34 → upgrade triggers
+    // Re-simulation returns minCashRelative=-41 (simulated deeper dip)
+    mockSimulateTrip.mockReturnValueOnce({
+      turnsToComplete: 5, totalBuildCost: 14, feasible: true,
+      minCashRelative: -14, finalCashRelative: 16,
+    });
+    mockSimulateTrip.mockReturnValueOnce({
+      turnsToComplete: 5, totalBuildCost: 14, feasible: true,
+      minCashRelative: -41, finalCashRelative: -11,
+    });
+    const snapshot = makeSnapshot({ money: 40, trainType: 'freight' as any });
+    const result = scoreCandidate(makeCandidate('ac3-strict-infeasible'), { row: 5, col: 5 }, snapshot, defaultOpts);
+    // projectedMin = 40 + (-41) = -1 < 0 → infeasible
+    expect(result.feasible).toBe(false);
+  });
+
+  it('AC4: Freight bot, cash=60M, buildCost=14M → upgrade triggers → projectedMin=60+(-34)=26 → feasible: true', () => {
+    // freight + cash=60 + buildCost=14 → 60 >= 34 → upgrade triggers
+    mockSimulateTrip.mockReturnValueOnce({
+      turnsToComplete: 5, totalBuildCost: 14, feasible: true,
+      minCashRelative: -14, finalCashRelative: 16,
+    });
+    mockSimulateTrip.mockReturnValueOnce({
+      turnsToComplete: 5, totalBuildCost: 14, feasible: true,
+      minCashRelative: -34, finalCashRelative: -4,
+    });
+    const snapshot = makeSnapshot({ money: 60, trainType: 'freight' as any });
+    const result = scoreCandidate(makeCandidate('ac4-pass'), { row: 5, col: 5 }, snapshot, defaultOpts);
+    // projectedMin = 60 + (-34) = 26 >= 0 → feasible
+    expect(result.feasible).toBe(true);
+  });
+
+  it('AC5: Superfreight bot → no upgrade triggered → gate behavior identical to pre-change', () => {
+    // superfreight: already at top tier → selectUpgradeTarget returns {} (no target)
+    // Only one simulateTrip call, using base minCashRelative
+    mockSimulateTrip.mockReturnValueOnce({
+      turnsToComplete: 5, totalBuildCost: 14, feasible: true,
+      minCashRelative: -14, finalCashRelative: 16,
+    });
+    const snapshot = makeSnapshot({ money: 40, trainType: 'superfreight' as any });
+    const result = scoreCandidate(makeCandidate('ac5-superfreight'), { row: 5, col: 5 }, snapshot, defaultOpts);
+    // projectedMin = 40 + (-14) = 26 >= 0 → feasible (no upgrade subtraction)
+    expect(result.feasible).toBe(true);
+    // Verify simulateTrip called only once (no re-simulation for superfreight)
+    expect(mockSimulateTrip).toHaveBeenCalledTimes(1);
+  });
+
+  it('AC6: scoreCandidate called without memory → falls back to capSaturatedTurns=0, does not throw', () => {
+    // No memory passed → capSaturatedTurns defaults to 0 → safe to call selectUpgradeTarget
+    mockSimulateTrip.mockReturnValueOnce({
+      turnsToComplete: 3, totalBuildCost: 5, feasible: true,
+      minCashRelative: -5, finalCashRelative: 25,
+    });
+    // freight + cash=100 + buildCost=5 → 100 >= 25 → upgrade triggers → second call
+    mockSimulateTrip.mockReturnValueOnce({
+      turnsToComplete: 3, totalBuildCost: 5, feasible: true,
+      minCashRelative: -25, finalCashRelative: 5,
+    });
+    const snapshot = makeSnapshot({ money: 100, trainType: 'freight' as any });
+    // Call without memory (6th arg) — must not throw
+    expect(() => {
+      scoreCandidate(makeCandidate('ac6-no-memory'), { row: 5, col: 5 }, snapshot, defaultOpts);
+    }).not.toThrow();
+  });
+});
+
+// ── JIRA-232: observability log lines ─────────────────────────────────
+
+describe('planTripDeterministic — JIRA-232 observability', () => {
+  it('AC7 predict: [JIRA-232][predict] log line emitted after top-1 selection', () => {
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    mockSimulateTrip.mockReturnValue({
+      turnsToComplete: 3, totalBuildCost: 5, feasible: true,
+      minCashRelative: 0, finalCashRelative: 0,
+    });
+    const snapshot = makeSnapshot({ trainType: 'superfreight' as any }); // no upgrade to keep mock calls simple
+    planTripDeterministic(
+      snapshot,
+      makeContext([makeDemand({ cardIndex: 1, loadType: 'Ham', deliveryCity: 'DeliveryCity', payout: 20 })]),
+      makeMemory(),
+    );
+    const predictLogs = logSpy.mock.calls.filter(
+      (args: unknown[]) => typeof args[0] === 'string' && (args[0] as string).includes('[JIRA-232][predict]'),
+    );
+    expect(predictLogs.length).toBeGreaterThan(0);
+    expect(predictLogs[0][0]).toContain('predictedBuildCost=');
+    logSpy.mockRestore();
   });
 });
 
