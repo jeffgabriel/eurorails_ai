@@ -718,13 +718,12 @@ describe('RouteStop type (AC4)', () => {
   });
 });
 
-// ── JIRA-236: parallel-build proximity penalty in findShortestBuildablePath ──
+// ── JIRA-236: parallel-build proximity penalty in findBuildPath ──
 //
-// simulateTrip's pathfinder must apply the same 2× penalty for hexes near
-// existing track that computeBuildSegments uses. Without this, the simulator's
-// totalBuildCost is systematically optimistic compared to the in-game build,
-// because the in-game build (driven by computeBuildSegments) chooses
-// parallel-avoiding longer paths while the simulator finds the shortest path.
+// simulateTrip delegates to the shared findBuildPath utility (BE-002) which
+// applies the same 2× penalty for hexes near existing track that
+// computeBuildSegments uses. After consolidation, both callers use the same
+// implementation — the penalty cannot drift between them.
 
 describe('simulateTrip — JIRA-236 parallel-build proximity penalty', () => {
   // Note on test coverage: a "with penalty → cost changes" integration test
