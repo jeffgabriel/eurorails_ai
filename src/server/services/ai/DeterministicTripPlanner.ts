@@ -872,7 +872,7 @@ export function scoreCandidate(
     aggregateScore: net / Math.max(turns, 1),
     aggregateFollowup: null,
     aggregateEmptyLegTurns: 0,
-    builtSegments: result.builtSegments,
+    builtSegments: result.builtSegments ?? [],
   };
 }
 
@@ -891,9 +891,13 @@ export function scoreCandidate(
  * The follow-up must use a disjoint set of demand cards from `c1` so the
  * same cardIndex is not consumed twice in the look-ahead.
  *
- * O(N²) where N is the feasible-candidate count, typically 30-100. Empty-leg
- * is approximated via Chebyshev distance between c1's last stop city and c2's
- * first stop city, divided by speed.
+ * JIRA-237 Defect 1 fix: c2 is now re-simulated against a post-c1 snapshot
+ * (bot.position = c1.endCity, network = bot.network ∪ c1.builtSegments,
+ * money = bot.money + c1.net). This replaces the JIRA-230 partial correction
+ * (emptyLegTurns + c2BotToStartTurns) with a structural re-simulation that
+ * captures all forms of network sharing between c1 and c2.
+ *
+ * O(N²) where N is the feasible-candidate count, typically 30-100.
  */
 export function computeAggregateScore(
   c1: ScoredCandidate,
@@ -901,12 +905,33 @@ export function computeAggregateScore(
   cityToCoords: Map<string, GridCoord[]>,
   speed: number,
   botStartPos: GridCoord,
+  snapshot?: WorldSnapshot,
 ): { aggregate: number; followup: ScoredCandidate | null; emptyLegTurns: number } {
   const c1Cards = new Set(c1.rows.map((r) => r.cardIndex));
   const c1EndCity = c1.stops[c1.stops.length - 1]?.city;
   // Reference position for nearestCityCoord — c1's end if known, else (0,0) origin.
   const referencePos: GridCoord = { row: 0, col: 0 };
   const c1EndCoords = c1EndCity ? nearestCityCoord(c1EndCity, referencePos, cityToCoords) : null;
+
+  // JIRA-237 Defect 1: build post-c1 snapshot once per c1 (outside the c2 loop).
+  // Construct a synthetic snapshot whose:
+  //   bot.existingSegments = bot.network ∪ c1.builtSegments
+  //   bot.money = bot.money + c1.net (post-delivery cash)
+  //   bot.trainType = snapshot.bot.trainType (upgrade propagation is a future enhancement)
+  // The post-c1 position is passed as startPos to simulateTrip, not in the snapshot.
+  const postC1Snapshot = snapshot
+    ? {
+        bot: {
+          ...snapshot.bot,
+          existingSegments: [
+            ...snapshot.bot.existingSegments,
+            ...(c1.builtSegments ?? []),
+          ],
+          money: snapshot.bot.money + c1.net,
+        },
+        allPlayerTracks: snapshot.allPlayerTracks,
+      }
+    : null;
 
   // Search for the highest-aggregate disjoint follow-up. When ANY feasible
   // follow-up exists, the bot's actual trajectory is "c1 then follow-up,"
@@ -929,51 +954,69 @@ export function computeAggregateScore(
     }
     if (overlap) continue;
 
-    const c2StartCity = c2.stops[0]?.city;
-    const c2StartCoords = c2StartCity
-      ? nearestCityCoord(c2StartCity, c1EndCoords ?? referencePos, cityToCoords)
-      : null;
+    let aggregateTurns: number;
+    let aggregateNet: number;
 
-    let emptyLegTurns = 0;
-    if (c1EndCoords && c2StartCoords) {
-      const hops = hexDistance(
-        c1EndCoords.row,
-        c1EndCoords.col,
-        c2StartCoords.row,
-        c2StartCoords.col,
-      );
-      emptyLegTurns = Math.ceil(hops / Math.max(speed, 1));
+    if (postC1Snapshot && c1EndCoords) {
+      // JIRA-237 Defect 1 fix: re-simulate c2 from c1.endCity against post-c1 network.
+      // This captures shared track (c1.builtSegments reduce c2's build cost) and
+      // eliminates the emptyLegTurns + c2BotToStartTurns approximation errors.
+      const c2Chained = simulateTrip(c1EndCoords, c2.stops, postC1Snapshot);
+      if (!c2Chained.feasible) continue; // R5: skip infeasible c2 against post-c1 network
+
+      const c2ChainedNet = c2.payout - c2Chained.totalBuildCost;
+      aggregateTurns = Math.max(c1.turns + c2Chained.turnsToComplete, 1);
+      aggregateNet = c1.net + c2ChainedNet;
+    } else {
+      // Fallback to JIRA-230 R2 approximation when snapshot not available.
+      // Used by legacy test callers that don't pass a snapshot.
+      const c2StartCity = c2.stops[0]?.city;
+      const c2StartCoords = c2StartCity
+        ? nearestCityCoord(c2StartCity, c1EndCoords ?? referencePos, cityToCoords)
+        : null;
+
+      let emptyLegTurns = 0;
+      if (c1EndCoords && c2StartCoords) {
+        const hops = hexDistance(
+          c1EndCoords.row,
+          c1EndCoords.col,
+          c2StartCoords.row,
+          c2StartCoords.col,
+        );
+        emptyLegTurns = Math.ceil(hops / Math.max(speed, 1));
+      }
+      bestEmptyLegTurns = emptyLegTurns; // update running best
+
+      let c2BotToStartTurns = 0;
+      if (c2StartCoords) {
+        const botToC2Hops = hexDistance(
+          botStartPos.row,
+          botStartPos.col,
+          c2StartCoords.row,
+          c2StartCoords.col,
+        );
+        c2BotToStartTurns = Math.ceil(botToC2Hops / Math.max(speed, 1));
+      }
+      const c2ExecutionTurns = Math.max(c2.turns - c2BotToStartTurns, 1);
+      aggregateTurns = Math.max(c1.turns + emptyLegTurns + c2ExecutionTurns, 1);
+      aggregateNet = c1.net + c2.net;
     }
 
-    // JIRA-230 R2: c2.turns was scored by simulateTrip starting from bot.position,
-    // so it already includes the bot→c2.start travel segment. Adding emptyLegTurns
-    // (c1.end→c2.start) on top double-counts that leg. Subtract the bot→c2.start
-    // segment from c2.turns before summing. Use hexDistance for symmetry with how
-    // simulateTrip computed c2.turns (ADR-5: symmetry required).
-    let c2BotToStartTurns = 0;
-    if (c2StartCoords) {
-      const botToC2Hops = hexDistance(
-        botStartPos.row,
-        botStartPos.col,
-        c2StartCoords.row,
-        c2StartCoords.col,
-      );
-      c2BotToStartTurns = Math.ceil(botToC2Hops / Math.max(speed, 1));
-    }
-    const c2ExecutionTurns = Math.max(c2.turns - c2BotToStartTurns, 1);
-
-    const aggregateTurns = Math.max(c1.turns + emptyLegTurns + c2ExecutionTurns, 1);
-    const aggregateNet = c1.net + c2.net;
     const aggregate = aggregateNet / aggregateTurns;
 
     if (bestAggregate === null || aggregate > bestAggregate) {
       bestAggregate = aggregate;
       bestFollowup = c2;
-      bestEmptyLegTurns = emptyLegTurns;
+      // For the chained path, emptyLegTurns is 0 (absorbed into c2_chained.turnsToComplete).
+      // For the fallback path, bestEmptyLegTurns was updated above.
+      if (postC1Snapshot && c1EndCoords) {
+        bestEmptyLegTurns = 0; // JIRA-237: chained sim absorbs empty-leg; log as 0
+      }
     }
   }
 
-  // Endgame fallback: no disjoint follow-up. Use c1's standalone velocity.
+  // R5 / Endgame fallback: no disjoint follow-up (or all c2 infeasible against
+  // post-c1 network). Use c1's standalone velocity.
   if (bestAggregate === null) {
     return {
       aggregate: c1.net / Math.max(c1.turns, 1),
@@ -1060,9 +1103,15 @@ function synthesizeReasoning(
   reasoning += `  Picked: ${pattern} — payout ${top1.payout}M, build ${top1.buildCost}M, ${top1.turns} turns, NET ${top1.net.toFixed(0)}M, score ${top1.score.toFixed(1)}\n`;
   // JIRA-229: aggregate two-trip look-ahead line. Surfaces the chained
   // follow-up so the rank reasoning is auditable from the log.
+  // JIRA-237: when post-c1 re-simulation is active, emptyLegTurns is absorbed
+  // into the chained sim (reported as 0); log shows "chained-sim" to distinguish
+  // from the legacy emptyLeg approximation.
   const aggStr = top1.aggregateScore.toFixed(2);
   if (top1.aggregateFollowup) {
-    reasoning += `  Aggregate: ${aggStr} M/turn (chained with ${top1.aggregateFollowup.id}, empty-leg ${top1.aggregateEmptyLegTurns} turns)\n`;
+    const emptyLegNote = top1.aggregateEmptyLegTurns === 0
+      ? 'chained-sim'
+      : `empty-leg ${top1.aggregateEmptyLegTurns} turns`;
+    reasoning += `  Aggregate: ${aggStr} M/turn (chained with ${top1.aggregateFollowup.id}, ${emptyLegNote})\n`;
   } else {
     reasoning += `  Aggregate: ${aggStr} M/turn (standalone — no feasible follow-up)\n`;
   }
@@ -1400,9 +1449,11 @@ export function planTripDeterministic(
 
   // JIRA-229: aggregate two-trip look-ahead. Mutates each feasible candidate
   // to populate aggregateScore/aggregateFollowup before sorting.
+  // JIRA-237 Defect 1: pass snapshot so computeAggregateScore can construct
+  // the post-c1 snapshot and re-simulate c2 against c1's built network.
   const cityToCoords = buildCityToCoords();
   for (const c1 of feasible) {
-    const result = computeAggregateScore(c1, feasible, cityToCoords, speed, startPos);
+    const result = computeAggregateScore(c1, feasible, cityToCoords, speed, startPos, snapshot);
     c1.aggregateScore = result.aggregate;
     c1.aggregateFollowup = result.followup;
     c1.aggregateEmptyLegTurns = result.emptyLegTurns;

@@ -230,7 +230,8 @@ beforeEach(() => {
   addCity('CityC', 4, 9);
 
   // Default: simulateTrip returns feasible result
-  mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+  // JIRA-237: include builtSegments in mock response (required by scoreCandidate and computeAggregateScore)
+  mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
 
   // Default: estimateGraphPathCost returns a reachable, low-cost result
   // so candidates are NOT pruned by cheapPrune in planTripDeterministic tests.
@@ -1641,7 +1642,9 @@ describe('planTripDeterministic — aggregate two-trip look-ahead (JIRA-229)', (
     expect(result.outcome).toBe('success');
     expect(result.reasoning).toContain('Aggregate:');
     expect(result.reasoning).toContain('chained with');
-    expect(result.reasoning).toContain('empty-leg');
+    // JIRA-237: chained simulation absorbs empty-leg; reasoning now shows 'chained-sim'
+    // instead of 'empty-leg N turns'. Updated assertion per AC13.
+    expect(result.reasoning).toContain('chained-sim');
     expect(result.reasoning).not.toContain('(standalone');
   });
 

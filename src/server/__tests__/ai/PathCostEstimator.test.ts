@@ -32,7 +32,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
 
 // ── Imports (after mocks) ──────────────────────────────────────────────
 
-import { estimateRouteSegment } from '../../services/ai/RouteDetourEstimator';
+import { estimateRouteSegment, simulateTrip } from '../../services/ai/RouteDetourEstimator';
 import {
   estimateGraphPathCost,
   clearPathCostCache,
@@ -40,9 +40,10 @@ import {
   GridCoord,
 } from '../../services/ai/PathCostEstimator';
 import { computeAggregateScore } from '../../services/ai/DeterministicTripPlanner';
-import { WorldSnapshot } from '../../../shared/types/GameTypes';
+import { WorldSnapshot, TrackSegment } from '../../../shared/types/GameTypes';
 
 const mockEstimateRouteSegment = estimateRouteSegment as jest.MockedFunction<typeof estimateRouteSegment>;
+const mockSimulateTrip = simulateTrip as jest.MockedFunction<typeof simulateTrip>;
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -126,6 +127,8 @@ function makeScoredCandidate(opts: {
     aggregateScore: opts.net / Math.max(opts.turns, 1),
     aggregateFollowup: null,
     aggregateEmptyLegTurns: 0,
+    // JIRA-237: builtSegments required on ScoredCandidate; empty array for test fixtures
+    builtSegments: [] as TrackSegment[],
   };
 }
 
@@ -598,5 +601,224 @@ describe('computeAggregateScore — JIRA-230 R2 bot.position → c2.start subtra
     expect(result.aggregate).toBeCloseTo(20 / 4, 6);
     expect(result.followup).toBeNull();
     expect(result.emptyLegTurns).toBe(0);
+  });
+});
+
+// ── computeAggregateScore — JIRA-237 chained re-simulation (Defect 1) ──────
+//
+// When snapshot is provided, computeAggregateScore re-simulates c2 starting
+// from c1.endCity against a post-c1 network (bot.network ∪ c1.builtSegments).
+// This replaces the JIRA-230 emptyLeg+botToStart approximation with a full
+// structural re-simulation that captures all network sharing.
+
+describe('computeAggregateScore — JIRA-237 chained re-simulation (Defect 1)', () => {
+  beforeEach(() => {
+    addCity('SupplyA', 3, 3);
+    addCity('DeliveryA', 7, 7);
+    addCity('SupplyC', 10, 10);
+    addCity('DeliveryC', 1, 1);
+  });
+
+  it('AC6: when snapshot provided, c2 is re-simulated via simulateTrip from c1.endCity (JIRA-237 R3)', () => {
+    // When snapshot is passed to computeAggregateScore, it must call simulateTrip
+    // for each disjoint c2 candidate.
+    const botPos = { row: 5, col: 5 };
+
+    const c1 = makeScoredCandidate({
+      id: 'c1',
+      cardIndices: [1],
+      startCity: 'SupplyA',
+      endCity: 'DeliveryA',
+      turns: 3,
+      net: 20,
+      payout: 25,
+    });
+    c1.builtSegments = []; // no shared segments
+
+    const c2 = makeScoredCandidate({
+      id: 'c2',
+      cardIndices: [2],
+      startCity: 'SupplyC',
+      endCity: 'DeliveryC',
+      turns: 4,
+      net: 18,
+      payout: 22,
+    });
+
+    const cityToCoords = new Map([
+      ['SupplyA', [{ row: 3, col: 3 }]],
+      ['DeliveryA', [{ row: 7, col: 7 }]],
+      ['SupplyC', [{ row: 10, col: 10 }]],
+      ['DeliveryC', [{ row: 1, col: 1 }]],
+    ]);
+
+    // Mock simulateTrip to return a feasible result for the chained c2
+    mockSimulateTrip.mockReturnValue({
+      turnsToComplete: 4,
+      totalBuildCost: 5,
+      feasible: true,
+      minCashRelative: -5,
+      finalCashRelative: 17,
+      builtSegments: [],
+    });
+
+    const snapshot = makeSnapshot([], botPos);
+    computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos, snapshot);
+
+    // simulateTrip should have been called at least once (for the c2 chained re-sim)
+    expect(mockSimulateTrip).toHaveBeenCalled();
+    // The call should use c1.endCoords as startPos (DeliveryA = row:7, col:7)
+    const callArgs = mockSimulateTrip.mock.calls[0];
+    expect(callArgs[0]).toEqual({ row: 7, col: 7 }); // c1.endCoords = DeliveryA
+    expect(callArgs[1]).toBe(c2.stops); // c2's stops
+  });
+
+  it('AC8: aggregate = (c1.net + c2_chained.net) / (c1.turns + c2_chained.turnsToComplete) (JIRA-237 R4)', () => {
+    // With chained re-simulation:
+    //   c1.net = 20, c1.turns = 3
+    //   c2.payout = 22, c2_chained.totalBuildCost = 5, c2_chained.turnsToComplete = 4
+    //   c2_chained.net = 22 - 5 = 17
+    //   aggregate = (20 + 17) / (3 + 4) = 37 / 7 ≈ 5.286
+    const botPos = { row: 5, col: 5 };
+
+    const c1 = makeScoredCandidate({
+      id: 'c1',
+      cardIndices: [1],
+      startCity: 'SupplyA',
+      endCity: 'DeliveryA',
+      turns: 3,
+      net: 20,
+      payout: 25,
+    });
+    c1.builtSegments = [];
+
+    const c2 = makeScoredCandidate({
+      id: 'c2',
+      cardIndices: [2],
+      startCity: 'SupplyC',
+      endCity: 'DeliveryC',
+      turns: 4,
+      net: 18,
+      payout: 22,
+    });
+
+    const cityToCoords = new Map([
+      ['SupplyA', [{ row: 3, col: 3 }]],
+      ['DeliveryA', [{ row: 7, col: 7 }]],
+      ['SupplyC', [{ row: 10, col: 10 }]],
+      ['DeliveryC', [{ row: 1, col: 1 }]],
+    ]);
+
+    // c2_chained: 4 turns, 5M build, payout=22 → chained net=17
+    mockSimulateTrip.mockReturnValue({
+      turnsToComplete: 4,
+      totalBuildCost: 5,
+      feasible: true,
+      minCashRelative: -5,
+      finalCashRelative: 17,
+      builtSegments: [],
+    });
+
+    const snapshot = makeSnapshot([], botPos);
+    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos, snapshot);
+
+    // JIRA-237 R4: aggregate = (c1.net + c2_chained.net) / (c1.turns + c2_chained.turnsToComplete)
+    //   = (20 + (22 - 5)) / (3 + 4) = 37 / 7
+    expect(result.aggregate).toBeCloseTo(37 / 7, 4);
+    expect(result.followup).toBe(c2);
+    // JIRA-237: emptyLegTurns is 0 when chained sim is active (absorbed into turns)
+    expect(result.emptyLegTurns).toBe(0);
+  });
+
+  it('AC9: all c2 infeasible against post-c1 network → returns c1 standalone velocity (JIRA-237 R5)', () => {
+    // When simulateTrip returns feasible:false for every c2, fallback to c1 standalone.
+    const botPos = { row: 5, col: 5 };
+
+    const c1 = makeScoredCandidate({
+      id: 'c1',
+      cardIndices: [1],
+      startCity: 'SupplyA',
+      endCity: 'DeliveryA',
+      turns: 4,
+      net: 20,
+      payout: 25,
+    });
+    c1.builtSegments = [];
+
+    const c2 = makeScoredCandidate({
+      id: 'c2',
+      cardIndices: [2],
+      startCity: 'SupplyC',
+      endCity: 'DeliveryC',
+      turns: 5,
+      net: 18,
+      payout: 22,
+    });
+
+    const cityToCoords = new Map([
+      ['SupplyA', [{ row: 3, col: 3 }]],
+      ['DeliveryA', [{ row: 7, col: 7 }]],
+      ['SupplyC', [{ row: 10, col: 10 }]],
+      ['DeliveryC', [{ row: 1, col: 1 }]],
+    ]);
+
+    // All c2 chained simulations are infeasible
+    mockSimulateTrip.mockReturnValue({
+      turnsToComplete: 0,
+      totalBuildCost: 0,
+      feasible: false,
+      minCashRelative: 0,
+      finalCashRelative: 0,
+      builtSegments: [],
+    });
+
+    const snapshot = makeSnapshot([], botPos);
+    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos, snapshot);
+
+    // R5 / endgame fallback: no feasible follow-up → standalone velocity
+    expect(result.aggregate).toBeCloseTo(20 / 4, 6); // c1.net / c1.turns = 5
+    expect(result.followup).toBeNull();
+    expect(result.emptyLegTurns).toBe(0);
+  });
+
+  it('AC9b: no snapshot → falls back to JIRA-230 approximation (legacy path, no simulateTrip call)', () => {
+    // When snapshot is undefined, should NOT call simulateTrip for chained simulation.
+    jest.clearAllMocks();
+    const botPos = { row: 5, col: 5 };
+
+    const c1 = makeScoredCandidate({
+      id: 'c1',
+      cardIndices: [1],
+      startCity: 'SupplyA',
+      endCity: 'DeliveryA',
+      turns: 4,
+      net: 20,
+      payout: 25,
+    });
+    c1.builtSegments = [];
+
+    const c2 = makeScoredCandidate({
+      id: 'c2',
+      cardIndices: [2],
+      startCity: 'SupplyC',
+      endCity: 'DeliveryC',
+      turns: 5,
+      net: 18,
+      payout: 22,
+    });
+
+    const cityToCoords = new Map([
+      ['SupplyA', [{ row: 3, col: 3 }]],
+      ['DeliveryA', [{ row: 7, col: 7 }]],
+      ['SupplyC', [{ row: 10, col: 10 }]],
+      ['DeliveryC', [{ row: 1, col: 1 }]],
+    ]);
+
+    // When snapshot is NOT passed, simulateTrip should NOT be called for chaining
+    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos);
+
+    expect(mockSimulateTrip).not.toHaveBeenCalled();
+    expect(result.followup).toBe(c2); // fallback still finds the follow-up
+    expect(result.aggregate).toBeGreaterThan(0);
   });
 });
