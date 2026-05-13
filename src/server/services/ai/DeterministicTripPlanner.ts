@@ -29,6 +29,7 @@ import {
   StrategicRoute,
   RouteStop,
   LlmAttempt,
+  TrackSegment,
 } from '../../../shared/types/GameTypes';
 
 // ── Tunables ───────────────────────────────────────────────────────────
@@ -194,6 +195,15 @@ interface ScoredCandidate extends Candidate {
   aggregateScore: number;
   aggregateFollowup: ScoredCandidate | null;
   aggregateEmptyLegTurns: number;
+  /**
+   * New track segments built by this candidate's simulated trip, in build order.
+   * Populated from TripSimulation.builtSegments inside scoreCandidate.
+   * Empty array for infeasible candidates or candidates requiring no new track.
+   *
+   * R2 — Used by computeAggregateScore to construct post-c1 network snapshots
+   * for chained c2 re-simulation (JIRA-237).
+   */
+  builtSegments: ReadonlyArray<TrackSegment>;
 }
 
 interface GridCoord {
@@ -775,7 +785,7 @@ export function scoreCandidate(
     allPlayerTracks: snapshot.allPlayerTracks,
   };
 
-  let result: { turnsToComplete: number; totalBuildCost: number; feasible: boolean; minCashRelative: number; finalCashRelative: number };
+  let result: ReturnType<typeof simulateTrip>;
   try {
     result = simulateTrip(startPos, candidate.stops, snapshotInput);
   } catch (e) {
@@ -783,16 +793,18 @@ export function scoreCandidate(
       `[DeterministicTripPlanner] scoreCandidate: simulator threw for candidate id=${candidate.id}`,
       e,
     );
-    return { ...candidate, buildCost: 999, turns: 999, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0 };
+    return { ...candidate, buildCost: 999, turns: 999, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0, builtSegments: [] };
   }
 
   if (!result.feasible) {
-    return { ...candidate, buildCost: result.totalBuildCost, turns: result.turnsToComplete, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0 };
+    return { ...candidate, buildCost: result.totalBuildCost, turns: result.turnsToComplete, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0, builtSegments: [] };
   }
 
   // JIRA-232 Defect A: proactively check whether the planner will emit an
   // upgrade alongside this route. If it will, re-simulate with the upgrade cost
   // subtracted so the affordability gate sees the true cash floor.
+  // JIRA-237 R7: pass the post-upgrade trainType so simulateTrip uses the correct
+  // speed and capacity for the upgraded train.
   const capSaturatedTurns = memory?.capSaturatedTurns ?? 0;
   const upgradeCheck = selectUpgradeTarget(
     snapshot.bot.trainType,
@@ -801,15 +813,19 @@ export function scoreCandidate(
     capSaturatedTurns,
   );
   if (upgradeCheck.target) {
-    // An upgrade will be emitted — re-simulate with the upgrade cost included
+    // An upgrade will be emitted — re-simulate with the upgrade cost and
+    // post-upgrade train type so speed/capacity reflect the upgraded train.
     try {
-      result = simulateTrip(startPos, candidate.stops, snapshotInput, { pendingUpgradeCost: UPGRADE_COST_M });
+      result = simulateTrip(startPos, candidate.stops, snapshotInput, {
+        pendingUpgradeCost: UPGRADE_COST_M,
+        pendingUpgradeTrainType: upgradeCheck.target,
+      });
     } catch (e) {
       console.warn(
         `[DeterministicTripPlanner] scoreCandidate: upgrade-aware re-simulation threw for candidate id=${candidate.id}`,
         e,
       );
-      return { ...candidate, buildCost: 999, turns: 999, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0 };
+      return { ...candidate, buildCost: 999, turns: 999, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0, builtSegments: [] };
     }
   }
 
@@ -833,6 +849,7 @@ export function scoreCandidate(
       aggregateScore: -9999,
       aggregateFollowup: null,
       aggregateEmptyLegTurns: 0,
+      builtSegments: [],
     };
   }
 
@@ -843,6 +860,8 @@ export function scoreCandidate(
   // aggregateScore/aggregateFollowup are populated later by computeAggregateScore
   // once all feasible candidates are known. Initialize to per-trip velocity so
   // callers that don't run the aggregate pass still get a sane rank key.
+  // R2: surface builtSegments from the simulation result onto the ScoredCandidate
+  // so computeAggregateScore can construct the post-c1 network snapshot (JIRA-237).
   return {
     ...candidate,
     buildCost,
@@ -853,6 +872,7 @@ export function scoreCandidate(
     aggregateScore: net / Math.max(turns, 1),
     aggregateFollowup: null,
     aggregateEmptyLegTurns: 0,
+    builtSegments: result.builtSegments,
   };
 }
 

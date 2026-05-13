@@ -764,3 +764,217 @@ describe('simulateTrip — JIRA-236 parallel-build proximity penalty', () => {
     expect(withFar.totalBuildCost).toBe(baseline.totalBuildCost);
   });
 });
+
+// ── JIRA-237: simulateTrip parallel build+move turn counting ──────────────────
+//
+// AC1: zero-build, fast_freight at speed 12, 12 mp away → 1 turn
+// AC2: 11M build + 12 mp existing-track movement at speed 12 → 1 turn (parallel)
+// AC3: pendingUpgradeTrainType = fast_freight with Freight snapshot → speed 12
+// AC4: builtSegments exposed on TripSimulation
+
+describe('simulateTrip — JIRA-237 parallel build+move turn counting', () => {
+  beforeEach(() => {
+    // 13-node linear grid: (0,0) → (0,1) → ... → (0,12) with cities at ends
+    // 12 edges = 12 mileposts of movement
+    for (let col = 0; col <= 12; col++) {
+      addGridPoint(0, col, TerrainType.Clear, col === 0 ? 'CityStart' : col === 12 ? 'CityEnd' : undefined);
+    }
+  });
+
+  it('AC1: zero-build, fast_freight, 12 mp away → turnsToComplete === 1 (JIRA-237)', () => {
+    // Bot already has full track — no build needed. Speed 12, exactly 12 mp.
+    const existingSegs: TrackSegment[] = [];
+    for (let col = 0; col < 12; col++) {
+      existingSegs.push(makeSegment(0, col, 0, col + 1, 1));
+    }
+
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'CityEnd' },
+    ];
+
+    const result = simulateTrip(
+      { row: 0, col: 0 },
+      stops,
+      makeSnapshot({ existingSegments: existingSegs, trainType: TrainType.FastFreight }),
+    );
+
+    expect(result.feasible).toBe(true);
+    expect(result.totalBuildCost).toBe(0);
+    // 12 mp / speed 12 = ceil(1) = 1 turn
+    expect(result.turnsToComplete).toBe(1);
+  });
+
+  it('AC2: 11M build + 12 mp of movement at speed 12 → turnsToComplete === 1 (parallel, JIRA-237)', () => {
+    // 11 segments are on existing track; 1 final segment must be built (cost = 1 per Clear).
+    // But let's construct a scenario with 11M build cost (11 Clear segments * 1M each).
+    // Existing track: just the start node exists (1 segment from col 0 to col 1 already).
+    // So bot must build 11 new segments (col 1→2 through col 11→12), total build = 11M.
+    // Movement: path is 12 edges total. Build takes ceil(11/20) = 1 turn.
+    // Move takes ceil(12/12) = 1 turn. max(1,1) = 1 turn.
+    const existingSegs: TrackSegment[] = [makeSegment(0, 0, 0, 1, 1)];
+
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'CityEnd' },
+    ];
+
+    const result = simulateTrip(
+      { row: 0, col: 0 },
+      stops,
+      makeSnapshot({ existingSegments: existingSegs, trainType: TrainType.FastFreight }),
+    );
+
+    expect(result.feasible).toBe(true);
+    // Build cost = 11M (11 new Clear segments), move = 12 edges
+    // Build turns = ceil(11/20) = 1; Move turns = ceil(12/12) = 1
+    // Leg turns = max(1, 1) = 1 (JIRA-237: parallel, was 1+1=2 in serial model)
+    // Note: JIRA-237 assertion — was 2, now 1
+    expect(result.turnsToComplete).toBe(1); // JIRA-237: parallel build+move
+  });
+
+  it('AC3: pendingUpgradeTrainType=fast_freight with Freight snapshot uses speed 12 (JIRA-237 R7)', () => {
+    // Freight default speed = 9. With pendingUpgradeTrainType = fast_freight, speed = 12.
+    // 12 mp, no existing track, so build cost = 12M.
+    // Build turns = ceil(12/20) = 1; Move turns = ceil(12/12) = 1 vs ceil(12/9) = 2
+    // With upgrade: max(1, 1) = 1 turn. Without upgrade: max(1, 2) = 2 turns.
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'CityEnd' },
+    ];
+
+    const resultNoUpgrade = simulateTrip(
+      { row: 0, col: 0 },
+      stops,
+      makeSnapshot({ trainType: TrainType.Freight }),
+    );
+
+    const resultWithUpgrade = simulateTrip(
+      { row: 0, col: 0 },
+      stops,
+      makeSnapshot({ trainType: TrainType.Freight }),
+      { pendingUpgradeCost: 20, pendingUpgradeTrainType: TrainType.FastFreight },
+    );
+
+    expect(resultNoUpgrade.feasible).toBe(true);
+    expect(resultWithUpgrade.feasible).toBe(true);
+    // Without upgrade: speed 9 → ceil(12/9) = 2 move turns; max(1, 2) = 2 turns
+    // With upgrade: speed 12 → ceil(12/12) = 1 move turn; max(1, 1) = 1 turn
+    // JIRA-237 R7: post-upgrade speed must be honored
+    expect(resultNoUpgrade.turnsToComplete).toBeGreaterThan(resultWithUpgrade.turnsToComplete);
+  });
+
+  it('AC3b: pendingUpgradeTrainType does NOT affect speed when pendingUpgradeCost=0 (JIRA-237 R7)', () => {
+    // If pendingUpgradeCost is 0, we ignore pendingUpgradeTrainType — use snapshot trainType.
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'CityEnd' },
+    ];
+
+    const resultBase = simulateTrip(
+      { row: 0, col: 0 },
+      stops,
+      makeSnapshot({ trainType: TrainType.Freight }),
+    );
+
+    const resultZeroCost = simulateTrip(
+      { row: 0, col: 0 },
+      stops,
+      makeSnapshot({ trainType: TrainType.Freight }),
+      { pendingUpgradeCost: 0, pendingUpgradeTrainType: TrainType.FastFreight },
+    );
+
+    // Zero pendingUpgradeCost → ignore pendingUpgradeTrainType → same result as base
+    expect(resultBase.turnsToComplete).toBe(resultZeroCost.turnsToComplete);
+    expect(resultBase.totalBuildCost).toBe(resultZeroCost.totalBuildCost);
+  });
+
+  it('AC4a: builtSegments is a non-empty readonly array when feasible and new track is needed (JIRA-237 R1)', () => {
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'CityEnd' },
+    ];
+
+    const result = simulateTrip(
+      { row: 0, col: 0 },
+      stops,
+      makeSnapshot({ existingSegments: [] }), // no existing track → must build
+    );
+
+    expect(result.feasible).toBe(true);
+    expect(result.totalBuildCost).toBeGreaterThan(0);
+    // R1: builtSegments must be present and non-empty when track was built
+    expect(result.builtSegments).toBeDefined();
+    expect(Array.isArray(result.builtSegments)).toBe(true);
+    expect(result.builtSegments.length).toBeGreaterThan(0);
+  });
+
+  it('AC4b: builtSegments is empty when feasible: false (JIRA-237 R1)', () => {
+    // Block all paths so feasible = false
+    const opponentEdges = new Set(['0,0-0,1', '0,1-0,0']);
+    mockGetOccupiedEdges.mockReturnValue(opponentEdges);
+
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'CityEnd' },
+    ];
+
+    const result = simulateTrip(
+      { row: 0, col: 0 },
+      stops,
+      makeSnapshot({ existingSegments: [] }),
+    );
+
+    expect(result.feasible).toBe(false);
+    // R1: builtSegments must be empty array (not undefined) when feasible: false
+    expect(result.builtSegments).toBeDefined();
+    expect(Array.isArray(result.builtSegments)).toBe(true);
+    expect(result.builtSegments.length).toBe(0);
+  });
+
+  it('AC4c: builtSegments is empty when no new track needed (fully on existing network, JIRA-237 R1)', () => {
+    // Full existing track — no build needed
+    const existingSegs: TrackSegment[] = [];
+    for (let col = 0; col < 12; col++) {
+      existingSegs.push(makeSegment(0, col, 0, col + 1, 1));
+    }
+
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'CityEnd' },
+    ];
+
+    const result = simulateTrip(
+      { row: 0, col: 0 },
+      stops,
+      makeSnapshot({ existingSegments: existingSegs }),
+    );
+
+    expect(result.feasible).toBe(true);
+    expect(result.totalBuildCost).toBe(0);
+    // When no new track is laid, builtSegments must be empty
+    expect(result.builtSegments).toBeDefined();
+    expect(result.builtSegments.length).toBe(0);
+  });
+
+  it('AC10: turnsToComplete improves (is lower) under parallel model vs prior serial model (JIRA-237 regression guard)', () => {
+    // Scenario: 11M build + path requiring 2 move turns at speed 9.
+    // Serial (old): buildTurns=1 + moveTurns=2 = 3. Parallel (new): max(1,2) = 2.
+    // Grid: 18 cols, so 18 edges. Build 17 of them (17M < 20M budget = 1 build turn).
+    // Speed 9: ceil(18/9) = 2 move turns.
+    for (let col = 13; col <= 18; col++) {
+      addGridPoint(0, col, TerrainType.Clear, col === 18 ? 'CityFar' : undefined);
+    }
+
+    // Existing track: only col 0→1
+    const existingSegs = [makeSegment(0, 0, 0, 1, 1)];
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'CityFar' },
+    ];
+
+    const result = simulateTrip(
+      { row: 0, col: 0 },
+      stops,
+      makeSnapshot({ existingSegments: existingSegs, trainType: TrainType.Freight }),
+    );
+
+    expect(result.feasible).toBe(true);
+    // Build: 17 segments * 1M = 17M → ceil(17/20) = 1 build turn
+    // Move: 18 edges → ceil(18/9) = 2 move turns
+    // JIRA-237 parallel: max(1, 2) = 2 turns. Prior serial model would give 1+2=3.
+    expect(result.turnsToComplete).toBe(2); // JIRA-237: was 3 in serial model
+  });
+});

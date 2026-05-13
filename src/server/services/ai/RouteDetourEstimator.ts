@@ -64,6 +64,14 @@ export interface TripSimulation {
    * Safe default: 0 when feasible: false.
    */
   finalCashRelative: number;
+  /**
+   * All new track segments laid during this simulated trip, in the order they
+   * were built. Empty array when feasible: false or when no new track is needed.
+   *
+   * R1 — Used by computeAggregateScore to construct post-c1 network snapshots
+   * for chained c2 re-simulation (JIRA-237).
+   */
+  builtSegments: ReadonlyArray<TrackSegment>;
 }
 
 /** Per-candidate detour scoring result for computeCandidateDetourCosts. */
@@ -223,11 +231,17 @@ export function simulateTrip(
   startPos: GridCoord,
   stopsInOrder: RouteStop[],
   snapshot: SnapshotInput,
-  options?: { pendingUpgradeCost?: number },
+  options?: { pendingUpgradeCost?: number; pendingUpgradeTrainType?: string },
 ): TripSimulation {
   const TURN_BUILD_BUDGET = 20; // ECU 20M max per turn
 
-  const trainType = snapshot.bot.trainType as TrainType;
+  // R7: honor post-upgrade trainType when pendingUpgradeCost > 0 and caller
+  // supplies pendingUpgradeTrainType. Fall back to snapshot's current type.
+  const upgradeCost = options?.pendingUpgradeCost ?? 0;
+  const effectiveTrainTypeStr = (upgradeCost > 0 && options?.pendingUpgradeTrainType)
+    ? options.pendingUpgradeTrainType
+    : snapshot.bot.trainType;
+  const trainType = effectiveTrainTypeStr as TrainType;
   const rawSpeed = TRAIN_PROPERTIES[trainType]?.speed ?? 9;
   const trainSpeed = snapshot.bot.ferryHalfSpeed ? Math.ceil(rawSpeed / 2) : rawSpeed;
 
@@ -247,7 +261,6 @@ export function simulateTrip(
   // JIRA-232 Defect A: subtract pending upgrade cost on turn 0 before any
   // build/move work begins. This ensures the affordability gate sees the true
   // cash floor when an upgrade will be emitted alongside this route.
-  const upgradeCost = options?.pendingUpgradeCost ?? 0;
   if (upgradeCost > 0) {
     cashRelative -= upgradeCost;
     minCashRelative = Math.min(minCashRelative, cashRelative);
@@ -255,6 +268,9 @@ export function simulateTrip(
 
   // Segments that are "built" (traversable from next turn onward)
   const simulatedSegments: TrackSegment[] = [...snapshot.bot.existingSegments];
+
+  // R1: accumulate all newly-built segments across all legs for builtSegments output.
+  const allNewSegments: TrackSegment[] = [];
 
   for (const stop of stopsInOrder) {
     // Find target city coord — skip non-geographic actions
@@ -274,50 +290,66 @@ export function simulateTrip(
     );
 
     if (path.length === 0) {
-      return { turnsToComplete: 0, totalBuildCost: 0, feasible: false, minCashRelative: 0, finalCashRelative: 0 };
+      return { turnsToComplete: 0, totalBuildCost: 0, feasible: false, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] };
     }
 
     totalBuildCost += legBuildCost;
 
-    // Simulate turns for this leg
-    // Phase 1: Build all new segments (up to TURN_BUILD_BUDGET per turn)
-    let buildRemaining = legBuildCost;
-    while (buildRemaining > 0) {
-      const builtThisTurn = Math.min(buildRemaining, TURN_BUILD_BUDGET);
-      buildRemaining -= builtThisTurn;
-      // Cash-flow: each build turn spends `builtThisTurn` ECU
-      cashRelative -= builtThisTurn;
-      minCashRelative = Math.min(minCashRelative, cashRelative);
-      turn++;
-      // Add newly-built segments to the simulation network (traversable next turn)
-      let costAccumulated = 0;
-      for (const seg of newSegs) {
-        if (costAccumulated + seg.cost <= (legBuildCost - buildRemaining)) {
-          simulatedSegments.push(seg);
-          costAccumulated += seg.cost;
-        }
-      }
-    }
+    // JIRA-237 Defect 2 fix: parallelize build and movement within a leg.
+    //
+    // Game-rule ordering: FIRST operate the train (move), THEN build track.
+    // This means within a single game turn the bot can both move on existing
+    // track AND build new segments. New segments become traversable the NEXT
+    // turn, not within the same turn they're laid.
+    //
+    // Per-leg turn count = max(buildTurnsNeeded, moveTurnsNeeded), not their sum.
+    //
+    // Movement counts only mileposts on track that existed BEFORE this leg
+    // began (path.length - 1 - newSegs.length is an approximation; we use
+    // the full path length minus new segments because new segments won't be
+    // traversable until after they're built in a future turn).
+    //
+    // Cash-flow: build spend is distributed across the build turns. Movement
+    // turns that occur in parallel with build turns don't add extra cash events.
 
-    // Phase 2: Move to the destination (mileposts per turn = trainSpeed)
-    // Count mileposts that need to be traversed
+    const buildTurnsNeeded = legBuildCost > 0 ? Math.ceil(legBuildCost / TURN_BUILD_BUDGET) : 0;
+    // Mileposts on existing track = total path edges minus the new segments that
+    // must be built first. The bot can move along the already-existing portion of
+    // the path during the same turns it is building. New segments become traversable
+    // on the next turn after they are laid — but here we're measuring the
+    // movement needed on pre-existing track to reach the destination. For
+    // simplicity we use full path length - 1 (edges) for movement, which is an
+    // accurate approximation of "total moves needed" when build is happening in
+    // parallel since the new track opens as builds complete.
     const milestonesToTraverse = path.length - 1; // number of edges in path
-    let milesRemaining = milestonesToTraverse;
-    while (milesRemaining > 0) {
-      const movedThisTurn = Math.min(milesRemaining, trainSpeed);
-      milesRemaining -= movedThisTurn;
-      if (milesRemaining > 0) turn++;
-    }
-    // Account for the leg's destination turn — but only when *something*
-    // actually happened on this leg (build or movement). Without this guard,
-    // zero-distance, zero-build stops (e.g., a second deliver at a city we
-    // just delivered at — typical of P3 shared-delivery pairs) would each
-    // add a spurious +1 turn that systematically punishes pair candidates
-    // in score-based ranking. JIRA-220 follow-up: this fix unblocks deterministic
-    // pair selection by removing the simulator's per-stop turn tax for
-    // already-arrived stops.
-    if (legBuildCost > 0 || milestonesToTraverse > 0) {
-      turn++;
+    const moveTurnsNeeded = milestonesToTraverse > 0 ? Math.ceil(milestonesToTraverse / trainSpeed) : 0;
+    const legTurns = Math.max(buildTurnsNeeded, moveTurnsNeeded);
+
+    if (legTurns > 0) {
+      // Distribute build spend across the build turns (cash-flow accuracy).
+      // The remaining build budget decreases each turn.
+      let buildRemaining = legBuildCost;
+      for (let t = 0; t < buildTurnsNeeded; t++) {
+        const builtThisTurn = Math.min(buildRemaining, TURN_BUILD_BUDGET);
+        buildRemaining -= builtThisTurn;
+        cashRelative -= builtThisTurn;
+        minCashRelative = Math.min(minCashRelative, cashRelative);
+      }
+
+      // Add all new segments to simulated network (traversable next leg/turn).
+      for (const seg of newSegs) {
+        simulatedSegments.push(seg);
+        allNewSegments.push(seg);
+      }
+
+      turn += legTurns;
+    } else {
+      // Zero-distance, zero-build stop — no turns consumed.
+      // Add zero-cost new segments if any (shouldn't happen but be safe).
+      for (const seg of newSegs) {
+        simulatedSegments.push(seg);
+        allNewSegments.push(seg);
+      }
     }
 
     // Cash-flow: delivery payout arrives when the bot reaches the delivery city
@@ -329,7 +361,7 @@ export function simulateTrip(
     currentPos = cityCoord;
   }
 
-  return { turnsToComplete: turn, totalBuildCost, feasible: true, minCashRelative, finalCashRelative: cashRelative };
+  return { turnsToComplete: turn, totalBuildCost, feasible: true, minCashRelative, finalCashRelative: cashRelative, builtSegments: allNewSegments };
 }
 
 /**
