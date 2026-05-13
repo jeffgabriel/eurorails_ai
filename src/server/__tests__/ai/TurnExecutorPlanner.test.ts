@@ -111,6 +111,10 @@ jest.mock('../../services/ai/BuildAdvisor', () => ({
     retryWithSolvencyFeedback: jest.fn().mockResolvedValue(null),
     lastDiagnostics: {},
   },
+  // JIRA-234 Defect C: feature flag for the BuildAdvisor LLM call. These tests
+  // were written assuming the LLM is always called, so override the default
+  // (off) to keep historical behavior under test.
+  isBuildAdvisorEnabled: jest.fn(() => true),
 }));
 
 jest.mock('../../../shared/constants/gameRules', () => ({

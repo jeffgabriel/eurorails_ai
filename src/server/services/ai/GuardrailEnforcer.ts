@@ -51,6 +51,7 @@ export class GuardrailEnforcer {
     context: GameContext,
     snapshot: WorldSnapshot,
     hasActiveRoute: boolean = false,
+    stuckWithCarryTurns: number = 0,
   ): Promise<GuardrailPlanResult> {
     const planType = plan.type === 'MultiAction' ? GuardrailEnforcer.primaryActionType(plan) : plan.type;
 
@@ -100,9 +101,17 @@ export class GuardrailEnforcer {
     // discardable; the discard suppression hinges on whether ANY demand has
     // isLoadOnTrain=true (set by DemandEngine when bot.loads includes the
     // demand's loadType).
-    const carriedLoadsHaveMatchingDemand =
+    // JIRA-234 Defect A3: after N turns of being stuck-with-carry (cannot reach
+    // any matching delivery on network within available cash), bypass the
+    // carry-load suppression so the bot can DiscardHand and break out of the
+    // death loop. Without this bypass, a bot carrying a load whose delivery is
+    // currently unreachable would PassTurn forever.
+    const STUCK_WITH_CARRY_BYPASS_THRESHOLD = 5;
+    const carryLoadSuppressionActive =
       snapshot.bot.loads.length > 0 &&
-      context.demands.some(d => d.isLoadOnTrain);
+      context.demands.some(d => d.isLoadOnTrain) &&
+      stuckWithCarryTurns < STUCK_WITH_CARRY_BYPASS_THRESHOLD;
+    const carriedLoadsHaveMatchingDemand = carryLoadSuppressionActive;
 
     const hasDeliverableLoad = snapshot.bot.loads.length > 0 && context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork);
     const hasAffordableConnectableDemand = context.demands.some(

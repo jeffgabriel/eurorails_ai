@@ -79,11 +79,30 @@ export class ActiveRouteContinuer {
 
     const routeSummary = `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`;
 
-    // Detect stuck-route: route is alive but execution produced no plans (PassTurn only)
+    // Detect stuck-route: route is alive but execution produced no progress
     // and we have already spent ≥ STUCK_ROUTE_PASSTURN_THRESHOLD - 1 turns on this route.
     // memory.turnsOnRoute is the count of *prior* turns on this route, so >= threshold-1
     // means this is the Nth no-progress turn. Abandon so TripPlanner can replan.
-    const noProgress = execResult.plans.length === 0;
+    //
+    // JIRA-234 Defect A3: widen "no progress" to also catch the case where the
+    // executor produces non-empty plans (e.g., a degenerate MoveTrain or BuildTrack)
+    // but the underlying build phase failed to make progress toward an off-network
+    // delivery stop. Without this, a bot stuck building toward Oslo with $7M can
+    // PassTurn indefinitely because plans.length > 0.
+    const trace = execResult.compositionTrace;
+    const buildCost = trace?.build?.cost ?? 0;
+    const buildTarget = trace?.build?.target ?? null;
+    const a2Reason = trace?.a2?.terminationReason ?? '';
+    const movesUsed = trace?.moveBudget?.used ?? 0;
+    const allPlansArePassTurn = execResult.plans.length > 0
+      && execResult.plans.every((p) => p.type === AIActionType.PassTurn);
+    const zeroProgressBuild = buildCost === 0
+      && buildTarget !== null
+      && a2Reason === 'stop_city_not_on_network'
+      && movesUsed === 0;
+    const noProgress = execResult.plans.length === 0
+      || allPlansArePassTurn
+      || zeroProgressBuild;
     const turnsOnRoute = memory.turnsOnRoute ?? 0;
     const isStuck = noProgress
       && !execResult.routeComplete

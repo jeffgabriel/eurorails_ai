@@ -45,6 +45,7 @@ import { loadGridPoints, makeKey, getHexNeighbors, hexDistance } from './MapTopo
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
 import { AdvisorCoordinator } from './AdvisorCoordinator';
+import { isBuildAdvisorEnabled } from './BuildAdvisor';
 import { TripPlanner } from './TripPlanner';
 import { getMemory } from './BotMemory';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
@@ -303,7 +304,10 @@ export class TurnExecutorPlanner {
     }
 
     // ── AdvisorCoordinator.adviseBuild (LLM) with max 1 solvency retry (AC7) ─
-    if (useAdvisor && brain != null && gridPoints != null) {
+    // Gated behind ENABLE_BUILD_ADVISOR (default OFF). 7-day log analysis showed
+    // 41.6% LLM success rate with no measurable delivery uplift over the heuristic
+    // fallback. Flip ENABLE_BUILD_ADVISOR=true to A/B compare against Dijkstra-only.
+    if (useAdvisor && brain != null && gridPoints != null && isBuildAdvisorEnabled()) {
       const advisorBuildResult = await AdvisorCoordinator.adviseBuild(
         targetCity,
         remainingBudget,

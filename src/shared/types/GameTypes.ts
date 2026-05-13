@@ -532,6 +532,15 @@ export interface BotMemoryState {
      * not gated (that upgrade buys speed, not a slot).
      */
     capSaturatedTurns?: number;
+    /**
+     * JIRA-234 Defect A3: Consecutive turns the bot has been carrying load(s)
+     * with matching demand cards but cannot reach any delivery city on its
+     * network within available cash. Incremented when stuck-with-carry detected,
+     * reset on any delivery or successful build progress. When this counter
+     * exceeds a threshold, the carried-loads-suppress logic in GuardrailEnforcer
+     * is bypassed so the bot can DiscardHand and break out of the death loop.
+     */
+    stuckWithCarryTurns?: number;
 }
 
 /** Simplified option summary for decision logging */

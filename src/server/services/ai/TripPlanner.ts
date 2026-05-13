@@ -33,7 +33,7 @@ import type { TripPlannerSelectionDiagnostic } from './LLMTranscriptLogger';
 import { build as buildStrategicContext } from './StrategicContextBuilder';
 import { simulateTrip } from './RouteDetourEstimator';
 import { PROPOSE_MIN_SCORE_DELTA } from './StrategicConstants';
-import { planTripDeterministic } from './DeterministicTripPlanner';
+import { planTripDeterministic, AFFORDABILITY_FLOOR_M } from './DeterministicTripPlanner';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -412,6 +412,55 @@ export class TripPlanner {
           continue;
         }
 
+        // JIRA-234 Defect A: simulator-based upgrade-aware affordability gate.
+        // The buildCostEstimate above is derived from DemandContext's pre-computed
+        // per-leg cost estimates, which undercount complex geometries (rivers,
+        // mountains, water crossings — see JIRA-127). Mirror the same simulateTrip
+        // + cash-floor check used by DeterministicTripPlanner.scoreCandidate so
+        // LLM-driven routes (Hard skill) get the same affordability protection as
+        // Medium-skill deterministic routes.
+        if (snapshot.bot.position) {
+          const snapshotInput = {
+            bot: {
+              playerId: snapshot.bot.playerId,
+              existingSegments: snapshot.bot.existingSegments,
+              trainType: snapshot.bot.trainType,
+              ferryHalfSpeed: snapshot.bot.ferryHalfSpeed ?? false,
+            },
+            allPlayerTracks: snapshot.allPlayerTracks,
+          };
+          let simulation;
+          try {
+            simulation = simulateTrip(
+              snapshot.bot.position,
+              finalCandidateStops,
+              snapshotInput,
+              upgradeCost > 0 ? { pendingUpgradeCost: upgradeCost } : undefined,
+            );
+          } catch (e) {
+            console.warn(`[TripPlanner] simulator threw during affordability gate`, e);
+            simulation = null;
+          }
+          if (simulation) {
+            if (!simulation.feasible) {
+              const gapMsg = `Your previous route failed: route_infeasible: at least one leg is blocked (opponent track or no buildable path). Propose a different route.`;
+              console.log(`[TripPlanner][JIRA-234] simulator feasibility check failed — retrying with hint`);
+              llmLog.push({ attemptNumber: attempt + 1, status: 'validation_error', responseText: response.text.substring(0, 500), error: gapMsg, latencyMs });
+              lastError = gapMsg;
+              continue;
+            }
+            const projectedMin = snapshot.bot.money + simulation.minCashRelative;
+            if (projectedMin < AFFORDABILITY_FLOOR_M) {
+              const stopSummary = finalCandidateStops.map((s) => `${s.action}:${s.city}`).join(',');
+              const gapMsg = `Your previous route failed: cash_dips_below_floor: simulated trip dips to ${projectedMin}M (floor=${AFFORDABILITY_FLOOR_M}M). Build cost ${simulation.totalBuildCost}M exceeds what cash=${snapshot.bot.money}M can support. Propose a shorter route or one with earlier payouts.`;
+              console.log(`[TripPlanner][JIRA-234] simulator affordability gate rejected: stops=${stopSummary} startingCash=${snapshot.bot.money}M minRelative=${simulation.minCashRelative}M projectedMin=${projectedMin}M floor=${AFFORDABILITY_FLOOR_M}M`);
+              llmLog.push({ attemptNumber: attempt + 1, status: 'validation_error', responseText: response.text.substring(0, 500), error: gapMsg, latencyMs });
+              lastError = gapMsg;
+              continue;
+            }
+          }
+        }
+
         // Serialize reasoning for StrategicRoute storage
         const reasoningText = typeof parsed.reasoning === 'string'
           ? parsed.reasoning
@@ -483,6 +532,46 @@ export class TripPlanner {
       );
       if (fallback.route) {
         const successResult = fallback as { route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number }; llmLog: LlmAttempt[]; systemPrompt?: string; userPrompt?: string };
+
+        // JIRA-234 Defect A: gate the heuristic-fallback route through the same
+        // simulator-based affordability check used in the main LLM path. Without
+        // this, a fallback can produce a route that bankrupts the bot (e.g.,
+        // Leipzig→Oslo with insufficient cash).
+        if (snapshot.bot.position) {
+          const rawFallbackUpgrade = successResult.route.upgradeOnRoute;
+          const fallbackUpgradeType =
+            typeof rawFallbackUpgrade === 'string' && Object.values(TrainType).includes(rawFallbackUpgrade as TrainType)
+              ? (rawFallbackUpgrade as TrainType)
+              : undefined;
+          const fallbackUpgradeCost = this.computeUpgradeCost(fallbackUpgradeType);
+          const snapshotInput = {
+            bot: {
+              playerId: snapshot.bot.playerId,
+              existingSegments: snapshot.bot.existingSegments,
+              trainType: snapshot.bot.trainType,
+              ferryHalfSpeed: snapshot.bot.ferryHalfSpeed ?? false,
+            },
+            allPlayerTracks: snapshot.allPlayerTracks,
+          };
+          try {
+            const sim = simulateTrip(
+              snapshot.bot.position,
+              successResult.route.stops,
+              snapshotInput,
+              fallbackUpgradeCost > 0 ? { pendingUpgradeCost: fallbackUpgradeCost } : undefined,
+            );
+            const projectedMin = snapshot.bot.money + sim.minCashRelative;
+            if (!sim.feasible || projectedMin < AFFORDABILITY_FLOOR_M) {
+              console.warn(
+                `[TripPlanner][JIRA-234] heuristic fallback route rejected by affordability gate: feasible=${sim.feasible} projectedMin=${projectedMin}M floor=${AFFORDABILITY_FLOOR_M}M`,
+              );
+              return { route: null, llmLatencyMs: 0, llmTokens: { input: 0, output: 0 }, llmLog: [...priorLlmLog, ...successResult.llmLog] };
+            }
+          } catch (e) {
+            console.warn(`[TripPlanner][JIRA-234] simulator threw on heuristic fallback gate`, e);
+          }
+        }
+
         return {
           route: successResult.route,
           llmLatencyMs: successResult.latencyMs,

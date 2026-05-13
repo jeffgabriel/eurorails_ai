@@ -60,8 +60,9 @@ export class TurnNotification {
     const width = Math.min(maxWidth, text.width + paddingX * 2);
     const height = text.height + paddingY * 2;
 
-    // Position at top-right
-    const x = this.scene.scale.width - width - padding;
+    // Position at top-right, offset left to avoid the leaderboard panel
+    const leaderboardReserve = 170;
+    const x = this.scene.scale.width - width - padding - leaderboardReserve;
     const y = padding;
 
     // Create container for notification positioned at target location

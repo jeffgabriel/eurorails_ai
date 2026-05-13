@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState } from "../../shared/types/GameTypes";
+import { GameState, TRAIN_PROPERTIES, TrainType } from "../../shared/types/GameTypes";
 
 import { GameStateService } from "../services/GameStateService";
 import { PlayerStateService } from "../services/PlayerStateService";
@@ -55,10 +55,8 @@ export class LeaderboardManager {
     const PLAYER_ROW_HEIGHT = 20;
     const CARGO_ROW_HEIGHT = 16;
 
-    // Calculate dynamic height: each player with loads gets an extra cargo sub-row
-    const cargoRowCount = this.gameState.players.filter(
-      p => p.trainState?.loads && p.trainState.loads.length > 0
-    ).length;
+    // Every player has a cargo sub-row showing payload slots (filled + empty)
+    const cargoRowCount = this.gameState.players.length;
     const playerSectionHeight = this.gameState.players.length * PLAYER_ROW_HEIGHT
       + cargoRowCount * CARGO_ROW_HEIGHT;
     const leaderboardHeight = 40 + playerSectionHeight + 50;
@@ -215,24 +213,25 @@ export class LeaderboardManager {
 
       currentY += PLAYER_ROW_HEIGHT;
 
-      // Add cargo sub-row if player is carrying loads
-      const loads = player.trainState?.loads;
-      if (loads && loads.length > 0) {
-        const cargoY = currentY;
-        const iconSize = 7;
-        const iconSpacing = 18;
-        const cargoStartX = entryX + 15;
+      // Cargo sub-row: render one pip per payload slot (filled or empty)
+      const loads = player.trainState?.loads ?? [];
+      const capacity = TRAIN_PROPERTIES[player.trainType as TrainType]?.capacity ?? 2;
+      const cargoY = currentY;
+      const iconSize = 7;
+      const iconSpacing = 18;
+      const cargoStartX = entryX + 15;
 
-        loads.forEach((loadType, loadIndex) => {
-          const iconX = cargoStartX + loadIndex * iconSpacing;
-          const iconCenterY = cargoY + CARGO_ROW_HEIGHT / 2;
+      for (let slotIndex = 0; slotIndex < capacity; slotIndex++) {
+        const iconX = cargoStartX + slotIndex * iconSpacing;
+        const iconCenterY = cargoY + CARGO_ROW_HEIGHT / 2;
+        const loadType = loads[slotIndex];
 
-          // White circular background
+        if (loadType) {
+          // Filled slot: white background + load token icon
           const bg = this.scene.add.circle(iconX, iconCenterY, iconSize, 0xffffff);
           bg.setOrigin(0.5, 0.5);
           playerEntries.push(bg);
 
-          // Load token icon
           const tokenKey = `loadtoken-${loadType.toLowerCase()}`;
           if (this.scene.textures.exists(tokenKey)) {
             const icon = this.scene.add.image(iconX, iconCenterY, tokenKey);
@@ -240,7 +239,6 @@ export class LeaderboardManager {
             playerEntries.push(icon);
           }
 
-          // Make the circle interactive for tooltip
           bg.setInteractive({ useHandCursor: true });
           bg.on("pointerover", (pointer: Phaser.Input.Pointer) => {
             this.showTooltip(loadType, pointer.x, pointer.y);
@@ -248,10 +246,16 @@ export class LeaderboardManager {
           bg.on("pointerout", () => {
             this.hideTooltip();
           });
-        });
-
-        currentY += CARGO_ROW_HEIGHT;
+        } else {
+          // Empty slot: outlined ring
+          const ring = this.scene.add.circle(iconX, iconCenterY, iconSize, 0xffffff, 0.1);
+          ring.setStrokeStyle(1, 0xffffff, 0.5);
+          ring.setOrigin(0.5, 0.5);
+          playerEntries.push(ring);
+        }
       }
+
+      currentY += CARGO_ROW_HEIGHT;
     });
 
     // Store total player section height for button positioning

@@ -12,6 +12,20 @@ import { getBuildAdvisorPrompt, getBuildAdvisorExtractionPrompt } from './prompt
 import { BUILD_ADVISOR_SCHEMA } from './schemas';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 
+/**
+ * When true, the BuildAdvisor LLM is consulted before falling back to the heuristic.
+ * Default false based on 7-day log analysis showing 41.6% LLM success rate with
+ * no measurable delivery uplift over the heuristic Dijkstra-only path. Flip
+ * `ENABLE_BUILD_ADVISOR=true` for A/B comparison.
+ */
+export function isBuildAdvisorEnabled(): boolean {
+  const value = process.env.ENABLE_BUILD_ADVISOR;
+  if (value === undefined || value === '') return false;
+  return value.toLowerCase() === 'true';
+}
+
+console.log(`[BuildAdvisor] ENABLE_BUILD_ADVISOR=${isBuildAdvisorEnabled() ? 'true' : 'false'}`);
+
 /** Diagnostic data from the last advise() or retryWithSolvencyFeedback() call. */
 export interface BuildAdvisorDiagnostics {
   systemPrompt?: string;

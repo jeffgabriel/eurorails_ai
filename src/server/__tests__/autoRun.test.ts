@@ -187,8 +187,10 @@ describe('Auto-Run in emitTurnChange', () => {
   it('should auto-advance for a non-bot human with auto-run after delay', async () => {
     toggleAutoRun('game-1', 'player-human');
 
-    // Mock: player is NOT a bot
-    mockDb.query.mockResolvedValueOnce({ rows: [{ is_bot: false }] });
+    // 1st query: is_bot lookup (scheduling). 2nd query: current_player_index re-check (firing).
+    mockDb.query
+      .mockResolvedValueOnce({ rows: [{ is_bot: false }] })
+      .mockResolvedValueOnce({ rows: [{ current_player_index: 0 }] });
 
     emitTurnChange('game-1', 0, 'player-human');
 
@@ -198,9 +200,46 @@ describe('Auto-Run in emitTurnChange', () => {
     // Before delay: should not have been called
     expect(mockAdvance).not.toHaveBeenCalled();
 
-    // Advance past the 2000ms delay
+    // Advance past the 2000ms delay; flush the re-check db.query promise too
     jest.advanceTimersByTime(2000);
+    await new Promise(process.nextTick);
+    await new Promise(process.nextTick);
 
     expect(mockAdvance).toHaveBeenCalledWith('game-1');
+  });
+
+  it('should NOT auto-advance if the turn already moved on before the timer fires', async () => {
+    toggleAutoRun('game-1', 'player-human');
+
+    // is_bot=false at schedule, then index has already moved to 1 by the time we re-check
+    mockDb.query
+      .mockResolvedValueOnce({ rows: [{ is_bot: false }] })
+      .mockResolvedValueOnce({ rows: [{ current_player_index: 1 }] });
+
+    emitTurnChange('game-1', 0, 'player-human');
+    await new Promise(process.nextTick);
+
+    jest.advanceTimersByTime(2000);
+    await new Promise(process.nextTick);
+    await new Promise(process.nextTick);
+
+    expect(mockAdvance).not.toHaveBeenCalled();
+  });
+
+  it('should NOT auto-advance if auto-run was toggled off before the timer fires', async () => {
+    toggleAutoRun('game-1', 'player-human');
+
+    mockDb.query.mockResolvedValueOnce({ rows: [{ is_bot: false }] });
+
+    emitTurnChange('game-1', 0, 'player-human');
+    await new Promise(process.nextTick);
+
+    // Toggle auto-run off during the 2s window
+    toggleAutoRun('game-1', 'player-human');
+
+    jest.advanceTimersByTime(2000);
+    await new Promise(process.nextTick);
+
+    expect(mockAdvance).not.toHaveBeenCalled();
   });
 });

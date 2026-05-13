@@ -748,13 +748,28 @@ export function emitTurnChange(gameId: string, currentPlayerIndex: number, curre
 
     // Auto-run: if the current player is a non-bot human with auto-run, advance after delay
     if (isAutoRunEnabled(gameId, currentPlayerId)) {
-      db.query('SELECT is_bot FROM players WHERE id = $1', [currentPlayerId])
+      const scheduledPlayerId = currentPlayerId;
+      const scheduledIndex = currentPlayerIndex;
+      db.query('SELECT is_bot FROM players WHERE id = $1', [scheduledPlayerId])
         .then(result => {
-          if (!result.rows[0]?.is_bot && isAutoRunEnabled(gameId, currentPlayerId)) {
-            setTimeout(() => {
-              advanceTurnAfterBot(gameId).catch(err => {
+          if (!result.rows[0]?.is_bot && isAutoRunEnabled(gameId, scheduledPlayerId)) {
+            setTimeout(async () => {
+              try {
+                // Re-validate before advancing: the turn may have moved on (manual
+                // end-turn, another auto-run timer, bot pipeline in progress).
+                // Without this check the timer can advance current_player_index off
+                // a bot mid-pipeline, surfacing as "Not your turn" errors.
+                if (!isAutoRunEnabled(gameId, scheduledPlayerId)) return;
+                const check = await db.query(
+                  'SELECT current_player_index FROM games WHERE id = $1',
+                  [gameId],
+                );
+                const currentIndex = Number(check.rows[0]?.current_player_index ?? -1);
+                if (currentIndex !== scheduledIndex) return;
+                await advanceTurnAfterBot(gameId);
+              } catch (err) {
                 console.error(`[socketService] Auto-run advance error for game ${gameId}:`, err);
-              });
+              }
             }, AUTO_RUN_DELAY_MS);
           }
         })

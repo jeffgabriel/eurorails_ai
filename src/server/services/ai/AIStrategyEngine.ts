@@ -523,7 +523,7 @@ export class AIStrategyEngine {
       // is NOT treated as an active route — prevents the Stuck/Unaffordable guardrails
       // from being suppressed by a route that has already been consumed.
       const hasActiveRoute = activeRoute != null && activeRoute.currentStopIndex < activeRoute.stops.length;
-      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, hasActiveRoute);
+      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, hasActiveRoute, memory.stuckWithCarryTurns ?? 0);
       let finalPlan: TurnPlan = guardrailResult.plan;
       let originalPlan: { action: string; reasoning: string } | undefined;
 
@@ -649,6 +649,28 @@ export class AIStrategyEngine {
           { turn: snapshot.turnNumber, payout: result.payment ?? 0 },
         ].slice(-RECENT_DELIVERIES_WINDOW);
         memoryPatch.recentDeliveries = updated;
+      }
+
+      // JIRA-234 Defect A3: track turns spent stuck-with-carry so GuardrailEnforcer
+      // can eventually bypass the carry-load suppression and force DiscardHand.
+      // Reset on any delivery (real progress); also reset when the bot has no
+      // carried loads (nothing to be stuck-with).
+      const hasCarry = snapshot.bot.loads.length > 0;
+      if (hasDelivery || !hasCarry) {
+        memoryPatch.stuckWithCarryTurns = 0;
+      } else {
+        // Increment when: carrying loads, no delivery this turn, and either
+        // (a) no active route or (b) active route ending in delivery to off-network city.
+        const noEffectiveProgress =
+          !hasActiveRoute ||
+          (activeRoute != null &&
+            activeRoute.currentStopIndex < activeRoute.stops.length &&
+            (result.cost ?? 0) === 0);
+        if (noEffectiveProgress) {
+          memoryPatch.stuckWithCarryTurns = (memory.stuckWithCarryTurns ?? 0) + 1;
+        } else {
+          memoryPatch.stuckWithCarryTurns = 0;
+        }
       }
 
       await updateMemory(gameId, botPlayerId, memoryPatch);

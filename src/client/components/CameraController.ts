@@ -75,19 +75,14 @@ export class CameraController {
             this.camera.scrollX = this.gameState.cameraState.scrollX;
             this.camera.scrollY = this.gameState.cameraState.scrollY;
         } else {
-            // Use predefined initial camera settings for better default view
-            const initialSettings = {
-                zoom: 1.0561194029850745,
-                scrollX: 779.2424871482747,
-                scrollY: 584.8135343081639
-            };
-            
-            this.camera.setZoom(initialSettings.zoom);
-            this.camera.scrollX = initialSettings.scrollX;
-            this.camera.scrollY = initialSettings.scrollY;
-
-            // Save initial camera state
-            this.saveCameraState();
+            // Zoom to show major cities (London, Madrid, Kaliningrad, Sarajevo) — fit-to-map + 2 wheel steps in, then 30% closer
+            const fitZoom = (Math.min(
+                this.camera.width / mapWidth,
+                (this.camera.height - 200) / mapHeight
+            ) + 2 * this.ZOOM_STEP) * 1.3;
+            this.camera.setZoom(fitZoom);
+            this.camera.scrollX = (mapWidth - this.camera.width / fitZoom) / 2;
+            this.camera.scrollY = (mapHeight - (this.camera.height - 200) / fitZoom) / 2;
         }
 
         this.setupInputHandlers();

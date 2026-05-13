@@ -9,7 +9,7 @@ import playerRoutes from './routes/playerRoutes';
 import trackRoutes from './routes/trackRoutes';
 import deckRoutes from './routes/deckRoutes';
 import chatRoutes from './routes/chatRoutes';
-import logRoutes from './routes/logRoutes';
+import logRoutes, { llmRouter } from './routes/logRoutes';
 import { 
   addRequestId, 
   errorHandler, 
@@ -57,6 +57,8 @@ app.use('/api/loads', loadRoutes);
 app.use('/api/lobby', lobbyRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/logs', logRoutes);
+app.use('/log', logRoutes);
+app.use('/llm', llmRouter);
 
 // Catch-all handler for client-side routing (only for non-API, non-static routes)
 app.get('*', (req, res, next) => {
