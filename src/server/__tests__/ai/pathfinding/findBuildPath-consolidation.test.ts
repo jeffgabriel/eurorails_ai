@@ -68,6 +68,8 @@ jest.mock('../../../services/ai/MapTopology', () => ({
       default: return 1;
     }
   }),
+  // BE-002: findBuildPath calls getWaterCrossingCost from MapTopology
+  getWaterCrossingCost: jest.fn(() => 0),
   gridToPixel: jest.fn((row: number, col: number) => ({ x: col * 50, y: row * 45 })),
   makeKey: jest.fn((row: number, col: number) => `${row},${col}`),
   hexDistance: jest.fn((r1: number, c1: number, r2: number, c2: number) =>

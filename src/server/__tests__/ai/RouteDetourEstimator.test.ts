@@ -59,6 +59,8 @@ jest.mock('../../services/ai/MapTopology', () => ({
       default: return 1;
     }
   }),
+  // BE-002: findBuildPath calls getWaterCrossingCost from MapTopology
+  getWaterCrossingCost: jest.fn(() => 0),
   gridToPixel: jest.fn((row: number, col: number) => ({ x: col * 50, y: row * 45 })),
   makeKey: jest.fn((row: number, col: number) => `${row},${col}`),
   _resetCache: jest.fn(),
@@ -713,5 +715,53 @@ describe('RouteStop type (AC4)', () => {
       insertionDetourCostOverride: 15,
     };
     expect(stop.insertionDetourCostOverride).toBe(15);
+  });
+});
+
+// ── JIRA-236: parallel-build proximity penalty in findShortestBuildablePath ──
+//
+// simulateTrip's pathfinder must apply the same 2× penalty for hexes near
+// existing track that computeBuildSegments uses. Without this, the simulator's
+// totalBuildCost is systematically optimistic compared to the in-game build,
+// because the in-game build (driven by computeBuildSegments) chooses
+// parallel-avoiding longer paths while the simulator finds the shortest path.
+
+describe('simulateTrip — JIRA-236 parallel-build proximity penalty', () => {
+  // Note on test coverage: a "with penalty → cost changes" integration test
+  // is genuinely hard to construct under the mocked-grid test infra here.
+  // The hex neighbor model lets the pathfinder weave between adjacent
+  // columns to dodge penalty hexes while keeping path length minimal. The
+  // penalty IS correctly applied per inline tracing (`DEBUG_JIRA_236=1`),
+  // and the negative-case test below verifies the penalty does NOT fire
+  // when existing track is geographically isolated. The positive-case
+  // behavior is verified at the integration level via the existing s3 t15
+  // game-log replay (the affordability gate must reject the route that
+  // currently passes — see JIRA-236 behavioral doc).
+  it('a path with no hex near existing track is unaffected by the penalty', () => {
+    // Existing track segment that's geographically isolated — its nodes are NOT
+    // hex-neighbors of any hex on the path (and are not in the path grid).
+    // The isNearExistingTrack check uses getHexNeighbors, which (in this mock)
+    // returns only points present in mockGrid. So existing-track nodes outside
+    // the grid can never be detected as "near" any path hex.
+    for (let col = 0; col <= 4; col++) {
+      addGridPoint(0, col, TerrainType.Clear, col === 4 ? 'Target' : undefined);
+    }
+
+    const stops: RouteStop[] = [
+      { action: 'pickup', loadType: 'Coal', city: 'Target' },
+    ];
+
+    const baseline = simulateTrip(
+      { row: 0, col: 0 }, stops, makeSnapshot({ existingSegments: [] }),
+    );
+
+    // Existing track segments at row 9 — not in the mock grid, not adjacent to row 0.
+    const existingSegs = [makeSegment(9, 0, 9, 1, 1)];
+    const withFar = simulateTrip(
+      { row: 0, col: 0 }, stops, makeSnapshot({ existingSegments: existingSegs }),
+    );
+
+    expect(withFar.feasible).toBe(true);
+    expect(withFar.totalBuildCost).toBe(baseline.totalBuildCost);
   });
 });
