@@ -534,7 +534,22 @@ function computeSingleSupplyDemandContext(
       ? { row: botPos.row, col: botPos.col }
       : supplyCity; // fallback: treat supply as start if no position
     botToSupply = estimateGraphPathCost(fromInput, supplyCity, snapshot, speed);
-    supplyToDelivery = estimateGraphPathCost(supplyCity, deliveryCity, snapshot, speed);
+    // JIRA-238: compose snapshot between legs so the delivery-leg can use the
+    // supply-leg's new track for free traversal. Without this, a trip whose
+    // delivery city is already on the bot's network (or reachable via the
+    // supply leg's new track plus existing track) gets its delivery-leg
+    // build cost double-counted — driving isAffordable=false and JIRA-207B
+    // forced-DiscardHand even when the trip is actually affordable.
+    const supplyLegSnapshot = botToSupply.reachable && botToSupply.newSegments?.length
+      ? {
+          ...snapshot,
+          bot: {
+            ...snapshot.bot,
+            existingSegments: [...snapshot.bot.existingSegments, ...botToSupply.newSegments],
+          },
+        }
+      : snapshot;
+    supplyToDelivery = estimateGraphPathCost(supplyCity, deliveryCity, supplyLegSnapshot, speed);
     if (!botToSupply.reachable || !supplyToDelivery.reachable) {
       nonColdStartLegUnreachable = true;
     } else {

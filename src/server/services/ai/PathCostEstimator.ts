@@ -14,7 +14,7 @@
 
 import { estimateRouteSegment } from './RouteDetourEstimator';
 import { loadGridPoints } from './MapTopology';
-import { WorldSnapshot } from '../../../shared/types/GameTypes';
+import { WorldSnapshot, TrackSegment } from '../../../shared/types/GameTypes';
 
 // ── Public types ───────────────────────────────────────────────────────
 
@@ -34,6 +34,14 @@ export interface PathCost {
   estimatedTurns: number;
   /** false when no path exists (e.g. opponent track blocks all routes, or city unresolvable). */
   reachable: boolean;
+  /**
+   * The new track segments this leg would need to build. Surfaced so callers
+   * can compose snapshots between sequential leg calculations (e.g. supply →
+   * delivery): the supply leg's new segments become free traversal for the
+   * delivery leg. Empty when the path is fully on existing track. Optional
+   * for back-compat with callers that don't need composition.
+   */
+  newSegments?: TrackSegment[];
 }
 
 // ── Module-scoped cache ────────────────────────────────────────────────
@@ -177,7 +185,7 @@ function computePathCost(
     for (const toCoord of toCoords) {
       // Skip trivial same-point case early
       if (fromCoord.row === toCoord.row && fromCoord.col === toCoord.col) {
-        const trivial: PathCost = { buildCost: 0, pathLength: 1, estimatedTurns: 1, reachable: true };
+        const trivial: PathCost = { buildCost: 0, pathLength: 1, estimatedTurns: 1, reachable: true, newSegments: [] };
         if (bestResult === null || trivial.pathLength < bestResult.pathLength) {
           bestResult = trivial;
         }
@@ -197,6 +205,7 @@ function computePathCost(
         pathLength: estimate.pathLength,
         estimatedTurns,
         reachable: true,
+        newSegments: estimate.newSegments,
       };
 
       if (bestResult === null || candidate.pathLength < bestResult.pathLength) {

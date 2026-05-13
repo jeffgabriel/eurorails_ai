@@ -408,6 +408,36 @@ describe('estimateGraphPathCost', () => {
     expect(result.estimatedTurns).toBe(1);
     expect(mockEstimateRouteSegment).not.toHaveBeenCalled();
   });
+
+  // JIRA-238: PathCost.newSegments must surface the segments findBuildPath would
+  // construct, so callers (DemandEngine.computeBestDemandContext, cheapPrune)
+  // can compose snapshots between sequential leg calculations and avoid the
+  // leg-independence build-cost double-count.
+  it('JIRA-238: newSegments populated on reachable result, matches estimateRouteSegment.newSegments', () => {
+    addCity('A', 1, 1);
+    addCity('B', 4, 4);
+    const built: TrackSegment[] = [
+      { from: { row: 1, col: 1, terrain: 0 }, to: { row: 2, col: 2, terrain: 0 } },
+      { from: { row: 2, col: 2, terrain: 0 }, to: { row: 3, col: 3, terrain: 0 } },
+      { from: { row: 3, col: 3, terrain: 0 }, to: { row: 4, col: 4, terrain: 0 } },
+    ];
+    mockEstimateRouteSegment.mockReturnValue({
+      newSegments: built,
+      buildCost: 6,
+      pathLength: 4,
+      reachable: true,
+    });
+
+    const result = estimateGraphPathCost('A', 'B', makeSnapshot(), 9);
+    expect(result.reachable).toBe(true);
+    expect(result.newSegments).toEqual(built);
+  });
+
+  it('JIRA-238: newSegments is empty array for trivial same-point result', () => {
+    const coord: GridCoord = { row: 5, col: 5 };
+    const result = estimateGraphPathCost(coord, coord, makeSnapshot(), 9);
+    expect(result.newSegments).toEqual([]);
+  });
 });
 
 

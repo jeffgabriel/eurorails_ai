@@ -742,11 +742,26 @@ export function cheapPrune(
   let totalBuild = 0;
   let totalTurns = 0;
   let prevCity: string | { row: number; col: number } = startPos;
+  // JIRA-238: thread accumulated new-segments through each leg's snapshot so
+  // later legs can traverse earlier legs' new track for free, matching what
+  // simulateTrip does inside scoreCandidate. Without composition cheapPrune
+  // over-counts build cost on multi-stop candidates and may reject candidates
+  // that scoreCandidate would have accepted.
+  let composedSnapshot: WorldSnapshot = snapshot;
   for (const s of candidate.stops) {
-    const leg = estimateGraphPathCost(prevCity, s.city, snapshot, speed);
+    const leg = estimateGraphPathCost(prevCity, s.city, composedSnapshot, speed);
     if (!leg.reachable) return { keep: false, estTurns: 999, estBuild: 999 };
     totalBuild += leg.buildCost;
     totalTurns += leg.estimatedTurns;
+    if (leg.newSegments?.length) {
+      composedSnapshot = {
+        ...composedSnapshot,
+        bot: {
+          ...composedSnapshot.bot,
+          existingSegments: [...composedSnapshot.bot.existingSegments, ...leg.newSegments],
+        },
+      };
+    }
     prevCity = s.city;
   }
   const estTurns = Math.max(1, totalTurns);
