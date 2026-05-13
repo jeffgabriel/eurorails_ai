@@ -7,6 +7,7 @@
  */
 
 import { TrackSegment, TerrainType, WaterCrossingType } from '../../../shared/types/GameTypes';
+import { findBuildPath } from './pathfinding/findBuildPath';
 import {
   getHexNeighbors,
   getTerrainCost,
@@ -332,189 +333,33 @@ export function computeBuildSegments(
     }
   }
 
-  // Targeted builds: remove budget cap from Dijkstra to find cheapest full route
-  // to target, then truncate to budget in extractSegments. Early-terminate when
-  // the first target milepost is settled (Dijkstra guarantees cheapest path).
+  // Targeted builds: delegate per-target path-finding to shared findBuildPath utility
+  // (BE-003). The orchestration logic (ferry waypoints, target filtering) remains here.
+  // Untargeted builds retain the multi-source Dijkstra since findBuildPath is single-target.
   const hasTargets = targetKeys.size > 0;
   let earlyTermPath: DijkstraNode | null = null;
 
-  // Multi-source Dijkstra
-  const heap = new MinHeap();
-  const minCost = new Map<string, number>();
-
-  for (const src of sources) {
-    const key = makeKey(src.row, src.col);
-    heap.push({ row: src.row, col: src.col, cost: 0, path: [{ row: src.row, col: src.col }] });
-    minCost.set(key, 0);
-  }
-
-  // Store the best paths found. Key = destination, value = cheapest path to get there.
-  const bestPaths: Map<string, DijkstraNode> = new Map();
-
-  while (heap.size > 0) {
-    const current = heap.pop()!;
-    const currentKey = makeKey(current.row, current.col);
-
-    // Skip if we've already found a cheaper way here
-    const recorded = minCost.get(currentKey);
-    if (recorded !== undefined && current.cost > recorded) continue;
-
-    // Record this as a reachable destination if cost > 0 (not a start node)
-    if (current.cost > 0) {
-      bestPaths.set(currentKey, current);
-    }
-
-    // Early termination for targeted builds: when a target milepost is settled,
-    // Dijkstra guarantees this is the cheapest path. No need to explore further.
-    if (hasTargets && current.cost > 0 && targetKeys.has(currentKey)) {
-      earlyTermPath = current;
-      break;
-    }
-
-    // Expand neighbors
-    const neighbors = getHexNeighbors(current.row, current.col);
-    for (const nb of neighbors) {
-      const nbKey = makeKey(nb.row, nb.col);
-      const nbData = grid.get(nbKey);
-      if (!nbData) continue;
-
-      // Dead-end pruning: skip mileposts with ≤1 non-water neighbor unless
-      // they are a target city. Prevents Dijkstra from wasting budget exploring
-      // ocean peninsulas and coastal dead-ends.
-      if (!targetKeys.has(nbKey) && !onNetwork.has(nbKey)) {
-        const nbNeighborCount = getHexNeighbors(nb.row, nb.col).length;
-        if (nbNeighborCount <= 1) continue;
-      }
-
-      // JIRA-203: Saturated-city exclusion — skip small/medium cities that are at their
-      // player cap. Treating them as blocked ensures the resolver never proposes paths
-      // that the validator would reject with CITY_ENTRY_LIMIT.
-      if (saturatedCityKeys?.has(nbKey)) continue;
-
-      // Intra-city edge: free traversal through major city red area (no track built).
-      // The red area connects all mileposts within a major city at zero cost.
-      if (isIntraCityEdge(currentKey, nbKey, majorCityLookup)) {
-        const newCost = current.cost; // zero cost
-        const existingCost = minCost.get(nbKey);
-        if (existingCost === undefined || newCost < existingCost) {
-          minCost.set(nbKey, newCost);
-          heap.push({
-            row: nb.row,
-            col: nb.col,
-            cost: newCost,
-            path: [...current.path, { row: nb.row, col: nb.col }],
-          });
-        }
-        continue;
-      }
-
-      // Ferry ports use their connection cost (4–16M) instead of terrain cost
-      const terrainCost = ferryPortCosts.get(nbKey) ?? getTerrainCost(nbData.terrain);
-      if (terrainCost === Infinity) continue; // water
-
-      // Don't traverse edges owned by other players (Right of Way rule)
-      const edgeKey = `${currentKey}-${nbKey}`;
-      if (occupiedEdges?.has(edgeKey)) continue;
-
-      // Don't traverse already-built edges (own network)
-      if (builtEdges.has(edgeKey)) {
-        // But we can pass through existing network nodes for free
-        if (onNetwork.has(nbKey)) {
-          const newCost = current.cost; // zero cost to traverse own network
-          const existingCost = minCost.get(nbKey);
-          if (existingCost === undefined || newCost < existingCost) {
-            minCost.set(nbKey, newCost);
-            heap.push({
-              row: nb.row,
-              col: nb.col,
-              cost: newCost,
-              path: [...current.path, { row: nb.row, col: nb.col }],
-            });
-          }
-        }
-        continue;
-      }
-
-      // Proximity penalty: if this neighbor is near existing track but not ON
-      // the network, multiply terrain cost to discourage parallel building.
-      const effectiveTerrainCost = (
-        existingTrackIndex && existingTrackIndex.size > 0 &&
-        !onNetwork.has(nbKey) &&
-        isNearExistingTrack(nb.row, nb.col, existingTrackIndex)
-      ) ? terrainCost * PARALLEL_COST_MULTIPLIER : terrainCost;
-
-      const waterExtra = getWaterCrossingCost(current.row, current.col, nb.row, nb.col);
-      const newCost = current.cost + effectiveTerrainCost + waterExtra;
-      if (!hasTargets && newCost > budget) continue; // over budget (only for untargeted builds)
-
-      const existingCost = minCost.get(nbKey);
-      if (existingCost === undefined || newCost < existingCost) {
-        minCost.set(nbKey, newCost);
-        heap.push({
-          row: nb.row,
-          col: nb.col,
-          cost: newCost,
-          path: [...current.path, { row: nb.row, col: nb.col }],
-        });
-      }
-    }
-
-    // Ferry crossing: if current node is a ferry port, expand to partner port(s).
-    // Crossing is free — cost to build TO the port was already paid above.
-    const ferryPartners = ferryAdjacency.get(currentKey);
-    if (ferryPartners) {
-      for (const partner of ferryPartners) {
-        const partnerKey = makeKey(partner.row, partner.col);
-        const newCost = current.cost; // free crossing
-        if (!hasTargets && newCost > budget) continue;
-        const existingCost = minCost.get(partnerKey);
-        if (existingCost === undefined || newCost < existingCost) {
-          minCost.set(partnerKey, newCost);
-          heap.push({
-            row: partner.row,
-            col: partner.col,
-            cost: newCost,
-            path: [...current.path, { row: partner.row, col: partner.col }],
-          });
-        }
-      }
-    }
-  }
-
-  // Select the best path based on whether we have target positions (demand cities).
-  // With targets: prefer the path whose endpoint is closest to any target city.
-  // Without targets: prefer the longest path (most new segments) within budget.
-  let bestPath: DijkstraNode | null = null;
-
-  if (earlyTermPath) {
-    console.log(`${tag} early termination: target reached at cost=${earlyTermPath.cost}, path=${earlyTermPath.path.length} nodes`);
-  }
-  console.log(`${tag} Dijkstra done: ${bestPaths.size} reachable destinations`);
-
+  // ── Pre-compute effectiveTargets (with ferry waypoint redirect) ────────────
+  // Moved before path-finding so both targeted (findBuildPath) and fallback
+  // (Dijkstra hex-distance) paths can use the same effective target list.
+  let effectiveTargets: GridCoord[] = [];
   if (hasTargets) {
     // Filter out targets already on the bot's track — building toward an
     // already-reachable city wastes budget and creates star-shaped building.
     const unreachedTargets = targetPositions!.filter(
       t => !onNetwork.has(makeKey(t.row, t.col))
     );
-    let effectiveTargets = unreachedTargets.length > 0
+    effectiveTargets = unreachedTargets.length > 0
       ? unreachedTargets
       : targetPositions!;  // fallback if ALL targets are connected
 
     // ── Ferry waypoint: redirect cross-water targets to departure ferry ports ──
-    // Hex distance is misleading for targets on different landmasses — a coastal
-    // point may appear "close" but requires a ferry crossing.  Detect such targets
-    // and replace them with the departure-side ferry port so path selection builds
-    // toward the ferry, not just the nearest coast.
     const sourceLandmass = computeLandmass(sources, grid);
-
     const crossWaterTargets = effectiveTargets.filter(
       t => !sourceLandmass.has(makeKey(t.row, t.col))
     );
-
     if (crossWaterTargets.length > 0) {
       const ferryInfo = computeFerryRouteInfo(sourceLandmass, onNetwork, ferryEdges);
-
       if (!ferryInfo.canCrossFerry) {
         if (ferryInfo.departurePorts.length > 0) {
           const localTargets = effectiveTargets.filter(
@@ -525,18 +370,200 @@ export function computeBuildSegments(
         }
       }
     }
+  }
+
+  // ── Targeted builds: use findBuildPath for each source→target pair ────────
+  // For targeted builds, find the cheapest path from any source to any effective
+  // target by calling findBuildPath across all (source, target) pairs.
+  // The occupiedEdges (opponent track, Right of Way rule) and builtEdges (own
+  // network free traversal) are passed directly. existingTrackIndex controls
+  // the parallel-build penalty.
+  let bestPaths: Map<string, DijkstraNode> = new Map();
+
+  if (hasTargets && effectiveTargets.length > 0) {
+    // Call findBuildPath for each (source, effectiveTarget) pair and pick
+    // the cheapest result. This replaces the multi-source Dijkstra early-termination.
+    let cheapestCost = Infinity;
+    for (const src of sources) {
+      for (const target of effectiveTargets) {
+        const result = findBuildPath(
+          src, target,
+          builtEdges,
+          existingTrackIndex ?? new Set<string>(),
+          occupiedEdges ?? new Set<string>(),
+          // No budget cap for targeted builds (truncation happens in extractSegments)
+          { budget: null },
+        );
+        if (result.path.length > 0 && result.totalCost < cheapestCost) {
+          cheapestCost = result.totalCost;
+          earlyTermPath = {
+            row: result.path[result.path.length - 1].row,
+            col: result.path[result.path.length - 1].col,
+            cost: result.totalCost,
+            path: result.path,
+          };
+        }
+      }
+    }
 
     if (earlyTermPath) {
-      // Full-path Dijkstra found cheapest route to target — use directly.
-      // No hex-distance scoring needed: the path IS the optimal route.
+      console.log(`${tag} findBuildPath: target reached at cost=${earlyTermPath.cost}, path=${earlyTermPath.path.length} nodes`);
+    } else {
+      // All findBuildPath calls returned empty — fall back to Dijkstra hex-distance
+      console.warn(`${tag} target unreachable via findBuildPath, falling back to hex-distance Dijkstra`);
+    }
+    console.log(`${tag} findBuildPath done (targeted, ${sources.length} sources × ${effectiveTargets.length} targets)`);
+  }
+
+  // ── Untargeted builds + fallback: multi-source Dijkstra ───────────────────
+  // Used for: (1) untargeted budget-walk, (2) fallback when findBuildPath found
+  // no path to any target.
+  if (!hasTargets || (hasTargets && !earlyTermPath)) {
+    const heap = new MinHeap();
+    const minCost = new Map<string, number>();
+
+    for (const src of sources) {
+      const key = makeKey(src.row, src.col);
+      heap.push({ row: src.row, col: src.col, cost: 0, path: [{ row: src.row, col: src.col }] });
+      minCost.set(key, 0);
+    }
+
+    while (heap.size > 0) {
+      const current = heap.pop()!;
+      const currentKey = makeKey(current.row, current.col);
+
+      // Skip if we've already found a cheaper way here
+      const recorded = minCost.get(currentKey);
+      if (recorded !== undefined && current.cost > recorded) continue;
+
+      // Record this as a reachable destination if cost > 0 (not a start node)
+      if (current.cost > 0) {
+        bestPaths.set(currentKey, current);
+      }
+
+      // Expand neighbors
+      const neighbors = getHexNeighbors(current.row, current.col);
+      for (const nb of neighbors) {
+        const nbKey = makeKey(nb.row, nb.col);
+        const nbData = grid.get(nbKey);
+        if (!nbData) continue;
+
+        // Dead-end pruning: skip mileposts with ≤1 non-water neighbor unless
+        // they are a target city. Prevents Dijkstra from wasting budget exploring
+        // ocean peninsulas and coastal dead-ends.
+        if (!targetKeys.has(nbKey) && !onNetwork.has(nbKey)) {
+          const nbNeighborCount = getHexNeighbors(nb.row, nb.col).length;
+          if (nbNeighborCount <= 1) continue;
+        }
+
+        // JIRA-203: Saturated-city exclusion — skip small/medium cities that are at
+        // their player cap. Treating them as blocked ensures the resolver never proposes
+        // paths that the validator would reject with CITY_ENTRY_LIMIT.
+        if (saturatedCityKeys?.has(nbKey)) continue;
+
+        // Intra-city edge: free traversal through major city red area (no track built).
+        if (isIntraCityEdge(currentKey, nbKey, majorCityLookup)) {
+          const newCost = current.cost; // zero cost
+          const existingCost = minCost.get(nbKey);
+          if (existingCost === undefined || newCost < existingCost) {
+            minCost.set(nbKey, newCost);
+            heap.push({
+              row: nb.row,
+              col: nb.col,
+              cost: newCost,
+              path: [...current.path, { row: nb.row, col: nb.col }],
+            });
+          }
+          continue;
+        }
+
+        // Ferry ports use their connection cost (4–16M) instead of terrain cost
+        const terrainCost = ferryPortCosts.get(nbKey) ?? getTerrainCost(nbData.terrain);
+        if (terrainCost === Infinity) continue; // water
+
+        // Don't traverse edges owned by other players (Right of Way rule)
+        const edgeKey = `${currentKey}-${nbKey}`;
+        if (occupiedEdges?.has(edgeKey)) continue;
+
+        // Don't traverse already-built edges (own network)
+        if (builtEdges.has(edgeKey)) {
+          // But we can pass through existing network nodes for free
+          if (onNetwork.has(nbKey)) {
+            const newCost = current.cost; // zero cost to traverse own network
+            const existingCost = minCost.get(nbKey);
+            if (existingCost === undefined || newCost < existingCost) {
+              minCost.set(nbKey, newCost);
+              heap.push({
+                row: nb.row,
+                col: nb.col,
+                cost: newCost,
+                path: [...current.path, { row: nb.row, col: nb.col }],
+              });
+            }
+          }
+          continue;
+        }
+
+        // Proximity penalty: if this neighbor is near existing track but not ON
+        // the network, multiply terrain cost to discourage parallel building.
+        const effectiveTerrainCost = (
+          existingTrackIndex && existingTrackIndex.size > 0 &&
+          !onNetwork.has(nbKey) &&
+          isNearExistingTrack(nb.row, nb.col, existingTrackIndex)
+        ) ? terrainCost * PARALLEL_COST_MULTIPLIER : terrainCost;
+
+        const waterExtra = getWaterCrossingCost(current.row, current.col, nb.row, nb.col);
+        const newCost = current.cost + effectiveTerrainCost + waterExtra;
+        if (!hasTargets && newCost > budget) continue; // over budget (only for untargeted builds)
+
+        const existingCost = minCost.get(nbKey);
+        if (existingCost === undefined || newCost < existingCost) {
+          minCost.set(nbKey, newCost);
+          heap.push({
+            row: nb.row,
+            col: nb.col,
+            cost: newCost,
+            path: [...current.path, { row: nb.row, col: nb.col }],
+          });
+        }
+      }
+
+      // Ferry crossing: if current node is a ferry port, expand to partner port(s).
+      const ferryPartners = ferryAdjacency.get(currentKey);
+      if (ferryPartners) {
+        for (const partner of ferryPartners) {
+          const partnerKey = makeKey(partner.row, partner.col);
+          const newCost = current.cost; // free crossing
+          if (!hasTargets && newCost > budget) continue;
+          const existingCost = minCost.get(partnerKey);
+          if (existingCost === undefined || newCost < existingCost) {
+            minCost.set(partnerKey, newCost);
+            heap.push({
+              row: partner.row,
+              col: partner.col,
+              cost: newCost,
+              path: [...current.path, { row: partner.row, col: partner.col }],
+            });
+          }
+        }
+      }
+    }
+    console.log(`${tag} Dijkstra done: ${bestPaths.size} reachable destinations`);
+  }
+
+  // ── Path selection ─────────────────────────────────────────────────────────
+  let bestPath: DijkstraNode | null = null;
+
+  if (hasTargets) {
+    if (earlyTermPath) {
+      // findBuildPath found cheapest route to target — use directly.
       bestPath = earlyTermPath;
       const ep = bestPath.path[bestPath.path.length - 1];
       const gridPt = grid.get(makeKey(ep.row, ep.col));
       console.log(`${tag} target-aware: direct path to ${gridPt?.name ?? `(${ep.row},${ep.col})`}, cost=${bestPath.cost}, path=${bestPath.path.length} nodes, targets=${effectiveTargets.length} (${targetPositions!.length - effectiveTargets.length} already on network)`);
     } else {
-      // Fallback: target unreachable via Dijkstra (e.g., blocked by occupied edges).
-      // Use hex-distance scoring against whatever destinations were explored.
-      console.warn(`${tag} target unreachable via Dijkstra, falling back to hex-distance scoring`);
+      // Fallback: target unreachable via findBuildPath, use hex-distance scoring
+      // against Dijkstra-explored destinations (already populated in bestPaths above).
       let bestTargetDist = Infinity;
 
       for (const node of bestPaths.values()) {
