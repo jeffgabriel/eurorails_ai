@@ -13,7 +13,6 @@
 // Mock DeterministicTripPlanner to control deterministic path per test
 jest.mock('../../services/ai/DeterministicTripPlanner', () => ({
   planTripDeterministic: jest.fn(),
-  OCPT: 8,
   PRUNE_MAX_TURNS: 12,
   PRUNE_MAX_BUILD_M: 130,
   HOP_AVG_COST_M: 1.3,

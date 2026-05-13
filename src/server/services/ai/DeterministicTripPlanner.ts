@@ -12,7 +12,7 @@
  *  3. Enumerate all single, pair, and triple demand-fulfillment candidates.
  *  4. Cheap-prune candidates whose optimistic turn/build estimates exceed thresholds.
  *  5. Simulate surviving candidates via RouteDetourEstimator.simulateTrip.
- *  6. Score feasible candidates: score = (payout − buildCost) − OCPT × turns.
+ *  6. Score feasible candidates by aggregate two-trip income velocity (aggregateScore).
  *  7. Return the top-1 scored candidate as a StrategicRoute.
  */
 
@@ -35,60 +35,6 @@ import {
 // ── Tunables ───────────────────────────────────────────────────────────
 
 /**
- * Opportunity cost per turn (ECU-equivalent score points), keyed by game phase.
- *
- * Each turn the bot spends is penalized in score by this many ECU. The value
- * shifts across the strategic arc of a game:
- *
- * - **Early (OCPT=2)** — track is sparse, every delivery has high marginal
- *   value because each connection unlocks more of the network. The bot should
- *   accept long, expensive trips that pay off compounding. Low OCPT favors
- *   multi-stop pair/triple candidates that consolidate cards and build
- *   useful track in fewer total turns than equivalent singles would.
- * - **Mid (OCPT=4)** — slightly below income velocity to favor pair/triple
- *   candidates that consolidate multiple cards across the bot's growing
- *   network. JIRA-227 + JIRA-228 unlocked more multi-stop candidates;
- *   lowering OCPT here lets them compete on score. Was 5.
- * - **Late (OCPT=5)** — the bot is racing to ECU 250M cash and 7 connected
- *   major cities. OCPT matches measured income velocity (~5 M/turn observed
- *   post-Superfreight across recent games) so that long-haul pair/triple
- *   trips with higher net-per-turn can compete with short singles instead of
- *   being structurally crushed by an over-tuned opportunity cost.
- *
- * History:
- * - Originally a single constant 8 (empirically tuned). +3 above income
- *   velocity was compensating for a simulator quirk where every stop added
- *   a spurious +1 destination turn — fixed in RouteDetourEstimator.
- * - Then 5 (income-velocity match), then 3.5 (pair-friendly tilt across
- *   all phases), then phase-aware {early:2, mid:5, late:7}, then
- *   {early:2, mid:4, late:7} after JIRA-227/228 unlocked pair/triple
- *   candidates that were previously pruned. Late-phase value dropped from
- *   7 → 5 after log analysis showed Superfreight bots never selecting
- *   triple-load routes — late OCPT=7 was ~40% above their measured income
- *   velocity, making long trips uncompetitive regardless of net payoff.
- *
- * Do not change values without re-running scripts/ai/sweep-spatial-prune.py
- * to confirm no regression in strict-loss count. If pair-pick rate trends
- * too high (bot bites off trips it cannot afford in a phase), nudge that
- * phase's value upward; if singles still dominate when pairs would be
- * better in a phase, nudge it downward.
- */
-export const OCPT_BY_PHASE = {
-  early: 2,
-  mid: 4,
-  late: 5,
-} as const;
-
-/**
- * Default OCPT — exposed for backward compatibility and direct
- * `scoreCandidate` calls that don't have phase context. Equivalent to
- * mid-phase. Production callers go through `planTripDeterministic`, which
- * computes the phase from snapshot/memory state and uses
- * `OCPT_BY_PHASE[phase]`.
- */
-export const OCPT = OCPT_BY_PHASE.mid;
-
-/**
  * Affordability floor for the cash-dip gate in scoreCandidate.
  *
  * Default: 0 — the bot may spend to zero but not below. This enforces
@@ -109,9 +55,7 @@ export const AFFORDABILITY_FLOOR_M = 0;
  * - LATE when the bot has connected ≥5 major cities OR turn ≥ 80.
  *   The win condition needs 7 cities + ECU 250M; at 5/7 connected the
  *   endgame is in sight regardless of turn count, and turn 80 is deep
- *   enough that most games are close to finishing. Turn boundary was 60
- *   before; raised to 80 to extend mid-phase OCPT=4 by 20 turns and let
- *   pair/triple candidates compete longer.
+ *   enough that most games are close to finishing.
  * - EARLY when turn < 25 OR deliveries < 3 OR citiesConnected < 2.
  *   The bot is still in network-building mode; few completed deliveries
  *   means cards in hand are largely unrealized investments.
@@ -150,7 +94,6 @@ const TRAIN_SPEED: Record<string, number> = {
 // ── Public API types ───────────────────────────────────────────────────
 
 export interface DeterministicTripPlannerOptions {
-  ocpt?: number;
   pruneMaxTurns?: number;
   pruneMaxBuildM?: number;
   hopAvgCostM?: number;
@@ -185,7 +128,6 @@ interface ScoredCandidate extends Candidate {
   buildCost: number;
   turns: number;
   net: number;
-  score: number;
   feasible: boolean;
   // JIRA-229: aggregate two-trip look-ahead scoring fields.
   // `aggregateScore` is the primary rank key — income velocity computed over
@@ -212,7 +154,6 @@ interface GridCoord {
 }
 
 interface ResolvedOptions {
-  ocpt: number;
   pruneMaxTurns: number;
   pruneMaxBuildM: number;
   hopAvgCostM: number;
@@ -804,11 +745,11 @@ export function scoreCandidate(
       `[DeterministicTripPlanner] scoreCandidate: simulator threw for candidate id=${candidate.id}`,
       e,
     );
-    return { ...candidate, buildCost: 999, turns: 999, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0, builtSegments: [] };
+    return { ...candidate, buildCost: 999, turns: 999, net: -999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0, builtSegments: [] };
   }
 
   if (!result.feasible) {
-    return { ...candidate, buildCost: result.totalBuildCost, turns: result.turnsToComplete, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0, builtSegments: [] };
+    return { ...candidate, buildCost: result.totalBuildCost, turns: result.turnsToComplete, net: -999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0, builtSegments: [] };
   }
 
   // JIRA-232 Defect A: proactively check whether the planner will emit an
@@ -836,7 +777,7 @@ export function scoreCandidate(
         `[DeterministicTripPlanner] scoreCandidate: upgrade-aware re-simulation threw for candidate id=${candidate.id}`,
         e,
       );
-      return { ...candidate, buildCost: 999, turns: 999, net: -999, score: -9999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0, builtSegments: [] };
+      return { ...candidate, buildCost: 999, turns: 999, net: -999, feasible: false, aggregateScore: -9999, aggregateFollowup: null, aggregateEmptyLegTurns: 0, builtSegments: [] };
     }
   }
 
@@ -855,7 +796,6 @@ export function scoreCandidate(
       buildCost: result.totalBuildCost,
       turns: result.turnsToComplete,
       net: -999,
-      score: -9999,
       feasible: false,
       aggregateScore: -9999,
       aggregateFollowup: null,
@@ -867,7 +807,6 @@ export function scoreCandidate(
   const buildCost = result.totalBuildCost;
   const turns = result.turnsToComplete;
   const net = candidate.payout - buildCost;
-  const score = net - opts.ocpt * turns;
   // aggregateScore/aggregateFollowup are populated later by computeAggregateScore
   // once all feasible candidates are known. Initialize to per-trip velocity so
   // callers that don't run the aggregate pass still get a sane rank key.
@@ -878,7 +817,6 @@ export function scoreCandidate(
     buildCost,
     turns,
     net,
-    score,
     feasible: true,
     aggregateScore: net / Math.max(turns, 1),
     aggregateFollowup: null,
@@ -1042,7 +980,6 @@ function synthesizeReasoning(
   allSorted: ScoredCandidate[],
   stats: PruneStats,
   opts: ResolvedOptions,
-  phase?: 'early' | 'mid' | 'late',
   supplyDiffLines?: string[],
   enumerationMs?: number,
 ): string {
@@ -1053,10 +990,7 @@ function synthesizeReasoning(
 
   const patternExplanation = explainPattern(pattern, top1);
   let reasoning = `[deterministic-top-1] ${top1.id} chosen.\n`;
-  if (phase) {
-    reasoning += `  Phase: ${phase} (OCPT=${opts.ocpt})\n`;
-  }
-  reasoning += `  Picked: ${pattern} — payout ${top1.payout}M, build ${top1.buildCost}M, ${top1.turns} turns, NET ${top1.net.toFixed(0)}M, score ${top1.score.toFixed(1)}\n`;
+  reasoning += `  Picked: ${pattern} — payout ${top1.payout}M, build ${top1.buildCost}M, ${top1.turns} turns, NET ${top1.net.toFixed(0)}M\n`;
   // JIRA-229: aggregate two-trip look-ahead line. Surfaces the chained
   // follow-up so the rank reasoning is auditable from the log.
   // JIRA-237: when post-c1 re-simulation is active, emptyLegTurns is absorbed
@@ -1141,7 +1075,7 @@ function synthesizeLlmAttempt(
     attemptNumber: 0,
     status: top1 !== null ? 'success' : 'validation_error',
     responseText: top1
-      ? `deterministic top-1: ${top1.id} score=${top1.score.toFixed(1)}`
+      ? `deterministic top-1: ${top1.id} NET=${top1.net.toFixed(0)}M`
       : 'no feasible candidates',
     latencyMs,
   };
@@ -1261,15 +1195,6 @@ export function planTripDeterministic(
 ): DeterministicTripPlanResult {
   const startMs = Date.now();
 
-  // Phase-aware OCPT: classify game phase from observable state and pick the
-  // matching OCPT_BY_PHASE value. Caller may override via options.ocpt for
-  // tests or experiments.
-  const phase = classifyGamePhase(
-    snapshot.turnNumber ?? 0,
-    memory.deliveryCount ?? 0,
-    snapshot.bot.connectedMajorCityCount ?? 0,
-  );
-
   // Cash-aware prune cap (JIRA-227 Fix B.1): when bot's cash exceeds the
   // static cap, raise the prune threshold to match — the bot can afford trips
   // it couldn't before. Static cap remains a floor for low-cash scenarios.
@@ -1281,7 +1206,6 @@ export function planTripDeterministic(
     : Math.max(baseBuildCap, snapshot.bot.money);
 
   const opts: ResolvedOptions = {
-    ocpt: options?.ocpt ?? OCPT_BY_PHASE[phase],
     pruneMaxTurns: options?.pruneMaxTurns ?? PRUNE_MAX_TURNS,
     pruneMaxBuildM: dynamicBuildCap,
     hopAvgCostM: options?.hopAvgCostM ?? HOP_AVG_COST_M,
@@ -1465,7 +1389,7 @@ export function planTripDeterministic(
     : upgradeDecision.gateReason
       ? `\n  Upgrade skipped: ${upgradeDecision.gateReason}.`
       : '';
-  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, phase, supplyDiffLines, enumerationMs) + upgradeNote;
+  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, supplyDiffLines, enumerationMs) + upgradeNote;
   const route = buildStrategicRoute(top1, snapshot.turnNumber, reasoning, upgradeOnRoute);
 
   return {
