@@ -2,7 +2,7 @@
  * PathCostEstimator.test.ts
  *
  * Unit tests for the PathCostEstimator module (JIRA-230 R1) and the
- * computeAggregateScore fix (JIRA-230 R2).
+ * computeAggregateScore (JIRA-237).
  *
  * Mocking strategy:
  * - Mock `estimateRouteSegment` from RouteDetourEstimator to control return
@@ -410,199 +410,6 @@ describe('estimateGraphPathCost', () => {
   });
 });
 
-// ── computeAggregateScore — JIRA-230 R2 (double-count fix) ────────────
-
-describe('computeAggregateScore — JIRA-230 R2 bot.position → c2.start subtraction', () => {
-  /**
-   * Test city layout (using mock Chebyshev distance from beforeEach):
-   *   CityA  (3,3)
-   *   CityB  (7,7)  — hex distance from CityA = max(4,4) = 4
-   *   CityC  (10,10) — hex distance from CityA = max(7,7) = 7
-   *   CityD  (1,1)  — hex distance from CityA = max(2,2) = 2
-   *
-   * Bot position for AC1 test: same as c2.start city → 0 subtraction.
-   * Bot position for AC2 test: K hops from c2.start → ceil(K/speed) subtracted.
-   */
-
-  it('AC1: when bot.position == c2.start, aggregateTurns = c1.turns + emptyLegTurns + c2.turns (no subtraction)', () => {
-    // c1: CityA → CityB (starts at CityA, ends at CityB)
-    // c2: CityC → CityD (starts at CityC)
-    // bot.position = CityC (same as c2.start)
-    // → c2BotToStartTurns = 0 → c2ExecutionTurns = max(c2.turns - 0, 1) = c2.turns
-
-    const botPos = { row: 10, col: 10 }; // same as CityC
-    addCity('SupplyA', 3, 3); // for c1 start
-    addCity('DeliveryA', 7, 7); // for c1 end (= CityB)
-    addCity('SupplyC', 10, 10); // same as botPos (for c2 start)
-    addCity('DeliveryC', 1, 1); // for c2 end (= CityD)
-
-    const c1 = makeScoredCandidate({
-      id: 'c1',
-      cardIndices: [1],
-      startCity: 'SupplyA',
-      endCity: 'DeliveryA',
-      turns: 4,
-      net: 20,
-    });
-
-    const c2 = makeScoredCandidate({
-      id: 'c2',
-      cardIndices: [2],
-      startCity: 'SupplyC',
-      endCity: 'DeliveryC',
-      turns: 5,
-      net: 18,
-    });
-
-    const cityToCoords = new Map([
-      ['SupplyA', [{ row: 3, col: 3 }]],
-      ['DeliveryA', [{ row: 7, col: 7 }]],
-      ['SupplyC', [{ row: 10, col: 10 }]],
-      ['DeliveryC', [{ row: 1, col: 1 }]],
-    ]);
-
-    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos);
-
-    // emptyLegTurns: CityB(7,7) → CityC(10,10): Chebyshev=max(3,3)=3 → ceil(3/9)=1
-    // c2BotToStartTurns: botPos(10,10) → CityC(10,10): distance=0 → 0 turns
-    // c2ExecutionTurns = max(5 - 0, 1) = 5
-    // aggregateTurns = max(4 + 1 + 5, 1) = 10
-    const emptyLeg = Math.ceil(Math.max(Math.abs(10 - 7), Math.abs(10 - 7)) / 9); // 1
-    const expectedAggTurns = 4 + emptyLeg + 5;
-    const expectedAggregate = (20 + 18) / expectedAggTurns;
-
-    expect(result.aggregate).toBeCloseTo(expectedAggregate, 6);
-    expect(result.followup).toBe(c2);
-  });
-
-  it('AC2: when bot.position != c2.start, aggregateTurns subtracts ceil(K/speed) from c2.turns', () => {
-    // c1: SupplyA → DeliveryA
-    // c2: SupplyC → DeliveryC
-    // bot.position = CityD(1,1), c2.start = SupplyC(10,10)
-    // Chebyshev distance CityD→SupplyC = max(9,9) = 9, speed=9 → c2BotToStartTurns = ceil(9/9) = 1
-    // c2ExecutionTurns = max(5 - 1, 1) = 4
-
-    const botPos = { row: 1, col: 1 }; // CityD
-
-    const c1 = makeScoredCandidate({
-      id: 'c1',
-      cardIndices: [1],
-      startCity: 'CityA',
-      endCity: 'CityB',
-      turns: 4,
-      net: 20,
-    });
-
-    const c2 = makeScoredCandidate({
-      id: 'c2',
-      cardIndices: [2],
-      startCity: 'CityC',
-      endCity: 'CityD',
-      turns: 5,
-      net: 18,
-    });
-
-    const cityToCoords = new Map([
-      ['CityA', [{ row: 3, col: 3 }]],
-      ['CityB', [{ row: 7, col: 7 }]],
-      ['CityC', [{ row: 10, col: 10 }]],
-      ['CityD', [{ row: 1, col: 1 }]],
-    ]);
-
-    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos);
-
-    // emptyLegTurns: CityB(7,7) → CityC(10,10): Chebyshev = max(3,3)=3 → ceil(3/9)=1
-    // c2BotToStartTurns: CityD(1,1) → CityC(10,10): Chebyshev = max(9,9)=9 → ceil(9/9)=1
-    // c2ExecutionTurns = max(5 - 1, 1) = 4
-    // aggregateTurns = max(4 + 1 + 4, 1) = 9
-    const emptyLeg = 1;
-    const c2BotToStartTurns = 1;
-    const c2Execution = Math.max(5 - c2BotToStartTurns, 1); // 4
-    const expectedAggTurns = 4 + emptyLeg + c2Execution; // 9
-    const expectedAggregate = (20 + 18) / expectedAggTurns;
-
-    expect(result.aggregate).toBeCloseTo(expectedAggregate, 6);
-    expect(result.followup).toBe(c2);
-    expect(result.emptyLegTurns).toBe(emptyLeg);
-  });
-
-  it('clamps c2ExecutionTurns to minimum 1 when c2.turns - c2BotToStartTurns < 1', () => {
-    // c2.turns=1, c2BotToStartTurns=5 → max(1-5, 1) = 1 (clamped)
-    // bot is far from c2.start so subtraction would go negative
-
-    const botPos = { row: 1, col: 1 }; // CityD far from CityC
-
-    const c1 = makeScoredCandidate({
-      id: 'c1',
-      cardIndices: [1],
-      startCity: 'CityA',
-      endCity: 'CityB',
-      turns: 3,
-      net: 15,
-    });
-
-    const c2 = makeScoredCandidate({
-      id: 'c2',
-      cardIndices: [2],
-      startCity: 'CityC',
-      endCity: 'CityD',
-      turns: 1, // very short c2 — clamp scenario
-      net: 10,
-    });
-
-    const cityToCoords = new Map([
-      ['CityA', [{ row: 3, col: 3 }]],
-      ['CityB', [{ row: 7, col: 7 }]],
-      ['CityC', [{ row: 10, col: 10 }]],
-      ['CityD', [{ row: 1, col: 1 }]],
-    ]);
-
-    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos);
-
-    // c2ExecutionTurns must be at least 1
-    // aggregateTurns = max(3 + emptyLeg + 1, 1) ≥ 4
-    expect(result.aggregate).toBeGreaterThan(0);
-    expect(result.followup).toBe(c2);
-  });
-
-  it('endgame fallback: no feasible follow-up returns standalone aggregate', () => {
-    // c1 and c2 share the same cardIndex → no disjoint follow-up
-
-    const botPos = { row: 5, col: 5 };
-
-    const c1 = makeScoredCandidate({
-      id: 'c1',
-      cardIndices: [1],
-      startCity: 'CityA',
-      endCity: 'CityB',
-      turns: 4,
-      net: 20,
-    });
-
-    const c2 = makeScoredCandidate({
-      id: 'c2',
-      cardIndices: [1], // same card — will be excluded
-      startCity: 'CityC',
-      endCity: 'CityD',
-      turns: 5,
-      net: 18,
-    });
-
-    const cityToCoords = new Map([
-      ['CityA', [{ row: 3, col: 3 }]],
-      ['CityB', [{ row: 7, col: 7 }]],
-      ['CityC', [{ row: 10, col: 10 }]],
-      ['CityD', [{ row: 1, col: 1 }]],
-    ]);
-
-    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos);
-
-    // Standalone: c1.net / max(c1.turns, 1) = 20/4 = 5
-    expect(result.aggregate).toBeCloseTo(20 / 4, 6);
-    expect(result.followup).toBeNull();
-    expect(result.emptyLegTurns).toBe(0);
-  });
-});
 
 // ── computeAggregateScore — JIRA-237 chained re-simulation (Defect 1) ──────
 //
@@ -663,7 +470,7 @@ describe('computeAggregateScore — JIRA-237 chained re-simulation (Defect 1)', 
     });
 
     const snapshot = makeSnapshot([], botPos);
-    computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos, snapshot);
+    computeAggregateScore(c1, [c1, c2], cityToCoords, snapshot);
 
     // simulateTrip should have been called at least once (for the c2 chained re-sim)
     expect(mockSimulateTrip).toHaveBeenCalled();
@@ -720,7 +527,7 @@ describe('computeAggregateScore — JIRA-237 chained re-simulation (Defect 1)', 
     });
 
     const snapshot = makeSnapshot([], botPos);
-    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos, snapshot);
+    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, snapshot);
 
     // JIRA-237 R4: aggregate = (c1.net + c2_chained.net) / (c1.turns + c2_chained.turnsToComplete)
     //   = (20 + (22 - 5)) / (3 + 4) = 37 / 7
@@ -773,7 +580,7 @@ describe('computeAggregateScore — JIRA-237 chained re-simulation (Defect 1)', 
     });
 
     const snapshot = makeSnapshot([], botPos);
-    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos, snapshot);
+    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, snapshot);
 
     // R5 / endgame fallback: no feasible follow-up → standalone velocity
     expect(result.aggregate).toBeCloseTo(20 / 4, 6); // c1.net / c1.turns = 5
@@ -781,44 +588,4 @@ describe('computeAggregateScore — JIRA-237 chained re-simulation (Defect 1)', 
     expect(result.emptyLegTurns).toBe(0);
   });
 
-  it('AC9b: no snapshot → falls back to JIRA-230 approximation (legacy path, no simulateTrip call)', () => {
-    // When snapshot is undefined, should NOT call simulateTrip for chained simulation.
-    jest.clearAllMocks();
-    const botPos = { row: 5, col: 5 };
-
-    const c1 = makeScoredCandidate({
-      id: 'c1',
-      cardIndices: [1],
-      startCity: 'SupplyA',
-      endCity: 'DeliveryA',
-      turns: 4,
-      net: 20,
-      payout: 25,
-    });
-    c1.builtSegments = [];
-
-    const c2 = makeScoredCandidate({
-      id: 'c2',
-      cardIndices: [2],
-      startCity: 'SupplyC',
-      endCity: 'DeliveryC',
-      turns: 5,
-      net: 18,
-      payout: 22,
-    });
-
-    const cityToCoords = new Map([
-      ['SupplyA', [{ row: 3, col: 3 }]],
-      ['DeliveryA', [{ row: 7, col: 7 }]],
-      ['SupplyC', [{ row: 10, col: 10 }]],
-      ['DeliveryC', [{ row: 1, col: 1 }]],
-    ]);
-
-    // When snapshot is NOT passed, simulateTrip should NOT be called for chaining
-    const result = computeAggregateScore(c1, [c1, c2], cityToCoords, 9, botPos);
-
-    expect(mockSimulateTrip).not.toHaveBeenCalled();
-    expect(result.followup).toBe(c2); // fallback still finds the follow-up
-    expect(result.aggregate).toBeGreaterThan(0);
-  });
 });
