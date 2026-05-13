@@ -81,8 +81,6 @@ import {
   RouteStop,
   AIActionType,
   TrainType,
-  TrackSegment,
-  TerrainType,
 } from '../../../shared/types/GameTypes';
 
 const mockSimulateTrip = simulateTrip as jest.MockedFunction<typeof simulateTrip>;
@@ -830,118 +828,6 @@ describe('cheapPrune — AC9: graph-aware cost keeps high-hex-distance / low-bui
     const result = cheapPrune(candidate, { row: 5, col: 5 }, 9, defaultOpts, makeSnapshot());
     expect(result.keep).toBe(false);
     expect(result.estBuild).toBe(150);
-  });
-});
-
-// ── cheapPrune — JIRA-238: leg composition ─────────────────────────────
-//
-// Each leg's estimateGraphPathCost call must run against a snapshot
-// augmented with the prior legs' newSegments. Without composition,
-// multi-stop candidates over-count build cost because later legs can't see
-// the earlier legs' new track as free traversal.
-
-describe('cheapPrune — JIRA-238: snapshot composition across legs', () => {
-  const defaultOpts = {
-    ocpt: OCPT,
-    pruneMaxTurns: PRUNE_MAX_TURNS,
-    pruneMaxBuildM: PRUNE_MAX_BUILD_M,
-    hopAvgCostM: HOP_AVG_COST_M,
-  };
-
-  // Build a minimal TrackSegment satisfying GameTypes.TrackSegment shape
-  const mkSeg = (r1: number, c1: number, r2: number, c2: number): TrackSegment => ({
-    from: { x: c1, y: r1, row: r1, col: c1, terrain: 0 as TerrainType },
-    to: { x: c2, y: r2, row: r2, col: c2, terrain: 0 as TerrainType },
-    cost: 1,
-  });
-
-  beforeEach(() => {
-    mockEstimateGraphPathCost.mockReset();
-  });
-
-  it('JIRA-238: leg 2 receives a snapshot whose existingSegments includes leg 1\'s newSegments', () => {
-    const leg1NewSegs = [
-      mkSeg(1, 1, 2, 2),
-      mkSeg(2, 2, 3, 3),
-    ];
-    const leg2NewSegs = [
-      mkSeg(3, 3, 4, 4),
-    ];
-
-    mockEstimateGraphPathCost
-      .mockReturnValueOnce({ reachable: true, buildCost: 4, pathLength: 2, estimatedTurns: 1, newSegments: leg1NewSegs })
-      .mockReturnValueOnce({ reachable: true, buildCost: 2, pathLength: 1, estimatedTurns: 1, newSegments: leg2NewSegs });
-
-    const baseSnapshot = makeSnapshot();
-    const candidate = {
-      id: 'jira-238-compose',
-      rows: [],
-      stops: [
-        { action: 'pickup' as const, loadType: 'Coal', city: 'A' },
-        { action: 'deliver' as const, loadType: 'Coal', city: 'B' },
-      ],
-      payout: 30,
-    };
-
-    cheapPrune(candidate, { row: 0, col: 0 }, 9, defaultOpts, baseSnapshot);
-
-    // Leg 1 call: snapshot has only the bot's original existingSegments
-    const leg1Call = mockEstimateGraphPathCost.mock.calls[0];
-    expect(leg1Call[2].bot.existingSegments).toHaveLength(0);
-
-    // Leg 2 call: snapshot.bot.existingSegments must include leg-1's newSegments
-    const leg2Call = mockEstimateGraphPathCost.mock.calls[1];
-    expect(leg2Call[2].bot.existingSegments).toHaveLength(2);
-    expect(leg2Call[2].bot.existingSegments).toEqual(leg1NewSegs);
-  });
-
-  it('JIRA-238: 3-stop candidate accumulates newSegments across all legs', () => {
-    const leg1 = [mkSeg(0, 0, 1, 1)];
-    const leg2 = [mkSeg(1, 1, 2, 2)];
-    const leg3 = [mkSeg(2, 2, 3, 3)];
-
-    mockEstimateGraphPathCost
-      .mockReturnValueOnce({ reachable: true, buildCost: 2, pathLength: 1, estimatedTurns: 1, newSegments: leg1 })
-      .mockReturnValueOnce({ reachable: true, buildCost: 2, pathLength: 1, estimatedTurns: 1, newSegments: leg2 })
-      .mockReturnValueOnce({ reachable: true, buildCost: 2, pathLength: 1, estimatedTurns: 1, newSegments: leg3 });
-
-    const candidate = {
-      id: 'jira-238-three-stop',
-      rows: [],
-      stops: [
-        { action: 'pickup' as const, loadType: 'Coal', city: 'A' },
-        { action: 'deliver' as const, loadType: 'Coal', city: 'B' },
-        { action: 'pickup' as const, loadType: 'Iron', city: 'C' },
-      ],
-      payout: 50,
-    };
-
-    cheapPrune(candidate, { row: 0, col: 0 }, 9, defaultOpts, makeSnapshot());
-
-    // Leg 3 sees leg-1 + leg-2 segments
-    const leg3Call = mockEstimateGraphPathCost.mock.calls[2];
-    expect(leg3Call[2].bot.existingSegments).toEqual([...leg1, ...leg2]);
-  });
-
-  it('JIRA-238: no newSegments on a leg → snapshot unchanged for subsequent legs', () => {
-    mockEstimateGraphPathCost
-      .mockReturnValueOnce({ reachable: true, buildCost: 0, pathLength: 3, estimatedTurns: 1, newSegments: [] })
-      .mockReturnValueOnce({ reachable: true, buildCost: 5, pathLength: 4, estimatedTurns: 1, newSegments: [] });
-
-    const candidate = {
-      id: 'jira-238-no-new',
-      rows: [],
-      stops: [
-        { action: 'pickup' as const, loadType: 'Coal', city: 'A' },
-        { action: 'deliver' as const, loadType: 'Coal', city: 'B' },
-      ],
-      payout: 20,
-    };
-
-    cheapPrune(candidate, { row: 0, col: 0 }, 9, defaultOpts, makeSnapshot());
-
-    const leg2Call = mockEstimateGraphPathCost.mock.calls[1];
-    expect(leg2Call[2].bot.existingSegments).toHaveLength(0);
   });
 });
 

@@ -742,26 +742,22 @@ export function cheapPrune(
   let totalBuild = 0;
   let totalTurns = 0;
   let prevCity: string | { row: number; col: number } = startPos;
-  // JIRA-238: thread accumulated new-segments through each leg's snapshot so
-  // later legs can traverse earlier legs' new track for free, matching what
-  // simulateTrip does inside scoreCandidate. Without composition cheapPrune
-  // over-counts build cost on multi-stop candidates and may reject candidates
-  // that scoreCandidate would have accepted.
-  let composedSnapshot: WorldSnapshot = snapshot;
+  // NOTE: cheapPrune deliberately does NOT compose snapshot across legs (unlike
+  // DemandEngine.computeBestDemandContext, which does — see JIRA-238). The
+  // composition would invalidate PathCostEstimator's per-leg cache key per
+  // candidate (each augmented snapshot has a unique segmentsHash), turning
+  // every 2nd+ leg into a cache miss and a fresh findBuildPath BFS. In the
+  // a864f7e1 game this drove enumeration time from ~5ms/candidate to ~11ms
+  // avg / ~64ms p95, with a worst-case 75s enumeration on 1176 candidates.
+  // cheapPrune is the speed-critical filter; precision belongs to
+  // scoreCandidate's simulateTrip (which composes internally). Tolerating
+  // mildly inflated estBuild here is the right trade given the loose
+  // 130M / 12-turn thresholds — false-negatives at those bounds are rare.
   for (const s of candidate.stops) {
-    const leg = estimateGraphPathCost(prevCity, s.city, composedSnapshot, speed);
+    const leg = estimateGraphPathCost(prevCity, s.city, snapshot, speed);
     if (!leg.reachable) return { keep: false, estTurns: 999, estBuild: 999 };
     totalBuild += leg.buildCost;
     totalTurns += leg.estimatedTurns;
-    if (leg.newSegments?.length) {
-      composedSnapshot = {
-        ...composedSnapshot,
-        bot: {
-          ...composedSnapshot.bot,
-          existingSegments: [...composedSnapshot.bot.existingSegments, ...leg.newSegments],
-        },
-      };
-    }
     prevCity = s.city;
   }
   const estTurns = Math.max(1, totalTurns);
