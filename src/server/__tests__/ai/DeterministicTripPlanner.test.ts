@@ -470,6 +470,29 @@ describe('normalizeRows multiplicity-aware carry detection (JIRA-233 BE-001)', (
     expect(carried.get('Coal')).toBe(1);
     expect(carried.has('Steel')).toBe(false);
   });
+
+  // Regression: game ca2993dc — same-card siblings must not all flip isCarry
+  // when only one of them wins a carry slot. Each demand card carries 3 rows
+  // (one per (load,city,payout) tuple) that share the same cardIndex.
+  it('three rows sharing one cardIndex: only the loadType in cargo gets isCarry=true', () => {
+    // Card 105 from game ca2993dc: Wheat/Wine/Cattle. Bot carries Cattle only.
+    const demands: DemandContext[] = [
+      makeDemand({ cardIndex: 105, loadType: 'Wheat', deliveryCity: 'Manchester', payout: 24 }),
+      makeDemand({ cardIndex: 105, loadType: 'Wine', deliveryCity: 'Praha', payout: 6 }),
+      makeDemand({ cardIndex: 105, loadType: 'Cattle', deliveryCity: 'Sevilla', payout: 32 }),
+    ];
+    const carried = detectCarriedLoads(null, demands, ['Cattle']);
+    const rows = normalizeRows(demands, carried);
+
+    const wheat = rows.find(r => r.loadType === 'Wheat')!;
+    const wine = rows.find(r => r.loadType === 'Wine')!;
+    const cattle = rows.find(r => r.loadType === 'Cattle')!;
+
+    expect(cattle.isCarry).toBe(true);
+    // Pre-fix bug: keying carryWinners by cardIndex flipped these to true.
+    expect(wheat.isCarry).toBe(false);
+    expect(wine.isCarry).toBe(false);
+  });
 });
 
 // ── enumerateCandidates ────────────────────────────────────────────────

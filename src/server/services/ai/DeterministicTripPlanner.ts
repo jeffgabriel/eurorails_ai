@@ -353,14 +353,20 @@ export function normalizeRows(
   carried: Map<string, number>,
 ): NormalizedDemandRow[] {
   // For each loadType with carry count > 0, determine which N demand rows
-  // (sorted descending by payout) get isCarry=true.
+  // (sorted descending by payout) get isCarry=true. Winners are tracked by
+  // the row's index in `demands` — NOT by cardIndex, because each demand
+  // card carries three rows (one per (load,city,payout) tuple) that share
+  // the same cardIndex; keying on cardIndex would flag all three siblings
+  // as carried whenever one of them wins a slot.
   const carryWinners = new Set<number>();
 
-  // Group demands by loadType to pick the top-N per type.
-  const byLoadType = new Map<string, DemandContext[]>();
-  for (const d of demands) {
+  // Group demands by loadType to pick the top-N per type. Track original
+  // array index alongside the row so winners can be recorded uniquely.
+  const byLoadType = new Map<string, { row: DemandContext; index: number }[]>();
+  for (let i = 0; i < demands.length; i++) {
+    const d = demands[i];
     if (!byLoadType.has(d.loadType)) byLoadType.set(d.loadType, []);
-    byLoadType.get(d.loadType)!.push(d);
+    byLoadType.get(d.loadType)!.push({ row: d, index: i });
   }
 
   for (const [loadType, rows] of byLoadType) {
@@ -368,19 +374,19 @@ export function normalizeRows(
     if (count <= 0) continue;
 
     // Sort descending by payout; stable sort preserves insertion order for ties.
-    const sorted = [...rows].sort((a, b) => b.payout - a.payout);
+    const sorted = [...rows].sort((a, b) => b.row.payout - a.row.payout);
     for (let i = 0; i < Math.min(count, sorted.length); i++) {
-      carryWinners.add(sorted[i].cardIndex);
+      carryWinners.add(sorted[i].index);
     }
   }
 
-  return demands.map((d) => ({
+  return demands.map((d, i) => ({
     loadType: d.loadType,
     supplyCity: d.supplyCity,
     deliveryCity: d.deliveryCity,
     payout: d.payout,
     cardIndex: d.cardIndex,
-    isCarry: carryWinners.has(d.cardIndex),
+    isCarry: carryWinners.has(i),
   }));
 }
 
