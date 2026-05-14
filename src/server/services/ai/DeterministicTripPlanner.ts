@@ -75,6 +75,23 @@ export const PRUNE_MAX_TURNS = 12;
 export const PRUNE_MAX_BUILD_M = 130;
 export const HOP_AVG_COST_M = 1.3;
 
+/**
+ * Cap on chained-follow-up search per c1 in computeAggregateScore.
+ *
+ * JIRA-237's aggregate look-ahead re-simulates c2 against the post-c1 network
+ * for every disjoint feasible candidate — O(N²) simulateTrip calls per turn.
+ * As mid-game feasible counts grow past ~200, this became the dominant cost
+ * (110-second turns observed in game a864f7e1).
+ *
+ * Cap the c2 inner loop to the top-K disjoint candidates by velocity
+ * (net / turns), the cheap proxy for "could plausibly be the best follow-up
+ * for c1." The true best follow-up almost always lives in this slice; a
+ * low-velocity candidate cannot drag a high-velocity c1 to the top of the
+ * aggregate ranking. K=20 trades a marginal-accuracy hit for a ~15x speedup
+ * on high-survivor turns.
+ */
+export const C2_LOOKAHEAD_K = 20;
+
 // ── Train lookups ──────────────────────────────────────────────────────
 
 const TRAIN_CAP: Record<string, number> = {
@@ -882,7 +899,18 @@ export function computeAggregateScore(
   let bestAggregate: number | null = null;
   let bestFollowup: ScoredCandidate | null = null;
 
-  for (const c2 of allFeasible) {
+  // Cap the c2 inner loop to top-K candidates by standalone velocity. With
+  // ~300 feasible candidates the unbounded loop performs ~90K simulateTrip
+  // calls per turn — empirically the dominant cost on a 110-second turn in
+  // game a864f7e1. Sort once per c1 (cheap vs simulateTrip), then take the
+  // top K+1 (+1 because c1 itself may be in the top K and gets skipped).
+  // The pre-filter is by `net / turns` velocity; the true best follow-up
+  // almost always lives in this slice. See C2_LOOKAHEAD_K docstring.
+  const c2Pool = [...allFeasible]
+    .sort((a, b) => (b.net / Math.max(b.turns, 1)) - (a.net / Math.max(a.turns, 1)))
+    .slice(0, C2_LOOKAHEAD_K + 1);
+
+  for (const c2 of c2Pool) {
     if (c2 === c1) continue;
     // Disjoint-cards check: c2 must not consume any card c1 is consuming.
     let overlap = false;

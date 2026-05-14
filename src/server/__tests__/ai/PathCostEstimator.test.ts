@@ -618,4 +618,58 @@ describe('computeAggregateScore — JIRA-237 chained re-simulation (Defect 1)', 
     expect(result.emptyLegTurns).toBe(0);
   });
 
+  // Regression: O(N²) bound — game a864f7e1 hit 110s turns when ~300
+  // feasible candidates each evaluated ~300 c2 follow-ups via simulateTrip.
+  // The c2 inner loop is now capped at top-K (C2_LOOKAHEAD_K = 20) by velocity.
+  it('JIRA-239: c2 inner loop is bounded by C2_LOOKAHEAD_K — simulateTrip call count caps', () => {
+    addCity('SupplyA', 3, 3);
+    addCity('DeliveryA', 7, 7);
+    const botPos = { row: 5, col: 5 };
+    const cityToCoords = new Map<string, GridCoord[]>([
+      ['SupplyA', [{ row: 3, col: 3 }]],
+      ['DeliveryA', [{ row: 7, col: 7 }]],
+    ]);
+
+    // Build N=50 feasible candidates, all disjoint (distinct cardIndex), all
+    // sharing the same start/end city so they'd all pass the disjoint check.
+    // c1 is the candidate with the highest velocity (so it ends up in the top-K).
+    const c1 = makeScoredCandidate({
+      id: 'c1',
+      cardIndices: [1000],
+      startCity: 'SupplyA',
+      endCity: 'DeliveryA',
+      turns: 2,
+      net: 100,
+    });
+    const otherCandidates = Array.from({ length: 49 }, (_, i) =>
+      makeScoredCandidate({
+        id: `c2-${i}`,
+        cardIndices: [2000 + i],
+        startCity: 'SupplyA',
+        endCity: 'DeliveryA',
+        turns: 5,
+        net: 50 - i, // descending velocity
+      }),
+    );
+    const allFeasible = [c1, ...otherCandidates];
+
+    mockSimulateTrip.mockReturnValue({
+      turnsToComplete: 3,
+      totalBuildCost: 5,
+      feasible: true,
+      minCashRelative: -5,
+      finalCashRelative: 25,
+      builtSegments: [],
+    });
+
+    const snapshot = makeSnapshot([], botPos);
+    computeAggregateScore(c1, allFeasible, cityToCoords, snapshot);
+
+    // Cap is C2_LOOKAHEAD_K = 20 (+1 because c1 may be in the sorted top-K and
+    // gets skipped). simulateTrip should be called AT MOST 21 times, NOT 49.
+    expect(mockSimulateTrip.mock.calls.length).toBeLessThanOrEqual(21);
+    // And meaningfully less than the unbounded count
+    expect(mockSimulateTrip.mock.calls.length).toBeLessThan(allFeasible.length);
+  });
+
 });
