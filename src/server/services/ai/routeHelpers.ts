@@ -16,7 +16,7 @@ import {
   GameContext,
   WorldSnapshot,
 } from '../../../shared/types/GameTypes';
-import { loadGridPoints } from './MapTopology';
+import { loadGridPoints, hexDistance } from './MapTopology';
 
 /** Number of connected major cities required to win */
 const VICTORY_CITY_COUNT = 7;
@@ -47,6 +47,69 @@ export interface BuildTargetResult {
   stopIndex: number;
   /** True when the bot meets the victory cash threshold but lacks 7 major cities */
   isVictoryBuild: boolean;
+  /**
+   * JIRA-240: Optional secondary build target (pickup connector) to lay in the same turn
+   * when the primary victory build leaves budget remaining.
+   * Only set when isVictoryBuild is true and a bundled connector is affordable.
+   */
+  secondaryTarget?: string | null;
+  /**
+   * JIRA-240: Estimated track cost to reach the secondary target from the network frontier.
+   * Only set when secondaryTarget is set.
+   */
+  secondaryEstimatedCost?: number;
+}
+
+/**
+ * JIRA-239: Returns true iff the bot can complete a carry delivery this turn
+ * on its existing network, without needing to build new track.
+ *
+ * All four conditions must hold:
+ * 1. The current route stop is a 'deliver' action.
+ * 2. The bot is currently carrying the required load (context.loads contains loadType).
+ * 3. The delivery city is on the bot's network (context.citiesOnNetwork includes city).
+ * 4. The hex distance from bot position to delivery city is ≤ context.speed (reachable this turn).
+ *
+ * Returns false for any missing/invalid input (fail-safe: prefer false to avoid
+ * misdirecting the build phase).
+ */
+function hasNearbyHighValueDelivery(
+  route: StrategicRoute,
+  context: GameContext,
+): boolean {
+  // Fail-safe guards
+  if (!route || !route.stops || route.stops.length === 0) return false;
+  if (route.currentStopIndex < 0 || route.currentStopIndex >= route.stops.length) return false;
+  if (!context?.loads || !context.citiesOnNetwork || !context.position) return false;
+
+  const stop = route.stops[route.currentStopIndex];
+  if (!stop) return false;
+
+  // Condition 1: current stop must be a delivery
+  if (stop.action !== 'deliver') return false;
+
+  // Condition 2: bot must be carrying the required load
+  if (!context.loads.includes(stop.loadType)) return false;
+
+  // Condition 3: delivery city must be on the existing network
+  if (!context.citiesOnNetwork.includes(stop.city)) return false;
+
+  // Condition 4: delivery city must be reachable this turn (hex distance ≤ speed)
+  // Resolve delivery city to grid coordinates
+  const grid = loadGridPoints();
+  let deliveryRow = -1;
+  let deliveryCol = -1;
+  for (const [, gp] of grid) {
+    if (gp.name === stop.city) {
+      deliveryRow = gp.row;
+      deliveryCol = gp.col;
+      break;
+    }
+  }
+  if (deliveryRow < 0) return false; // city not found in grid — fail-safe
+
+  const dist = hexDistance(context.position.row, context.position.col, deliveryRow, deliveryCol);
+  return dist <= context.speed;
 }
 
 /**
@@ -75,6 +138,22 @@ export function resolveBuildTarget(
     context.connectedMajorCities.length < VICTORY_CITY_COUNT;
 
   if (isVictoryEligible) {
+    // JIRA-239: Delivery-first guard — if the bot is carrying a load whose
+    // delivery city is on the network and reachable this turn, deliver first
+    // rather than wasting a turn building toward a victory city.
+    // We return the current stop's city directly (isVictoryBuild: false) so
+    // BuildPhasePlanner knows to skip building and let movement/delivery execute.
+    // Note: findRouteBasedTarget() skips on-network cities, so we must return
+    // the stop directly here rather than delegating to findRouteBasedTarget.
+    if (hasNearbyHighValueDelivery(route, context)) {
+      const deliverStop = route.stops[route.currentStopIndex];
+      return {
+        targetCity: deliverStop.city,
+        stopIndex: route.currentStopIndex,
+        isVictoryBuild: false,
+      };
+    }
+
     const victoryTarget = findCheapestUnconnectedMajorCity(context);
     if (victoryTarget) {
       return { targetCity: victoryTarget, stopIndex: -1, isVictoryBuild: true };

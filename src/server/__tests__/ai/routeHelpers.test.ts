@@ -6,7 +6,7 @@
  * - resolveBuildTarget: route-based targets, victory build override, null (all on-network)
  */
 
-import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState, isDeliveryComplete, isRouteImpossible } from '../../services/ai/routeHelpers';
+import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState, isDeliveryComplete, isRouteImpossible, BuildTargetResult } from '../../services/ai/routeHelpers';
 import { GameContext, RouteStop, StrategicRoute, TrainType, WorldSnapshot, TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1123,5 +1123,198 @@ describe('isRouteImpossible — AC3: multi-instance edge case', () => {
     const routeAtCopper = makeImpRoute(stops, 1);
     const ctxEmpty = makeContext({ loads: [] }); // Coal was delivered
     expect(isRouteImpossible(routeAtCopper, ctxEmpty)).toBe(true);
+  });
+});
+
+// ── JIRA-239: hasNearbyHighValueDelivery guard (AC1, AC2, AC5-AC8) ──────────
+
+// Helper for victory-eligible context with a deliver stop
+function makeVictoryRoute(deliverCity: string, loadType = 'Wine'): StrategicRoute {
+  return {
+    stops: [{ action: 'deliver', loadType, city: deliverCity, demandCardId: 1, payment: 22 }],
+    currentStopIndex: 0,
+    phase: 'build',
+    createdAtTurn: 1,
+    reasoning: 'test',
+  };
+}
+
+// Roma grid center: row=54, col=45 (from gridPoints.json)
+// Bot position: row=51, col=44 — hexDistance = 3, well within trainSpeed 12
+const ROMA_ROW = 54;
+const ROMA_COL = 45;
+const BOT_NEAR_ROMA = { row: 51, col: 44 };
+// A far position: Hamburg area (row=14, col=47) — hexDistance to Roma >> 12
+const BOT_FAR_FROM_ROMA = { row: 14, col: 47 };
+
+function makeVictoryContext(overrides: Partial<GameContext> = {}): GameContext {
+  return makeContext({
+    money: 241,
+    connectedMajorCities: ['Holland', 'Ruhr', 'Berlin'],
+    unconnectedMajorCities: [
+      { cityName: 'Milano', estimatedCost: 5 },
+      { cityName: 'London', estimatedCost: 12 },
+    ],
+    citiesOnNetwork: ['Roma', 'Napoli'],
+    loads: ['Wine'],
+    position: BOT_NEAR_ROMA,
+    speed: 12,
+    ...overrides,
+  });
+}
+
+describe('resolveBuildTarget — JIRA-239 delivery-first guard (AC1, AC2, AC5-AC8)', () => {
+  // AC5: canonical case — guard fires, returns route-based result (Roma) not victory build
+  it('AC5: returns route-based target (delivery city) when bot carries load, city on network, within speed', () => {
+    const route = makeVictoryRoute('Roma');
+    const context = makeVictoryContext();
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Roma');
+    expect(result!.isVictoryBuild).toBe(false);
+  });
+
+  // AC6: guard does NOT fire when carry is far (distance > trainSpeed)
+  it('AC6: does NOT fire when delivery city is far (hexDistance > speed) — returns victory target', () => {
+    const route = makeVictoryRoute('Roma');
+    const context = makeVictoryContext({ position: BOT_FAR_FROM_ROMA });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+  });
+
+  // AC7: guard does NOT fire when delivery city is off-network
+  it('AC7: does NOT fire when delivery city is NOT on citiesOnNetwork — returns victory target', () => {
+    const route = makeVictoryRoute('Roma');
+    const context = makeVictoryContext({ citiesOnNetwork: ['Berlin', 'Hamburg'] }); // Roma absent
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+  });
+
+  // AC8: guard does NOT fire when bot is NOT carrying the required load
+  it('AC8: does NOT fire when bot is not carrying the required load — returns victory target', () => {
+    const route = makeVictoryRoute('Roma');
+    const context = makeVictoryContext({ loads: [] }); // no Wine on train
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+  });
+
+  // AC1: guard returns false when current stop is a pickup (not deliver)
+  it('AC1(a): does NOT fire when current stop is a pickup (not deliver)', () => {
+    const pickupRoute: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Wine', city: 'Frankfurt' },
+        { action: 'deliver', loadType: 'Wine', city: 'Roma', demandCardId: 1, payment: 22 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 1,
+      reasoning: 'test',
+    };
+    const context = makeVictoryContext();
+
+    const result = resolveBuildTarget(pickupRoute, context);
+
+    // Current stop is pickup — guard must NOT fire
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+  });
+
+  // AC2: hasNearbyHighValueDelivery returns false on missing/null inputs (no throws)
+  it('AC2: guard is safe when route has empty stops array', () => {
+    const emptyRoute: StrategicRoute = {
+      stops: [],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 1,
+      reasoning: 'test',
+    };
+    const context = makeVictoryContext();
+
+    expect(() => resolveBuildTarget(emptyRoute, context)).not.toThrow();
+    const result = resolveBuildTarget(emptyRoute, context);
+    // Empty route → no delivery guard → falls through to victory build
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+  });
+
+  it('AC2: guard is safe when currentStopIndex is out of bounds', () => {
+    const route = makeVictoryRoute('Roma');
+    route.currentStopIndex = 99; // way out of bounds
+    const context = makeVictoryContext();
+
+    expect(() => resolveBuildTarget(route, context)).not.toThrow();
+    const result = resolveBuildTarget(route, context);
+    // OOB index → guard cannot fire → falls through to victory build
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+  });
+
+  it('AC2: guard is safe when context.loads is undefined', () => {
+    const route = makeVictoryRoute('Roma');
+    const context = makeVictoryContext({ loads: undefined as unknown as string[] });
+
+    expect(() => resolveBuildTarget(route, context)).not.toThrow();
+    // No loads → guard cannot fire → falls through to victory build
+    const result = resolveBuildTarget(route, context);
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+  });
+
+  it('AC2: guard is safe when context.position is null', () => {
+    const route = makeVictoryRoute('Roma');
+    const context = makeVictoryContext({ position: null });
+
+    expect(() => resolveBuildTarget(route, context)).not.toThrow();
+    // Null position → guard cannot fire → falls through to victory build
+    const result = resolveBuildTarget(route, context);
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+  });
+
+  // AC16: regression — game a864f7e1 s2 t67 snapshot
+  // Bot s2 at turn 67: cash=241, 3 connectedMajorCities, route=[deliver Wine@Roma],
+  // Roma on network (trackCostToDelivery=0 in demandRanking), position=(51,44),
+  // trainSpeed=12, hexDist(51,44 → Roma 54,45)=3 ≤ 12. Should return Roma not Milano.
+  it('AC16: regression — s2 t67 snapshot returns Roma not Milano', () => {
+    const route: StrategicRoute = {
+      stops: [{ action: 'deliver', loadType: 'Wine', city: 'Roma', demandCardId: 86, payment: 22 }],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 1,
+      reasoning: 'carry:86:Wine chosen',
+    };
+    const context = makeContext({
+      money: 241,
+      connectedMajorCities: ['Holland', 'Ruhr', 'Berlin'],
+      unconnectedMajorCities: [
+        { cityName: 'Milano', estimatedCost: 5 },
+        { cityName: 'London', estimatedCost: 12 },
+      ],
+      // Roma is on the network (verified by trackCostToDelivery=0 in game log demandRanking)
+      citiesOnNetwork: ['Roma', 'Napoli', 'Holland', 'Ruhr', 'Berlin'],
+      loads: ['Wine'], // bot carries Wine (carriedLoads from game log)
+      position: { row: 51, col: 44 }, // positionStart from game log
+      speed: 12, // superfreight speed
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    // Guard fires: Wine on train, Roma on network, hexDist(51,44→54,45)=3 ≤ 12
+    expect(result!.targetCity).toBe('Roma');
+    expect(result!.isVictoryBuild).toBe(false);
+    // Must NOT return Milano (the bug behavior)
+    expect(result!.targetCity).not.toBe('Milano');
   });
 });
