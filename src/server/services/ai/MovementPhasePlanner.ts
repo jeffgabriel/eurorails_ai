@@ -137,12 +137,17 @@ export class MovementPhasePlanner {
       if (TurnExecutorPlanner.isBotAtCity(context, targetCity)) {
         console.log(`${tag} At ${targetCity}, executing ${currentStop.action}`);
 
+        const _stopActionStart = Date.now();
         const actionResult = await TurnExecutorPlanner.executeStopAction(
           currentStop,
           snapshot,
           context,
           tag,
         );
+        if (trace.timing) {
+          trace.timing.stopActionMs += Date.now() - _stopActionStart;
+          trace.timing.stopActionCount += 1;
+        }
 
         if (!actionResult.success) {
           // A single stop-action failure (e.g., load not yet available, transient validation)
@@ -321,6 +326,7 @@ export class MovementPhasePlanner {
           );
 
           // Delegate post-delivery replan to PostDeliveryReplanner
+          const _replanStart = Date.now();
           const replanResult = await PostDeliveryReplanner.replan(
             activeRoute,
             snapshot,
@@ -330,6 +336,10 @@ export class MovementPhasePlanner {
             deliveriesThisTurn,
             tag,
           );
+          if (trace.timing) {
+            trace.timing.replanMs += Date.now() - _replanStart;
+            trace.timing.replanCount += 1;
+          }
 
           activeRoute = replanResult.route;
           if (replanResult.moveTargetInvalidated) {
@@ -364,11 +374,16 @@ export class MovementPhasePlanner {
         lastMoveTargetCity = targetCity;
         console.log(`${tag} ${targetCity} is on network, moving (budget=${remainingBudget})`);
 
+        const _moveResolveStart = Date.now();
         const moveResult = await ActionResolver.resolveMove(
           { to: targetCity },
           snapshot,
           remainingBudget,
         );
+        if (trace.timing) {
+          trace.timing.moveResolveMs += Date.now() - _moveResolveStart;
+          trace.timing.moveResolveCount += 1;
+        }
 
         if (!moveResult.success || !moveResult.plan) {
           console.warn(`${tag} MOVE to ${targetCity} failed: ${moveResult.error}. Breaking to Phase B.`);
@@ -481,11 +496,16 @@ export class MovementPhasePlanner {
                 trace.a3.terminationReason = 'origin_is_current_position';
                 console.log(`${tag} A3 skipped — reason=origin_is_current_position (bot already at build origin (${previewBuildOrigin.row},${previewBuildOrigin.col}))`);
               } else {
+                const _a3MoveStart = Date.now();
                 const a3MoveResult = await ActionResolver.resolveMove(
                   { toRow: previewBuildOrigin.row, toCol: previewBuildOrigin.col },
                   snapshot,
                   remainingBudget,
                 );
+                if (trace.timing) {
+                  trace.timing.moveResolveMs += Date.now() - _a3MoveStart;
+                  trace.timing.moveResolveCount += 1;
+                }
 
                 if (a3MoveResult.success && a3MoveResult.plan) {
                   const a3MovePlan = a3MoveResult.plan as TurnPlanMoveTrain;

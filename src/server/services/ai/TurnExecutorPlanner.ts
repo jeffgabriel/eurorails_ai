@@ -100,6 +100,23 @@ export interface CompositionTrace {
   victoryBuild?: { target: string | null; cost: number; triggered: boolean; overrodeRoute: boolean };
   /** JIRA-129: Build Advisor decision */
   advisor?: { action: string | null; reasoning: string | null; waypoints: [number, number][]; solvencyRetries: number; latencyMs: number; fallback: boolean; rawResponse?: string; rawWaypoints?: [number, number][]; systemPrompt?: string; userPrompt?: string; error?: string };
+  /**
+   * Per-phase timing breakdown for diagnosing slow turns. All values in ms.
+   * Surfaces sub-call hotspots in route execution: which Phase consumed time,
+   * how many resolveMove / executeStopAction / PostDeliveryReplanner invocations,
+   * and the cumulative cost of each. Optional — only emitted when timing is
+   * actively collected by the executor.
+   */
+  timing?: {
+    phaseAMs: number;
+    phaseBMs: number;
+    replanMs: number;
+    replanCount: number;
+    moveResolveMs: number;
+    moveResolveCount: number;
+    stopActionMs: number;
+    stopActionCount: number;
+  };
   /** JIRA-179: Build Route Resolver candidate comparison — only present when ENABLE_BUILD_RESOLVER=true */
   buildResolver?: {
     enabled: true;
@@ -214,9 +231,22 @@ export class TurnExecutorPlanner {
       build: { target: null, cost: 0, skipped: false, upgradeConsidered: false },
       pickups: [],
       deliveries: [],
+      // Per-phase + per-sub-call timing. Sub-callees in Phase A accumulate
+      // into the same object; Phase B durations land on phaseBMs at the end.
+      timing: {
+        phaseAMs: 0,
+        phaseBMs: 0,
+        replanMs: 0,
+        replanCount: 0,
+        moveResolveMs: 0,
+        moveResolveCount: 0,
+        stopActionMs: 0,
+        stopActionCount: 0,
+      },
     };
 
     // ── Step 2: Phase A — Movement ────────────────────────────────────────
+    const phaseAStart = Date.now();
     const phaseAResult = await MovementPhasePlanner.run(
       route,
       snapshot,
@@ -225,8 +255,10 @@ export class TurnExecutorPlanner {
       brain,
       gridPoints,
     );
+    if (trace.timing) trace.timing.phaseAMs = Date.now() - phaseAStart;
 
     // ── Step 3: Phase B — Build (consumes PhaseAResult) ───────────────────
+    const phaseBStart = Date.now();
     const phaseBResult = await BuildPhasePlanner.run(
       phaseAResult,
       snapshot,
@@ -235,6 +267,21 @@ export class TurnExecutorPlanner {
       brain,
       gridPoints,
     );
+    if (trace.timing) trace.timing.phaseBMs = Date.now() - phaseBStart;
+
+    // Emit a one-line summary on slow turns for diagnostic visibility. Above
+    // 10 seconds is genuinely user-facing painful; below that this would be
+    // log noise.
+    if (trace.timing && (trace.timing.phaseAMs + trace.timing.phaseBMs) > 10000) {
+      const t = trace.timing;
+      console.log(
+        `[TurnExecutorPlanner.timing] phaseA=${t.phaseAMs}ms phaseB=${t.phaseBMs}ms ` +
+        `replan=${t.replanMs}ms×${t.replanCount} ` +
+        `moveResolve=${t.moveResolveMs}ms×${t.moveResolveCount} ` +
+        `stopAction=${t.stopActionMs}ms×${t.stopActionCount} ` +
+        `a2_iters=${trace.a2.iterations}`,
+      );
+    }
 
     // ── Step 4: Assemble TurnExecutorResult ───────────────────────────────
     // Ensure at least one plan is always returned (PassTurn for idle/complete turns)
