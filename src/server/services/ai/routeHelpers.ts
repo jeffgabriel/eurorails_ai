@@ -17,6 +17,7 @@ import {
   WorldSnapshot,
 } from '../../../shared/types/GameTypes';
 import { loadGridPoints, hexDistance } from './MapTopology';
+import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 
 /** Number of connected major cities required to win */
 const VICTORY_CITY_COUNT = 7;
@@ -156,7 +157,37 @@ export function resolveBuildTarget(
 
     const victoryTarget = findCheapestUnconnectedMajorCity(context);
     if (victoryTarget) {
-      return { targetCity: victoryTarget, stopIndex: -1, isVictoryBuild: true };
+      // JIRA-240: Bundling guard — check if the next route pickup connector fits
+      // in the remaining build budget after the primary victory build.
+      const victoryEstimatedCost = context.unconnectedMajorCities[0]?.estimatedCost ?? TURN_BUILD_BUDGET;
+      const remainingBudget = TURN_BUILD_BUDGET - victoryEstimatedCost;
+
+      let secondaryTarget: string | null = null;
+      let secondaryEstimatedCost: number | undefined;
+
+      if (remainingBudget > 0) {
+        const nextPickup = findNextRoutePickupOffNetwork(route, context);
+        if (nextPickup) {
+          // Look up the pre-computed build cost to this pickup city from context.demands.
+          // The ContextBuilder already computed estimatedTrackCostToSupply for each demand,
+          // which represents the marginal cost to build from the current network to the
+          // supply city — exactly what we need for the secondary connector estimate.
+          const demandForPickup = context.demands.find(d => d.supplyCity === nextPickup);
+          const connectorCost = demandForPickup?.estimatedTrackCostToSupply ?? Infinity;
+
+          if (connectorCost <= remainingBudget) {
+            secondaryTarget = nextPickup;
+            secondaryEstimatedCost = connectorCost;
+          }
+        }
+      }
+
+      return {
+        targetCity: victoryTarget,
+        stopIndex: -1,
+        isVictoryBuild: true,
+        ...(secondaryTarget != null ? { secondaryTarget, secondaryEstimatedCost } : {}),
+      };
     }
   }
 
@@ -193,6 +224,46 @@ function findCheapestUnconnectedMajorCity(context: GameContext): string | null {
   // unconnectedMajorCities is already sorted by estimatedCost ascending
   // (computed by ContextBuilder.computeUnconnectedMajorCities)
   return context.unconnectedMajorCities[0].cityName;
+}
+
+/**
+ * JIRA-240: Returns the city name of the first pickup stop in the active route
+ * that is NOT already on the bot's track network, or null if none exists.
+ *
+ * Exported for unit testing. Not intended for use outside routeHelpers.
+ *
+ * Used to identify a secondary build target for bundling: when the victory-build
+ * primary leaves remaining budget, we can pre-connect the next route's pickup city
+ * in the same turn.
+ *
+ * Behavior:
+ * - Iterates route.stops from route.currentStopIndex.
+ * - Skips delivery stops (only pickup stops are connector candidates).
+ * - Skips pickup stops whose city is already on context.citiesOnNetwork.
+ * - Returns the first off-network pickup-stop city name, or null.
+ *
+ * Safe defaults: returns null for null/empty/invalid inputs (never throws).
+ */
+export function findNextRoutePickupOffNetwork(
+  route: StrategicRoute,
+  context: GameContext,
+): string | null {
+  // Fail-safe guards
+  if (!route || !route.stops || route.stops.length === 0) return null;
+  if (!context?.citiesOnNetwork) return null;
+  if (route.currentStopIndex < 0 || route.currentStopIndex >= route.stops.length) return null;
+
+  for (let i = route.currentStopIndex; i < route.stops.length; i++) {
+    const stop = route.stops[i];
+    // Only consider pickup stops
+    if (stop.action !== 'pickup') continue;
+    // Skip if already on the network
+    if (context.citiesOnNetwork.includes(stop.city)) continue;
+    // First off-network pickup found
+    return stop.city;
+  }
+
+  return null;
 }
 
 /**

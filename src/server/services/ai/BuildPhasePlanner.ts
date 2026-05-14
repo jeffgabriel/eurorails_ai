@@ -31,6 +31,7 @@ import { resolveBuildTarget } from './routeHelpers';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
 import type { PhaseAResult } from './schemas';
+import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 
 // ── PhaseBResult ──────────────────────────────────────────────────────────
 
@@ -202,6 +203,54 @@ export class BuildPhasePlanner {
 
       if (buildPlan) {
         plans.push(buildPlan);
+      }
+
+      // JIRA-240: Secondary bundle build — lay pickup connector if budget remains
+      if (buildTarget.secondaryTarget && buildTarget.secondaryEstimatedCost != null) {
+        // Compute actual primary build cost from the returned plan's segments.
+        // If the primary overran its estimate, the remaining budget may be too small
+        // for the secondary — skip cleanly in that case (AC14).
+        const primaryCost = buildPlan && buildPlan.type === AIActionType.BuildTrack
+          ? (buildPlan as import('../../../shared/types/GameTypes').TurnPlanBuildTrack).segments.reduce(
+              (sum: number, seg: import('../../../shared/types/GameTypes').TrackSegment) => sum + seg.cost, 0)
+          : 0;
+        // Budget available for secondary = turn budget minus what primary actually spent
+        const remainingBudget = TURN_BUILD_BUDGET - primaryCost;
+        const secondaryCost = buildTarget.secondaryEstimatedCost;
+
+        if (primaryCost > 0 && remainingBudget >= secondaryCost) {
+          // Attempt secondary build — lay pickup connector track
+          try {
+            const secondaryPlan = await TurnExecutorPlanner.executeBuildPhase(
+              buildTarget.secondaryTarget,
+              false, // secondary is route-based, not a victory build
+              -1,
+              activeRoute,
+              snapshot,
+              context,
+              brain ?? null,
+              gridPoints,
+              trace,
+              tag,
+            );
+            if (secondaryPlan) {
+              plans.push(secondaryPlan);
+              trace.build.secondaryTarget = buildTarget.secondaryTarget;
+              trace.build.secondaryStatus = 'success';
+            } else {
+              trace.build.secondaryTarget = buildTarget.secondaryTarget;
+              trace.build.secondaryStatus = 'skipped:no_secondary';
+            }
+          } catch {
+            // Secondary build threw — skip cleanly (no partial segments)
+            trace.build.secondaryTarget = buildTarget.secondaryTarget;
+            trace.build.secondaryStatus = 'skipped:no_secondary';
+          }
+        } else {
+          // Budget exhausted after primary — skip secondary
+          trace.build.secondaryTarget = buildTarget.secondaryTarget;
+          trace.build.secondaryStatus = 'skipped:budget_exhausted';
+        }
       }
     }
 

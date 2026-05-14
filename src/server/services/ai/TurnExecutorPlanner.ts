@@ -78,7 +78,16 @@ export interface CompositionTrace {
   /** A3: Whether a MOVE was prepended before BUILD, or skipped with reason */
   a3: { movePreprended: boolean; skipped?: boolean; reason?: string; terminationReason?: string };
   /** Phase B: Build/upgrade target and cost, or why skipped */
-  build: { target: string | null; cost: number; skipped: boolean; upgradeConsidered: boolean };
+  build: {
+    target: string | null;
+    cost: number;
+    skipped: boolean;
+    upgradeConsidered: boolean;
+    /** JIRA-240: Secondary bundle target city (pickup connector), if one was laid this turn. */
+    secondaryTarget?: string | null;
+    /** JIRA-240: Status of the secondary bundle build: 'success' | 'skipped:budget_exhausted' | 'skipped:no_secondary'. */
+    secondaryStatus?: string;
+  };
   /** Pickups added during composition */
   pickups: Array<{ load: string; city: string }>;
   /** Deliveries added during composition */

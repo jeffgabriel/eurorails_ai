@@ -6,7 +6,7 @@
  * - resolveBuildTarget: route-based targets, victory build override, null (all on-network)
  */
 
-import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState, isDeliveryComplete, isRouteImpossible, BuildTargetResult } from '../../services/ai/routeHelpers';
+import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState, isDeliveryComplete, isRouteImpossible, findNextRoutePickupOffNetwork, BuildTargetResult } from '../../services/ai/routeHelpers';
 import { GameContext, RouteStop, StrategicRoute, TrainType, WorldSnapshot, TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1316,5 +1316,316 @@ describe('resolveBuildTarget — JIRA-239 delivery-first guard (AC1, AC2, AC5-AC
     expect(result!.isVictoryBuild).toBe(false);
     // Must NOT return Milano (the bug behavior)
     expect(result!.targetCity).not.toBe('Milano');
+  });
+});
+
+// ── JIRA-240: findNextRoutePickupOffNetwork (AC3, AC4) ─────────────────────
+
+describe('findNextRoutePickupOffNetwork — AC3: canonical behavior', () => {
+  it('AC3(a): returns first pickup-stop city not on citiesOnNetwork', () => {
+    const route: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Marble', city: 'Firenze' },
+        { action: 'deliver', loadType: 'Marble', city: 'Birmingham', demandCardId: 1 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 1,
+      reasoning: 'test',
+    };
+    const context = makeContext({ citiesOnNetwork: ['Birmingham'] }); // Firenze NOT on network
+
+    const result = findNextRoutePickupOffNetwork(route, context);
+
+    expect(result).toBe('Firenze');
+  });
+
+  it('AC3(b): skips delivery stops (only pickup stops are secondary candidates)', () => {
+    const route: StrategicRoute = {
+      stops: [
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1 }, // delivery — skip
+        { action: 'pickup', loadType: 'Marble', city: 'Firenze' }, // pickup — first off-network
+      ],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 1,
+      reasoning: 'test',
+    };
+    const context = makeContext({ citiesOnNetwork: [] });
+
+    const result = findNextRoutePickupOffNetwork(route, context);
+
+    // Delivery at Paris should be skipped; Firenze pickup returned
+    expect(result).toBe('Firenze');
+  });
+
+  it('AC3(c): skips pickup stops that are already on the network', () => {
+    const route: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' }, // on-network — skip
+        { action: 'pickup', loadType: 'Marble', city: 'Firenze' }, // off-network
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1 },
+        { action: 'deliver', loadType: 'Marble', city: 'Birmingham', demandCardId: 2 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 1,
+      reasoning: 'test',
+    };
+    const context = makeContext({ citiesOnNetwork: ['Berlin', 'Paris'] });
+
+    const result = findNextRoutePickupOffNetwork(route, context);
+
+    expect(result).toBe('Firenze'); // first off-network pickup
+  });
+
+  it('AC3(d): returns null when all pickup stops are on the network', () => {
+    const route: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 1,
+      reasoning: 'test',
+    };
+    const context = makeContext({ citiesOnNetwork: ['Berlin', 'Paris'] });
+
+    const result = findNextRoutePickupOffNetwork(route, context);
+
+    expect(result).toBeNull();
+  });
+});
+
+describe('findNextRoutePickupOffNetwork — AC4: safe defaults', () => {
+  it('AC4(a): returns null for null route', () => {
+    const context = makeContext();
+    expect(findNextRoutePickupOffNetwork(null as unknown as StrategicRoute, context)).toBeNull();
+  });
+
+  it('AC4(b): returns null for empty stops array', () => {
+    const route: StrategicRoute = {
+      stops: [],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 1,
+      reasoning: 'test',
+    };
+    const context = makeContext();
+    expect(findNextRoutePickupOffNetwork(route, context)).toBeNull();
+  });
+
+  it('AC4(c): returns null for delivery-only route', () => {
+    const route: StrategicRoute = {
+      stops: [
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1 },
+        { action: 'deliver', loadType: 'Marble', city: 'Birmingham', demandCardId: 2 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 1,
+      reasoning: 'test',
+    };
+    const context = makeContext({ citiesOnNetwork: [] });
+    expect(findNextRoutePickupOffNetwork(route, context)).toBeNull();
+  });
+
+  it('AC4(d): returns null when currentStopIndex is OOB', () => {
+    const route: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Marble', city: 'Firenze' },
+      ],
+      currentStopIndex: 99,
+      phase: 'build',
+      createdAtTurn: 1,
+      reasoning: 'test',
+    };
+    const context = makeContext({ citiesOnNetwork: [] });
+    expect(findNextRoutePickupOffNetwork(route, context)).toBeNull();
+  });
+});
+
+// ── JIRA-240: bundling guard in resolveBuildTarget (AC9-AC12, AC17) ──────────
+
+/**
+ * Helper for victory-eligible context with 6 connected cities (triggers bundle logic).
+ * Sets up context with Wien as primary victory target and Marble@Firenze as next route pickup.
+ */
+function makeBundle6Context(overrides: Partial<GameContext> = {}): GameContext {
+  return makeContext({
+    money: 240,
+    connectedMajorCities: ['Paris', 'Holland', 'Milano', 'Ruhr', 'Berlin', 'London'],
+    unconnectedMajorCities: [
+      { cityName: 'Wien', estimatedCost: 14 },
+      { cityName: 'Madrid', estimatedCost: 18 },
+    ],
+    citiesOnNetwork: ['Paris', 'Holland', 'Milano', 'Ruhr', 'Berlin', 'London'],
+    loads: [], // not carrying — no delivery guard interference
+    position: { row: 44, col: 41 },
+    speed: 12,
+    demands: [
+      // Marble demand: supplyCity=Firenze, estimatedTrackCostToSupply=3
+      {
+        cardIndex: 140,
+        loadType: 'Marble',
+        supplyCity: 'Firenze',
+        deliveryCity: 'Birmingham',
+        payout: 35,
+        isSupplyReachable: true,
+        isDeliveryReachable: true,
+        isSupplyOnNetwork: false,
+        isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 3,
+        estimatedTrackCostToDelivery: 4,
+        isLoadAvailable: true,
+        isLoadOnTrain: false,
+        ferryRequired: true,
+        loadChipTotal: 4,
+        loadChipCarried: 0,
+        estimatedTurns: 7,
+        demandScore: 4.3,
+        efficiencyPerTurn: 4,
+        networkCitiesUnlocked: 1,
+        victoryMajorCitiesEnRoute: 0,
+      } as any,
+    ],
+    ...overrides,
+  });
+}
+
+function makeMarbleFirenzeRoute(): StrategicRoute {
+  return {
+    stops: [
+      { action: 'pickup', loadType: 'Marble', city: 'Firenze' },
+      { action: 'deliver', loadType: 'Marble', city: 'Birmingham', demandCardId: 140, payment: 35 },
+    ],
+    currentStopIndex: 0,
+    phase: 'build',
+    createdAtTurn: 1,
+    reasoning: 'test',
+  };
+}
+
+describe('resolveBuildTarget — JIRA-240 bundling guard (AC9-AC12)', () => {
+  // AC9: bundle fires when budget covers both (Wien 14M + Firenze 3M ≤ 20M)
+  it('AC9: bundles secondary (Firenze) when Wien 14M leaves 6M and Firenze costs 3M', () => {
+    const route = makeMarbleFirenzeRoute();
+    const context = makeBundle6Context();
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Wien');
+    expect(result!.isVictoryBuild).toBe(true);
+    expect(result!.secondaryTarget).toBe('Firenze');
+    expect(result!.secondaryEstimatedCost).toBe(3);
+  });
+
+  // AC10: bundle does NOT fire when budget too tight (Wien 18M + Firenze 3M = 21M > 20M)
+  it('AC10: does NOT bundle when Wien costs 18M — only 2M remaining, Firenze needs 3M', () => {
+    const route = makeMarbleFirenzeRoute();
+    const context = makeBundle6Context({
+      unconnectedMajorCities: [
+        { cityName: 'Wien', estimatedCost: 18 },
+      ],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Wien');
+    expect(result!.isVictoryBuild).toBe(true);
+    expect(result!.secondaryTarget).toBeUndefined();
+    expect(result!.secondaryEstimatedCost).toBeUndefined();
+  });
+
+  // AC11: bundle does NOT fire when next pickup is already on network
+  it('AC11: does NOT bundle when Firenze pickup is already on the network', () => {
+    const route = makeMarbleFirenzeRoute();
+    const context = makeBundle6Context({
+      // Add Firenze to citiesOnNetwork (already reachable)
+      citiesOnNetwork: ['Paris', 'Holland', 'Milano', 'Ruhr', 'Berlin', 'London', 'Firenze'],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Wien');
+    expect(result!.isVictoryBuild).toBe(true);
+    expect(result!.secondaryTarget).toBeUndefined();
+  });
+
+  // AC12: bundle does NOT fire when route has no pickup stops (carry-and-deliver only)
+  it('AC12: does NOT bundle when route has no pickup stops (deliver-only route)', () => {
+    const deliverOnlyRoute: StrategicRoute = {
+      stops: [
+        { action: 'deliver', loadType: 'Marble', city: 'Birmingham', demandCardId: 140, payment: 35 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 1,
+      reasoning: 'test',
+    };
+    const context = makeBundle6Context();
+
+    const result = resolveBuildTarget(deliverOnlyRoute, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Wien');
+    expect(result!.isVictoryBuild).toBe(true);
+    expect(result!.secondaryTarget).toBeUndefined();
+  });
+
+  // AC17: regression — s2 t71 snapshot: Wien primary + Firenze secondary
+  it('AC17: regression — s2 t71 snapshot returns Wien primary + Firenze secondary', () => {
+    const route = makeMarbleFirenzeRoute();
+    // Synthetic snapshot: cash=240 (triggers victory build), 6 connected cities from t71,
+    // Firenze off-network with estimatedTrackCostToSupply=3 (matches demandRanking in log)
+    const context = makeContext({
+      money: 240, // synthetic to trigger victory build (actual t71 was 226, but spec says 240)
+      connectedMajorCities: ['Paris', 'Holland', 'Milano', 'Ruhr', 'Berlin', 'London'],
+      unconnectedMajorCities: [
+        { cityName: 'Wien', estimatedCost: 14 }, // Wien is 7th city needed
+      ],
+      citiesOnNetwork: ['Paris', 'Holland', 'Milano', 'Ruhr', 'Berlin', 'London'],
+      loads: [], // no carry (Wine was delivered at t70)
+      position: { row: 44, col: 41 }, // positionStart from game log
+      speed: 12, // superfreight
+      demands: [
+        {
+          cardIndex: 140,
+          loadType: 'Marble',
+          supplyCity: 'Firenze',
+          deliveryCity: 'Birmingham',
+          payout: 35,
+          isSupplyReachable: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: false,
+          isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 3, // from demandRanking trackCostToSupply=3
+          estimatedTrackCostToDelivery: 4,
+          isLoadAvailable: true,
+          isLoadOnTrain: false,
+          ferryRequired: true,
+          loadChipTotal: 4,
+          loadChipCarried: 0,
+          estimatedTurns: 7,
+          demandScore: 4.3,
+          efficiencyPerTurn: 4,
+          networkCitiesUnlocked: 1,
+          victoryMajorCitiesEnRoute: 0,
+        } as any,
+      ],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Wien');
+    expect(result!.isVictoryBuild).toBe(true);
+    expect(result!.secondaryTarget).toBe('Firenze');
+    // 14 + 3 = 17 ≤ 20 → bundle fires
+    expect(result!.secondaryEstimatedCost).toBe(3);
   });
 });

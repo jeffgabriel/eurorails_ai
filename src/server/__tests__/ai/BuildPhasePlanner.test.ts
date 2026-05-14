@@ -412,3 +412,105 @@ describe('BuildPhasePlanner.run — hasDelivery propagation', () => {
     expect(result.hasDelivery).toBe(true);
   });
 });
+
+// ── JIRA-240 secondary bundle build (AC13, AC14) ───────────────────────────
+
+describe('BuildPhasePlanner.run — JIRA-240 secondary bundle build (AC13, AC14)', () => {
+  // AC13: primary laid (14M), secondary also laid (3M fits in 6M remaining), both logged
+  it('AC13: lays secondary track when primary 14M leaves 6M and secondary costs 3M', async () => {
+    // Primary: Wien at 14M
+    const primaryBuildPlan = {
+      type: AIActionType.BuildTrack,
+      segments: [
+        { from: { row: 36, col: 55 }, to: { row: 37, col: 55 }, cost: 14 },
+      ],
+    } as unknown as import('../../../shared/types/GameTypes').TurnPlan;
+
+    // Secondary: Firenze at 3M
+    const secondaryBuildPlan = {
+      type: AIActionType.BuildTrack,
+      segments: [
+        { from: { row: 47, col: 44 }, to: { row: 48, col: 44 }, cost: 3 },
+      ],
+    } as unknown as import('../../../shared/types/GameTypes').TurnPlan;
+
+    // First call (primary Wien) returns primaryBuildPlan; second call (secondary Firenze) returns secondaryBuildPlan
+    mockExecuteBuildPhase
+      .mockResolvedValueOnce(primaryBuildPlan)
+      .mockResolvedValueOnce(secondaryBuildPlan);
+
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Wien',
+      stopIndex: -1,
+      isVictoryBuild: true,
+      secondaryTarget: 'Firenze',
+      secondaryEstimatedCost: 3,
+    });
+
+    const trace = makeTrace();
+    const result = await BuildPhasePlanner.run(
+      makePhaseAResult(),
+      makeSnapshot(),
+      makeContext(),
+      trace,
+    );
+
+    // Both build plans should be in result
+    const buildPlans = result.plans.filter(p => p.type === AIActionType.BuildTrack);
+    expect(buildPlans).toHaveLength(2);
+
+    // Trace should record secondary target and success status
+    expect(trace.build.secondaryTarget).toBe('Firenze');
+    expect(trace.build.secondaryStatus).toBe('success');
+
+    // executeBuildPhase should have been called twice
+    expect(mockExecuteBuildPhase).toHaveBeenCalledTimes(2);
+    expect(mockExecuteBuildPhase).toHaveBeenNthCalledWith(
+      1, 'Wien', true, -1, expect.anything(), expect.anything(), expect.anything(), null, undefined, expect.anything(), expect.anything(),
+    );
+    expect(mockExecuteBuildPhase).toHaveBeenNthCalledWith(
+      2, 'Firenze', false, -1, expect.anything(), expect.anything(), expect.anything(), null, undefined, expect.anything(), expect.anything(),
+    );
+  });
+
+  // AC14: primary overruns (19M actual vs 14M estimate), only 1M remaining, secondary skipped
+  it('AC14: skips secondary when primary costs 19M (overrun), leaving only 1M of 20M budget', async () => {
+    // Primary: Wien overruns at 19M (estimated 14M)
+    const primaryBuildPlan = {
+      type: AIActionType.BuildTrack,
+      segments: [
+        { from: { row: 36, col: 55 }, to: { row: 37, col: 55 }, cost: 19 },
+      ],
+    } as unknown as import('../../../shared/types/GameTypes').TurnPlan;
+
+    // Primary returns 19M plan, secondary would need 3M but only 1M remains
+    mockExecuteBuildPhase.mockResolvedValueOnce(primaryBuildPlan);
+
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Wien',
+      stopIndex: -1,
+      isVictoryBuild: true,
+      secondaryTarget: 'Firenze',
+      secondaryEstimatedCost: 3,
+    });
+
+    const trace = makeTrace();
+    const result = await BuildPhasePlanner.run(
+      makePhaseAResult(),
+      makeSnapshot(),
+      makeContext(),
+      trace,
+    );
+
+    // Only primary build plan should be in result
+    const buildPlans = result.plans.filter(p => p.type === AIActionType.BuildTrack);
+    expect(buildPlans).toHaveLength(1);
+
+    // executeBuildPhase should only have been called once (primary only)
+    expect(mockExecuteBuildPhase).toHaveBeenCalledTimes(1);
+
+    // Trace should record secondary as budget_exhausted
+    expect(trace.build.secondaryTarget).toBe('Firenze');
+    expect(trace.build.secondaryStatus).toBe('skipped:budget_exhausted');
+  });
+});
