@@ -28,7 +28,7 @@ import {
   TrainType,
   TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
-import { resolveBuildTarget, applyStopEffectToLocalState } from './routeHelpers';
+import { resolveBuildTarget, applyStopEffectToLocalState, isRouteImpossible } from './routeHelpers';
 import { computeBuildSegments } from './computeBuildSegments';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
@@ -315,7 +315,7 @@ export class MovementPhasePlanner {
             }
           }
 
-          console.log(`${tag} Delivered ${currentStop.loadType} at ${targetCity}. Triggering post-delivery replan.`);
+          console.log(`${tag} Delivered ${currentStop.loadType} at ${targetCity}.`);
 
           // Advance stop index
           activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
@@ -325,6 +325,28 @@ export class MovementPhasePlanner {
             activeRoute, targetCity, snapshot, context, brain, gridPoints, tag,
           );
 
+          // Defer post-delivery replan when the next remaining stop is at the
+          // same city — the bot has more in-city work to do (another delivery,
+          // pickup, or drop) without moving. Replanning between back-to-back
+          // same-city stops is wasted work: the planner would see the bot at
+          // the same position with another stop queued and almost always
+          // commit to executing it. Each replan is a full trip-planning pass
+          // (10-20s at mid-game candidate counts in game 181cf810). Skipping
+          // the redundant first call halves per-turn replan cost on the
+          // double-delivery turns that dominate the slow-turn tail.
+          //
+          // Guard with isRouteImpossible: if the remaining route is impossible
+          // (e.g. the next same-city stop needs a load not in cargo), force
+          // the replan so the impossibility check at PostDeliveryReplanner
+          // catches it now rather than burning turns via stuck-route-abandon.
+          const nextStopAfterDelivery = activeRoute.stops[activeRoute.currentStopIndex];
+          const nextStopIsSameCity = !!nextStopAfterDelivery && nextStopAfterDelivery.city === targetCity;
+          if (nextStopIsSameCity && !isRouteImpossible(activeRoute, context)) {
+            console.log(`${tag} Deferring post-delivery replan — next stop (${nextStopAfterDelivery.action} ${nextStopAfterDelivery.loadType}) also at ${targetCity}.`);
+            continue;
+          }
+
+          console.log(`${tag} Triggering post-delivery replan.`);
           // Delegate post-delivery replan to PostDeliveryReplanner
           const _replanStart = Date.now();
           const replanResult = await PostDeliveryReplanner.replan(
