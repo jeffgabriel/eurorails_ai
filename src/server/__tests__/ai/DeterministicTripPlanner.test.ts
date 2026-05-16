@@ -1943,3 +1943,237 @@ describe('JIRA-231: planTripDeterministic feasibility filter', () => {
     }
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// JIRA-241 — End-state scoring
+// ────────────────────────────────────────────────────────────────────────
+
+describe('JIRA-241 end-state scoring', () => {
+  // Lazy imports so the mocks above are applied first.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { applyEndStateScoring, candidateTouchesUnconnectedMajor } = require('../../services/ai/DeterministicTripPlanner');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { GameState } = require('../../../shared/types/GameTypes');
+
+  type ScoredCandidateLike = {
+    id: string;
+    rows: unknown[];
+    stops: unknown[];
+    payout: number;
+    buildCost: number;
+    turns: number;
+    net: number;
+    feasible: boolean;
+    aggregateScore: number;
+    aggregateFollowup: null;
+    aggregateEmptyLegTurns: number;
+    builtSegments: ReadonlyArray<{ from: { row: number; col: number }; to: { row: number; col: number }; cost: number }>;
+    firstDeliveryTurn?: number;
+    firstDeliveryPayoff?: number;
+  };
+
+  function makeCandidate(over: Partial<ScoredCandidateLike>): ScoredCandidateLike {
+    return {
+      id: 'test',
+      rows: [],
+      stops: [],
+      payout: 0,
+      buildCost: 0,
+      turns: 1,
+      net: 0,
+      feasible: true,
+      aggregateScore: 0,
+      aggregateFollowup: null,
+      aggregateEmptyLegTurns: 0,
+      builtSegments: [],
+      ...over,
+    };
+  }
+
+  // Minimal GameContext fixture — only fields end-state scoring reads.
+  type CtxLike = {
+    gameState: unknown;
+    money: number;
+    connectedMajorCities: string[];
+    unconnectedMajorCities: Array<{ cityName: string; estimatedCost: number }>;
+  };
+  function makeContext(over: Partial<CtxLike>): CtxLike {
+    return {
+      gameState: GameState.End,
+      money: 200,
+      connectedMajorCities: [],
+      unconnectedMajorCities: [],
+      ...over,
+    };
+  }
+
+  beforeEach(() => {
+    // Ensure the mocked grid has the major-city coordinate fixtures used below.
+    mockGrid.clear();
+    mockGrid.set('Wien', { row: 30, col: 60, terrain: 0, name: 'Wien' });
+    mockGrid.set('Milano', { row: 50, col: 40, terrain: 0, name: 'Milano' });
+  });
+
+  describe('AC1 — payoff cap fires when overshooting 250M', () => {
+    it('at cash=249, candidate A (5M/2t) beats candidate B (30M/8t) under end-state scoring', () => {
+      const a = makeCandidate({ id: 'A', payout: 5, buildCost: 0, turns: 2 });
+      const b = makeCandidate({ id: 'B', payout: 30, buildCost: 0, turns: 8 });
+      const ctx = makeContext({ money: 249, connectedMajorCities: ['P','H','M','R','B','W','Md'] });
+
+      applyEndStateScoring(a, ctx);
+      applyEndStateScoring(b, ctx);
+
+      // A: payoff capped at 250-249=1 → effectiveNet=1 → score = 1/2 = 0.5
+      // B: payoff capped at 1 → effectiveNet=1 → score = 1/8 = 0.125
+      expect(a.aggregateScore).toBeGreaterThan(b.aggregateScore);
+      expect(a.aggregateScore).toBeCloseTo(0.5);
+      expect(b.aggregateScore).toBeCloseTo(0.125);
+    });
+  });
+
+  describe('AC2 — city-cost adjustment penalizes routes that skip an unconnected major', () => {
+    it('cities=6, candidate A connects Wien with NET 20M/8t beats candidate B (no major) with NET 25M/8t', () => {
+      // A: builtSegments includes an endpoint at Wien (30,60). Sees touchesMajor=true → no cityCost.
+      const a = makeCandidate({
+        id: 'A',
+        payout: 20,
+        buildCost: 0,
+        turns: 8,
+        builtSegments: [{ from: { row: 29, col: 59 }, to: { row: 30, col: 60 }, cost: 5 }],
+      });
+      // B: builtSegments do not include any unconnected major. Sees touchesMajor=false → cityCost=14.
+      const b = makeCandidate({
+        id: 'B',
+        payout: 25,
+        buildCost: 0,
+        turns: 8,
+        builtSegments: [{ from: { row: 10, col: 10 }, to: { row: 11, col: 11 }, cost: 5 }],
+      });
+      const ctx = makeContext({
+        money: 200,
+        connectedMajorCities: ['P','H','M','R','B','Md'], // 6
+        unconnectedMajorCities: [{ cityName: 'Wien', estimatedCost: 14 }],
+      });
+
+      applyEndStateScoring(a, ctx);
+      applyEndStateScoring(b, ctx);
+
+      // A: cap=50, effectivePayoff=min(20,50)=20, cityCost=0, net=20, score=20/8=2.5
+      // B: cap=50, effectivePayoff=min(25,50)=25, cityCost=14, net=11, score=11/8≈1.375
+      expect(a.aggregateScore).toBeGreaterThan(b.aggregateScore);
+    });
+  });
+
+  describe('AC3 — city-cost adjustment does not fire at cities=7', () => {
+    it('with 7 cities connected, candidate B beats candidate A (no city penalty applies)', () => {
+      const a = makeCandidate({
+        id: 'A',
+        payout: 20,
+        buildCost: 0,
+        turns: 8,
+        builtSegments: [{ from: { row: 29, col: 59 }, to: { row: 30, col: 60 }, cost: 5 }],
+      });
+      const b = makeCandidate({
+        id: 'B',
+        payout: 25,
+        buildCost: 0,
+        turns: 8,
+        builtSegments: [{ from: { row: 10, col: 10 }, to: { row: 11, col: 11 }, cost: 5 }],
+      });
+      const ctx = makeContext({
+        money: 200,
+        connectedMajorCities: ['P','H','M','R','B','W','Md'], // 7
+        unconnectedMajorCities: [],
+      });
+
+      applyEndStateScoring(a, ctx);
+      applyEndStateScoring(b, ctx);
+
+      // No city cost fires. cap=50, A net=20 / 8 = 2.5; B net=25 / 8 = 3.125. B wins.
+      expect(b.aggregateScore).toBeGreaterThan(a.aggregateScore);
+    });
+  });
+
+  describe('AC4 — first-delivery-wins refinement', () => {
+    it('candidate with first-delivery payoff that crosses 250M uses first-delivery turn for scoring', () => {
+      // cash=248; first delivery payoff=5 at turn=2; total payoff=25 at turn=7.
+      // 248+5=253 ≥ 250, so effectiveTurns should be 2, not 7.
+      const c = makeCandidate({
+        id: 'C',
+        payout: 25,
+        buildCost: 0,
+        turns: 7,
+        firstDeliveryPayoff: 5,
+        firstDeliveryTurn: 2,
+      });
+      const ctx = makeContext({
+        money: 248,
+        connectedMajorCities: ['P','H','M','R','B','W','Md'],
+      });
+
+      applyEndStateScoring(c, ctx);
+
+      // cap = 250-248 = 2 → effectivePayoff = min(25, 2) = 2 → effectiveNet = 2
+      // effectiveTurns = firstDeliveryTurn = 2 → score = 2/2 = 1.0
+      expect(c.aggregateScore).toBeCloseTo(1.0);
+    });
+
+    it('without first-delivery values, falls back to candidate.turns', () => {
+      const c = makeCandidate({
+        id: 'C',
+        payout: 25,
+        buildCost: 0,
+        turns: 7,
+      });
+      const ctx = makeContext({
+        money: 248,
+        connectedMajorCities: ['P','H','M','R','B','W','Md'],
+      });
+
+      applyEndStateScoring(c, ctx);
+
+      // cap=2, payoff=2, net=2, turns=7 → score = 2/7 ≈ 0.286
+      expect(c.aggregateScore).toBeCloseTo(2 / 7);
+    });
+  });
+
+  describe('AC6 — candidateTouchesUnconnectedMajor coord matching', () => {
+    it('returns true when any segment endpoint matches an unconnected major coord', () => {
+      const c = makeCandidate({
+        builtSegments: [{ from: { row: 29, col: 59 }, to: { row: 30, col: 60 }, cost: 5 }],
+      });
+      const ctx = makeContext({
+        connectedMajorCities: [],
+        unconnectedMajorCities: [{ cityName: 'Wien', estimatedCost: 14 }],
+      });
+      expect(candidateTouchesUnconnectedMajor(c, ctx)).toBe(true);
+    });
+
+    it('returns false when no segment endpoint matches any unconnected major', () => {
+      const c = makeCandidate({
+        builtSegments: [{ from: { row: 10, col: 10 }, to: { row: 11, col: 11 }, cost: 5 }],
+      });
+      const ctx = makeContext({
+        connectedMajorCities: [],
+        unconnectedMajorCities: [{ cityName: 'Wien', estimatedCost: 14 }],
+      });
+      expect(candidateTouchesUnconnectedMajor(c, ctx)).toBe(false);
+    });
+
+    it('returns false when builtSegments is empty', () => {
+      const c = makeCandidate({ builtSegments: [] });
+      const ctx = makeContext({
+        unconnectedMajorCities: [{ cityName: 'Wien', estimatedCost: 14 }],
+      });
+      expect(candidateTouchesUnconnectedMajor(c, ctx)).toBe(false);
+    });
+
+    it('returns false when unconnectedMajorCities is empty', () => {
+      const c = makeCandidate({
+        builtSegments: [{ from: { row: 29, col: 59 }, to: { row: 30, col: 60 }, cost: 5 }],
+      });
+      const ctx = makeContext({ unconnectedMajorCities: [] });
+      expect(candidateTouchesUnconnectedMajor(c, ctx)).toBe(false);
+    });
+  });
+});

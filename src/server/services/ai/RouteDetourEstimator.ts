@@ -72,6 +72,17 @@ export interface TripSimulation {
    * for chained c2 re-simulation (JIRA-237).
    */
   builtSegments: ReadonlyArray<TrackSegment>;
+  /**
+   * JIRA-241: Turn count at which the first `deliver` stop completes within
+   * this trip. Undefined when the trip has no deliver stops or is infeasible.
+   * Used by end-state scoring's first-delivery-wins refinement.
+   */
+  firstDeliveryTurn?: number;
+  /**
+   * JIRA-241: Payout (ECU) of the first `deliver` stop in this trip.
+   * Undefined when no deliver stops or infeasible.
+   */
+  firstDeliveryPayoff?: number;
 }
 
 /** Per-candidate detour scoring result for computeCandidateDetourCosts. */
@@ -272,6 +283,12 @@ export function simulateTrip(
   // R1: accumulate all newly-built segments across all legs for builtSegments output.
   const allNewSegments: TrackSegment[] = [];
 
+  // JIRA-241: First-delivery-wins tracking. The first `deliver` stop's turn and
+  // payout are captured so end-state scoring can recognize when a multi-stop
+  // route's first delivery alone is enough to win the game.
+  let firstDeliveryTurn: number | undefined;
+  let firstDeliveryPayoff: number | undefined;
+
   for (const stop of stopsInOrder) {
     // Find target city coord — skip non-geographic actions
     const cityCoord = getCityCoord(stop.city, snapshot);
@@ -356,12 +373,26 @@ export function simulateTrip(
     if (stop.action === 'deliver' && stop.payment != null) {
       cashRelative += stop.payment;
       minCashRelative = Math.min(minCashRelative, cashRelative);
+      // JIRA-241: Record the first delivery's turn and payout for end-state scoring.
+      if (firstDeliveryTurn === undefined) {
+        firstDeliveryTurn = turn;
+        firstDeliveryPayoff = stop.payment;
+      }
     }
 
     currentPos = cityCoord;
   }
 
-  return { turnsToComplete: turn, totalBuildCost, feasible: true, minCashRelative, finalCashRelative: cashRelative, builtSegments: allNewSegments };
+  return {
+    turnsToComplete: turn,
+    totalBuildCost,
+    feasible: true,
+    minCashRelative,
+    finalCashRelative: cashRelative,
+    builtSegments: allNewSegments,
+    firstDeliveryTurn,
+    firstDeliveryPayoff,
+  };
 }
 
 /**

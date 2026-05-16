@@ -30,7 +30,11 @@ import {
   RouteStop,
   LlmAttempt,
   TrackSegment,
+  GameState,
+  VICTORY_INITIAL_THRESHOLD,
+  VICTORY_CITY_COUNT,
 } from '../../../shared/types/GameTypes';
+import { cheapestUnconnectedMajorConnectorCost } from './victoryRules';
 
 // ── Tunables ───────────────────────────────────────────────────────────
 
@@ -163,6 +167,16 @@ interface ScoredCandidate extends Candidate {
    * for chained c2 re-simulation (JIRA-237).
    */
   builtSegments: ReadonlyArray<TrackSegment>;
+  /**
+   * JIRA-241: Turn count at which the first `deliver` stop within this candidate's
+   * trip completes. Populated from TripSimulation.firstDeliveryTurn. Undefined
+   * when the candidate has no deliver stops or is infeasible.
+   */
+  firstDeliveryTurn?: number;
+  /**
+   * JIRA-241: Payout (ECU) of the first deliver stop in this candidate's trip.
+   */
+  firstDeliveryPayoff?: number;
 }
 
 interface GridCoord {
@@ -829,6 +843,8 @@ export function scoreCandidate(
   // callers that don't run the aggregate pass still get a sane rank key.
   // R2: surface builtSegments from the simulation result onto the ScoredCandidate
   // so computeAggregateScore can construct the post-c1 network snapshot (JIRA-237).
+  // JIRA-241: also surface firstDeliveryTurn/Payoff for end-state scoring's
+  // first-delivery-wins refinement.
   return {
     ...candidate,
     buildCost,
@@ -839,6 +855,8 @@ export function scoreCandidate(
     aggregateFollowup: null,
     aggregateEmptyLegTurns: 0,
     builtSegments: result.builtSegments ?? [],
+    firstDeliveryTurn: result.firstDeliveryTurn,
+    firstDeliveryPayoff: result.firstDeliveryPayoff,
   };
 }
 
@@ -948,6 +966,85 @@ export function computeAggregateScore(
   // movement is absorbed into c2Chained.turnsToComplete. Field retained for
   // back-compat on the return shape and ScoredCandidate.aggregateEmptyLegTurns.
   return { aggregate: bestAggregate, followup: bestFollowup, emptyLegTurns: 0 };
+}
+
+// ── End-state scoring (JIRA-241) ───────────────────────────────────────
+
+/**
+ * JIRA-241: Returns true iff at least one segment in `candidate.builtSegments`
+ * terminates at a milepost coincident with a city in `context.unconnectedMajorCities`.
+ *
+ * Used by end-state scoring to skip the connector-cost penalty for routes whose
+ * track corridor already does the city-progress work.
+ *
+ * Coordinate-based match: looks up each unconnected major's grid coords and
+ * compares against each segment endpoint (both `from` and `to`).
+ */
+export function candidateTouchesUnconnectedMajor(
+  candidate: ScoredCandidate,
+  context: GameContext,
+): boolean {
+  if (!candidate.builtSegments || candidate.builtSegments.length === 0) return false;
+  if (!context.unconnectedMajorCities || context.unconnectedMajorCities.length === 0) return false;
+
+  // Resolve each unconnected major to its grid coordinates.
+  const gridPoints = loadGridPoints();
+  const majorCoords: Array<{ row: number; col: number }> = [];
+  for (const major of context.unconnectedMajorCities) {
+    for (const [, gp] of gridPoints) {
+      if (gp.name === major.cityName) {
+        majorCoords.push({ row: gp.row, col: gp.col });
+      }
+    }
+  }
+  if (majorCoords.length === 0) return false;
+
+  // For each segment endpoint, check if it matches any unconnected major's coord.
+  for (const seg of candidate.builtSegments) {
+    for (const endpoint of [seg.from, seg.to]) {
+      for (const mc of majorCoords) {
+        if (endpoint.row === mc.row && endpoint.col === mc.col) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * JIRA-241: Re-score a feasible candidate under `end`-state semantics.
+ *
+ * Substitutions:
+ *  1. effectivePayoff = min(c1.payout, max(0, 250 - context.money)) — overshoot capped.
+ *  2. cityCost = (cities < 7 && !connectsUnconnectedMajor) ? cheapestUnconnectedMajorConnectorCost(context) : 0
+ *  3. effectiveTurns = (cash + firstDeliveryPayoff >= 250) ? firstDeliveryTurn : c1.turns
+ *
+ * Mutates `c1.aggregateScore` in place. Leaves the other fields untouched so
+ * post-hoc analysis can still see the raw values.
+ */
+export function applyEndStateScoring(
+  c1: ScoredCandidate,
+  context: GameContext,
+): void {
+  const cashGap = Math.max(0, VICTORY_INITIAL_THRESHOLD - context.money);
+  const effectivePayoff = Math.min(c1.payout, cashGap);
+
+  const needsCity = (context.connectedMajorCities?.length ?? 0) < VICTORY_CITY_COUNT;
+  const touchesMajor = needsCity ? candidateTouchesUnconnectedMajor(c1, context) : false;
+  const cityCost = (needsCity && !touchesMajor)
+    ? cheapestUnconnectedMajorConnectorCost(context)
+    : 0;
+
+  const effectiveNet = effectivePayoff - (c1.buildCost + cityCost);
+
+  // First-delivery-wins refinement: when the first delivery alone clears the
+  // cash gap, score this candidate as if it ended at that delivery turn.
+  const firstPayoff = c1.firstDeliveryPayoff ?? 0;
+  const firstTurn = c1.firstDeliveryTurn;
+  const firstDeliveryWins =
+    firstTurn !== undefined && (context.money + firstPayoff) >= VICTORY_INITIAL_THRESHOLD;
+  const effectiveTurns = firstDeliveryWins ? firstTurn! : c1.turns;
+
+  c1.aggregateScore = effectiveNet / Math.max(effectiveTurns, 1);
 }
 
 // ── Top-1 selection (R7) ───────────────────────────────────────────────
@@ -1365,6 +1462,15 @@ export function planTripDeterministic(
     c1.aggregateScore = result.aggregate;
     c1.aggregateFollowup = result.followup;
     c1.aggregateEmptyLegTurns = result.emptyLegTurns;
+  }
+
+  // JIRA-241: In `end` state, override the aggregate score with the end-state
+  // formula (effective-payoff capped at cash gap, optional city-cost adjustment,
+  // first-delivery-wins refinement). Mid-state path is unchanged.
+  if (context.gameState === GameState.End) {
+    for (const c1 of feasible) {
+      applyEndStateScoring(c1, context);
+    }
   }
 
   // Sort by aggregate score (rank key per JIRA-229) and pick top-1
