@@ -134,6 +134,22 @@ export const VICTORY_INITIAL_THRESHOLD = 250; // 250M ECU to win
 export const VICTORY_TIE_THRESHOLD = 300; // 300M ECU after a tie
 export const TRACK_USAGE_FEE = 4; // 4M ECU per opponent's track used per turn
 
+/** Cash threshold (ECU M) at which the bot's game state latches to End and never reverts. */
+export const END_GAME_ENTRY_CASH = 200;
+
+/** Number of connected major cities required to win. Hoisted from routeHelpers.ts for shared use. */
+export const VICTORY_CITY_COUNT = 7;
+
+/**
+ * Persistent game phase for bot decision-making.
+ * Transitions are one-way: Initial → Mid → End. Once End, never reverts.
+ */
+export enum GameState {
+  Initial = 'initial',
+  Mid = 'mid',
+  End = 'end',
+}
+
 export interface VictoryState {
     triggered: boolean;              // Has someone declared victory?
     triggerPlayerIndex: number;      // Who triggered it? (-1 if not triggered)
@@ -152,7 +168,8 @@ export interface Game {
     victoryState?: VictoryState;
 }
 
-export interface GameState {
+/** Full game state snapshot (players, board, etc.). Named FullGameState to distinguish from the bot-phase GameState enum. */
+export interface FullGameState {
     id: string;  // Add unique identifier for the game
     players: Player[];
     currentPlayerIndex: number;
@@ -541,6 +558,11 @@ export interface BotMemoryState {
      * is bypassed so the bot can DiscardHand and break out of the death loop.
      */
     stuckWithCarryTurns?: number;
+    /**
+     * JIRA-241: Persistent bot game phase. Once latched to End (cash > 200M),
+     * never reverts to Mid — even after temporary cash dips from building.
+     */
+    gameState?: GameState;
 }
 
 /** Simplified option summary for decision logging */
@@ -821,6 +843,12 @@ export interface GameContext {
     enRoutePickups?: EnRoutePickup[];
     /** Consecutive LLM route planning failures — threaded from BotMemory (JIRA-120) */
     consecutiveLlmFailures?: number;
+    /**
+     * JIRA-241: Persistent bot game phase stamped by ContextBuilder each turn.
+     * Required — ContextBuilder always populates this. Defaults to Mid when memory
+     * has no prior state.
+     */
+    gameState: GameState;
 }
 
 /** A single action within an LLM multi-action response */

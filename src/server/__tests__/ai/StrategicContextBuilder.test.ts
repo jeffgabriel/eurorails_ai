@@ -26,6 +26,7 @@ import {
   BotSkillLevel,
   DemandContext,
   AIActionType,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 // ── Mocks ────────────────────────────────────────────────────────────
@@ -141,6 +142,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     opponents: [],
     phase: 'mid',
     turnNumber: 10,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

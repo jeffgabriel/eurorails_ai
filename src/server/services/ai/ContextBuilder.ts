@@ -17,6 +17,7 @@
 import {
   WorldSnapshot,
   GameContext,
+  GameState,
   DemandContext,
   DeliveryOpportunity,
   PickupOpportunity,
@@ -56,6 +57,8 @@ import {
   formatDemandView as _formatDemandView,
   formatReachabilityNote as _formatReachabilityNote,
 } from './prompts/ContextSerializer';
+import { computeGameState } from './victoryRules';
+import { updateMemory } from './BotMemory';
 
 export { ContextSerializer };
 
@@ -174,6 +177,23 @@ export class ContextBuilder {
       previousTurnSummary = parts.join('. ');
     }
 
+    // JIRA-241: Compute persistent game phase and conditionally persist if latched.
+    // computeGameState is a pure latch: Mid → End on first turn cash > 200M, stays End.
+    const memoryForPhase: BotMemoryState = memory ?? {
+      currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
+      consecutiveDiscards: 0, deliveryCount: 0, totalEarnings: 0,
+      turnNumber: 0, activeRoute: null, turnsOnRoute: 0, routeHistory: [],
+      lastReasoning: null, lastPlanHorizon: null, previousRouteStops: null,
+      consecutiveLlmFailures: 0,
+    };
+    const gamePhase = computeGameState({ money: snapshot.bot.money }, memoryForPhase);
+    if (gamePhase !== memoryForPhase.gameState) {
+      // Latch changed — persist asynchronously (fire-and-forget, best-effort)
+      updateMemory(snapshot.gameId, snapshot.bot.playerId, { gameState: gamePhase }).catch(
+        (err: unknown) => console.warn('[ContextBuilder] Failed to persist gameState:', err),
+      );
+    }
+
     return {
       position: botPosition
         ? {
@@ -207,6 +227,7 @@ export class ContextBuilder {
       deliveryCount,
       enRoutePickups,
       previousTurnSummary,
+      gameState: gamePhase,
     };
   }
 

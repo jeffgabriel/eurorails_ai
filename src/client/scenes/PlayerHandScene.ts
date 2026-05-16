@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState } from "../../shared/types/GameTypes";
+import { FullGameState } from "../../shared/types/GameTypes";
 import { TrainCard } from "../components/TrainCard";
 import { DemandCard } from "../components/DemandCard";
 import { GameStateService } from "../services/GameStateService";
@@ -11,7 +11,7 @@ import { UI_FONT_FAMILY } from "../config/uiFont";
 import { TrainType } from "../../shared/types/GameTypes";
 
 interface PlayerHandSceneData {
-  gameState: GameState;
+  gameState: FullGameState;
   toggleDrawingCallback: () => void;
   onUndo: () => void;
   canUndo: () => boolean;
@@ -35,7 +35,7 @@ const colorMap: { [key: string]: string } = {
 const COST_COLOR = "#ffffff";
 
 export class PlayerHandScene extends Phaser.Scene {
-  private gameState!: GameState;
+  private gameState!: FullGameState;
   private toggleDrawingCallback!: () => void;
   private onUndo!: () => void;
   private canUndo!: () => boolean;
@@ -159,7 +159,7 @@ export class PlayerHandScene extends Phaser.Scene {
 
 
   updateSceneData(
-    gameState: GameState,
+    gameState: FullGameState,
     isDrawingMode: boolean,
     currentTrackCost: number
   ) {

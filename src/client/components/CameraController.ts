@@ -1,5 +1,5 @@
 import 'phaser';
-import { GameState, CameraState } from '../../shared/types/GameTypes';
+import { FullGameState, CameraState } from '../../shared/types/GameTypes';
 import { config } from '../config/apiConfig';
 import { isWheelBlocked } from '../utils/wheelBlocker';
 
@@ -12,13 +12,13 @@ export class CameraController {
     private lastDragTime: number = 0;
     private lastPointerPosition: { x: number, y: number } = { x: 0, y: 0 };
     private isMouseDown: boolean = false;
-    private gameState: GameState;
+    private gameState: FullGameState;
     private pendingRender: boolean = false;
     private localPlayerId: string | null = null;
     private readonly ZOOM_STEP: number = 0.05;
     private mapContainer: Phaser.GameObjects.Container | null = null;
     
-    constructor(scene: Phaser.Scene, mapWidth: number, mapHeight: number, gameState: GameState) {
+    constructor(scene: Phaser.Scene, mapWidth: number, mapHeight: number, gameState: FullGameState) {
         this.scene = scene;
         this.camera = scene.cameras.main;
         this.mapWidth = mapWidth;

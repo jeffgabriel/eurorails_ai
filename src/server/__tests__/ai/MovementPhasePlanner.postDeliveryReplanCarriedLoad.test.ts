@@ -21,7 +21,7 @@
 
 import { MovementPhasePlanner } from '../../services/ai/MovementPhasePlanner';
 import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
-import { AIActionType, TerrainType } from '../../../shared/types/GameTypes';
+import { GameState, AIActionType, TerrainType } from '../../../shared/types/GameTypes';
 import type {
   StrategicRoute,
   RouteStop,
@@ -235,6 +235,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     opponents: [],
     phase: 'travel',
     turnNumber: 5,
+    gameState: GameState.Mid,
     ...overrides,
   } as GameContext;
 }

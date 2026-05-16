@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, Player, TrainType, TRAIN_PROPERTIES, VICTORY_INITIAL_THRESHOLD } from "../../shared/types/GameTypes";
+import { FullGameState, Player, TrainType, TRAIN_PROPERTIES, VICTORY_INITIAL_THRESHOLD } from "../../shared/types/GameTypes";
 import { MapRenderer } from "../components/MapRenderer";
 import { CameraController } from "../components/CameraController";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
@@ -65,7 +65,7 @@ export class GameScene extends Phaser.Scene {
   private socketUnsubLLMTranscript?: () => void;
 
   // Game state
-  public gameState: GameState; // Keep public for compatibility with SettingsScene
+  public gameState: FullGameState; // Keep public for compatibility with SettingsScene
 
   constructor() {
     super({ key: "GameScene" });
@@ -155,7 +155,7 @@ export class GameScene extends Phaser.Scene {
     return true;
   }
 
-  init(data: { gameState?: GameState }) {
+  init(data: { gameState?: FullGameState }) {
     // If we get a gameState, always use it
     if (data.gameState) {
       this.gameState = {

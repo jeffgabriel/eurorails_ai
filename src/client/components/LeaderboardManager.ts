@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, TRAIN_PROPERTIES, TrainType } from "../../shared/types/GameTypes";
+import { FullGameState, TRAIN_PROPERTIES, TrainType } from "../../shared/types/GameTypes";
 
 import { GameStateService } from "../services/GameStateService";
 import { PlayerStateService } from "../services/PlayerStateService";
@@ -9,7 +9,7 @@ import { CameraController } from "./CameraController";
 export class LeaderboardManager {
   private scene: Phaser.Scene;
   private container: Phaser.GameObjects.Container;
-  private gameState: GameState;
+  private gameState: FullGameState;
   private nextPlayerCallback: () => void;
   private gameStateService: GameStateService | null = null;
   private lastPlayerSectionHeight: number = 0;
@@ -22,7 +22,7 @@ export class LeaderboardManager {
 
   constructor(
     scene: Phaser.Scene,
-    gameState: GameState,
+    gameState: FullGameState,
     nextPlayerCallback: () => void,
     gameStateService?: GameStateService,
     toggleChatCallback?: () => void,

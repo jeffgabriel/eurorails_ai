@@ -12,6 +12,7 @@ import {
   FerryConnection,
   CorridorMap,
   GameContext,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 /** Helper to create a GridPoint */
@@ -49,6 +50,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     turnNumber: 5,
     trainType: 'Freight',
     demandCards: [],
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

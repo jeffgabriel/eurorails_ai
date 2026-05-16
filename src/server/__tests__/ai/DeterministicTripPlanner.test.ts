@@ -75,6 +75,7 @@ import {
   RouteStop,
   AIActionType,
   TrainType,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 const mockSimulateTrip = simulateTrip as jest.MockedFunction<typeof simulateTrip>;
@@ -194,6 +195,7 @@ function makeContext(demands: DemandContext[], overrides: Partial<GameContext> =
     opponents: [],
     phase: 'active',
     turnNumber: 5,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

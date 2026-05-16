@@ -1,15 +1,15 @@
 import 'phaser';
-import { GameState, Player } from '../../shared/types/GameTypes';
+import { FullGameState, Player } from '../../shared/types/GameTypes';
 import { UI_FONT_FAMILY } from '../config/uiFont';
 
 interface WinnerSceneData {
-  gameState: GameState;
+  gameState: FullGameState;
   winnerId: string;
   winnerName: string;
 }
 
 export class WinnerScene extends Phaser.Scene {
-  private gameState!: GameState;
+  private gameState!: FullGameState;
   private winnerId!: string;
   private winnerName!: string;
 

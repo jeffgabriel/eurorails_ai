@@ -7,6 +7,7 @@ import {
   GridPoint,
   TerrainType,
   BuildAdvisorResult,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 // Mock the LLMStrategyBrain module
@@ -94,6 +95,7 @@ function makeContext(): GameContext {
     isInitialBuild: false,
     opponents: [],
     phase: 'active',
+    gameState: GameState.Mid,
     turnNumber: 10,
   };
 }

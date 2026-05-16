@@ -10,7 +10,7 @@
 
 import { ActiveRouteContinuer } from '../../services/ai/ActiveRouteContinuer';
 import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
-import { AIActionType } from '../../../shared/types/GameTypes';
+import { GameState, AIActionType } from '../../../shared/types/GameTypes';
 import type {
   StrategicRoute,
   RouteStop,
@@ -89,6 +89,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     phase: 'travel',
     turnNumber: 1,
     trainType: 'Freight',
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

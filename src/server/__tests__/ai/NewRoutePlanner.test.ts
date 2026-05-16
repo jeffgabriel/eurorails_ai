@@ -25,7 +25,7 @@ import { ContextBuilder } from '../../services/ai/ContextBuilder';
 import { capture } from '../../services/ai/WorldSnapshotService';
 import { TripPlanner } from '../../services/ai/TripPlanner';
 import { ContextSerializer } from '../../services/ai/prompts/ContextSerializer';
-import { AIActionType, BotSkillLevel, TrainType, TRAIN_PROPERTIES } from '../../../shared/types/GameTypes';
+import { GameState, AIActionType, BotSkillLevel, TrainType, TRAIN_PROPERTIES } from '../../../shared/types/GameTypes';
 import type {
   WorldSnapshot,
   GameContext,
@@ -159,6 +159,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     phase: 'travel',
     turnNumber: 1,
     trainType: TrainType.Freight,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }
@@ -177,6 +178,7 @@ function makeSnapshot(overrides: Partial<WorldSnapshot['bot']> = {}): WorldSnaps
       connectedMajorCityCount: 0,
       resolvedDemands: [],
       botConfig: null,
+    gameState: GameState.Mid,
       ...overrides,
     },
     players: [],

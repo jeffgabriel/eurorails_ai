@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState } from "../../shared/types/GameTypes";
+import { FullGameState } from "../../shared/types/GameTypes";
 import { PlayerStateService } from "../services/PlayerStateService";
 import { TrainMovementManager } from "./TrainMovementManager";
 import { TrainSpriteManager } from "./TrainSpriteManager";
@@ -16,7 +16,7 @@ import { TrainSpriteManager } from "./TrainSpriteManager";
  */
 export class TrainMovementModeController {
   private scene: Phaser.Scene;
-  private gameState: GameState;
+  private gameState: FullGameState;
   private trainMovementManager: TrainMovementManager;
   private trainSpriteManager: TrainSpriteManager;
   private playerStateService: PlayerStateService;
@@ -27,7 +27,7 @@ export class TrainMovementModeController {
 
   constructor(
     scene: Phaser.Scene,
-    gameState: GameState,
+    gameState: FullGameState,
     trainMovementManager: TrainMovementManager,
     trainSpriteManager: TrainSpriteManager,
     playerStateService: PlayerStateService

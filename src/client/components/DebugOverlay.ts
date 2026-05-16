@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, Player, GameStatus, AIActionType, LlmAttempt } from '../../shared/types/GameTypes';
+import { FullGameState, Player, GameStatus, AIActionType, LlmAttempt } from '../../shared/types/GameTypes';
 import { GameStateService } from '../services/GameStateService';
 
 /** Captured socket event for the debug log ring buffer */
@@ -345,7 +345,7 @@ export class DebugOverlay {
 
   private render(): void {
     if (!this.container) return;
-    const gameState = (this.scene as any).gameState as GameState | undefined;
+    const gameState = (this.scene as any).gameState as FullGameState | undefined;
     if (!gameState) {
       this.container.innerHTML = '<div style="padding:20px;color:#9ca3af;font-size:18px;">Waiting for game state...</div>';
       return;
@@ -359,7 +359,7 @@ export class DebugOverlay {
     `;
   }
 
-  private renderHeader(gameState: GameState): string {
+  private renderHeader(gameState: FullGameState): string {
     const gameId = gameState.id ? gameState.id.substring(0, 8) : '—';
     const status = gameState.status || '—';
     const currentIdx = gameState.currentPlayerIndex ?? '—';
@@ -381,7 +381,7 @@ export class DebugOverlay {
     `;
   }
 
-  private renderPlayersTable(gameState: GameState): string {
+  private renderPlayersTable(gameState: FullGameState): string {
     const players = gameState.players || [];
     const currentIdx = gameState.currentPlayerIndex;
 
@@ -468,7 +468,7 @@ export class DebugOverlay {
     return this.botTurnHistory;
   }
 
-  private renderBotTurnSection(gameState: GameState): string {
+  private renderBotTurnSection(gameState: FullGameState): string {
     if (this.botTurnHistory.size === 0) {
       return `
         <div style="padding:14px 20px;border-top:1px solid rgba(255,255,255,0.15);">

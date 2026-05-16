@@ -25,6 +25,7 @@ import {
   TerrainType,
   BuildAdvisorResult,
   AIActionType,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -102,6 +103,7 @@ function makeContext(): GameContext {
     isInitialBuild: false,
     opponents: [],
     phase: 'active',
+    gameState: GameState.Mid,
     turnNumber: 5,
   };
 }

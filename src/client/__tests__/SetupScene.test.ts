@@ -1,7 +1,7 @@
 import 'jest-canvas-mock';
 import { Scene } from 'phaser';
 import { SetupScene } from '../scenes/SetupScene';
-import { GameState, GameStatus, PlayerColor, INITIAL_PLAYER_MONEY, TrainType } from '../../shared/types/GameTypes';
+import { FullGameState, GameStatus, PlayerColor, INITIAL_PLAYER_MONEY, TrainType } from '../../shared/types/GameTypes';
 import { mocks } from './setupTests';
 import { GameObjects } from 'phaser';
 import { IdService } from '../../shared/services/IdService';

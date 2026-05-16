@@ -13,7 +13,7 @@
 import { InitialBuildRunner } from '../../services/ai/InitialBuildRunner';
 import { InitialBuildPlanner } from '../../services/ai/InitialBuildPlanner';
 import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
-import { AIActionType } from '../../../shared/types/GameTypes';
+import { GameState, AIActionType } from '../../../shared/types/GameTypes';
 import type {
   RouteStop,
   GameContext,
@@ -91,6 +91,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     phase: 'build',
     turnNumber: 1,
     trainType: 'Freight',
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

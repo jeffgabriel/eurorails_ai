@@ -6,6 +6,7 @@ import {
   BotSkillLevel,
   LLMProvider,
   LLM_DEFAULT_MODELS,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 // Mock LLM transcript logger to prevent file I/O
@@ -131,6 +132,7 @@ function makeContext(): GameContext {
     isInitialBuild: false,
     opponents: [],
     phase: 'running',
+    gameState: GameState.Mid,
     turnNumber: 5,
   };
 }

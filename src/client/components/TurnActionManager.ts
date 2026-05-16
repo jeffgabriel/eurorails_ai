@@ -1,4 +1,4 @@
-import { GameState, Point, Player, TerrainType } from "../../shared/types/GameTypes";
+import { FullGameState, Point, Player, TerrainType } from "../../shared/types/GameTypes";
 import { TrackDrawingManager } from "./TrackDrawingManager";
 import { LoadService } from "../services/LoadService";
 import { PlayerStateService } from "../services/PlayerStateService";
@@ -53,7 +53,7 @@ export type TurnAction =
     };
 
 type TurnActionManagerDeps = {
-  gameState: GameState;
+  gameState: FullGameState;
   trackDrawingManager: TrackDrawingManager;
   trainInteractionManager?: TrainPositionUpdater;
   playerStateService: PlayerStateService;
@@ -61,7 +61,7 @@ type TurnActionManagerDeps = {
 };
 
 export class TurnActionManager {
-  private readonly gameState: GameState;
+  private readonly gameState: FullGameState;
   private readonly trackDrawingManager: TrackDrawingManager;
   private trainPositionUpdater: TrainPositionUpdater | null = null;
   private readonly playerStateService: PlayerStateService;

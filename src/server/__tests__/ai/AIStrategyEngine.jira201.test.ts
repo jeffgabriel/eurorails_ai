@@ -196,6 +196,7 @@ import {
   WorldSnapshot,
   GameContext,
   StrategicRoute,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -282,12 +283,14 @@ function makeContext(): GameContext {
     isInitialBuild: false,
     opponents: [],
     phase: 'running',
+    gameState: GameState.Mid,
     turnNumber: 30,
   };
 }
 
 function makeMemory(deliveryCount: number) {
   return {
+    gameState: GameState.Mid,
     turnNumber: 30,
     consecutiveDiscards: 0,
     lastAction: null,

@@ -7,7 +7,7 @@
 
 import { mkdirSync, appendFile } from 'fs';
 import { join } from 'path';
-import { AIActionType, TimelineStep } from '../../../shared/types/GameTypes';
+import { AIActionType, GameState, TimelineStep } from '../../../shared/types/GameTypes';
 import { VictoryCheckResult } from './BotTurnTrigger';
 
 const LOGS_DIR = join(process.cwd(), 'logs');
@@ -38,6 +38,8 @@ export interface GameTurnLogEntry {
   connectedMajorCities?: string[];
   activeRoute?: { stops: Array<{ action: string; loadType: string; city: string }>; currentStopIndex: number } | null;
   demandCards?: Array<{ loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number }>;
+  /** JIRA-241: Persistent bot game phase for post-game traceability. */
+  gameState?: GameState;
 
   // LLM Decision
   action: string;

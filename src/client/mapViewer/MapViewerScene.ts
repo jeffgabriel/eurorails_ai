@@ -1,5 +1,5 @@
 import 'phaser';
-import { GameState } from '../../shared/types/GameTypes';
+import { FullGameState } from '../../shared/types/GameTypes';
 import { PlayerTrackState } from '../../shared/types/TrackTypes';
 import { MapRenderer } from '../components/MapRenderer';
 import { CameraController } from '../components/CameraController';
@@ -62,8 +62,8 @@ export class MapViewerScene extends Phaser.Scene {
 
     const { players } = mapData;
 
-    // Build minimal GameState for MapRenderer and CameraController
-    const gameState: GameState = {
+    // Build minimal FullGameState for MapRenderer and CameraController
+    const gameState: FullGameState = {
       id: this.gameId,
       players: players.map(p => ({ id: p.id, name: p.name, color: p.color } as any)),
       currentPlayerIndex: 0,

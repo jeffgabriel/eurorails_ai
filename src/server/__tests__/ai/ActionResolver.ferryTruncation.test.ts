@@ -129,6 +129,7 @@ import {
   TrackSegment,
   TurnPlanMoveTrain,
   AIActionType,
+  GameState,
 } from '../../../shared/types/GameTypes';
 import type { StrategicRoute, GameContext } from '../../../shared/types/GameTypes';
 import { getFerryEdges } from '../../../shared/services/majorCityGroups';
@@ -298,6 +299,7 @@ describe('TurnExecutorPlanner.execute — ferry arrival guard (R3)', () => {
       isInitialBuild: false,
       opponents: [],
       phase: 'travel',
+      gameState: GameState.Mid,
       turnNumber: 34,
       trainType: 'Freight',
     };

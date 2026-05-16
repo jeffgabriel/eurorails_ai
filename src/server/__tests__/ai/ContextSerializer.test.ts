@@ -20,6 +20,7 @@ import {
   EnRoutePickup,
   StrategicRoute,
   RouteStop,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
@@ -116,6 +117,7 @@ function makeGameContext(snapshot: WorldSnapshot): GameContext {
     isInitialBuild: false,
     opponents: [],
     phase: 'Mid Game',
+    gameState: GameState.Mid,
     turnNumber: snapshot.turnNumber,
   };
 }

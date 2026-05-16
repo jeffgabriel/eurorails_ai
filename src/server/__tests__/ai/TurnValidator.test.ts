@@ -8,6 +8,7 @@ import {
   TerrainType,
   TrackSegment,
   TurnPlanMultiAction,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 function makeSnapshot(money: number = 50): WorldSnapshot {
@@ -57,6 +58,7 @@ function makeContext(overrides?: Partial<GameContext>): GameContext {
     opponents: [],
     phase: 'normal',
     turnNumber: 5,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

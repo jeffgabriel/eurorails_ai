@@ -12,6 +12,7 @@ import {
   GameContext,
   StrategicRoute,
   TrainType,
+  GameState,
 } from '../../../shared/types/GameTypes';
 import { GridPointData } from '../../services/ai/MapTopology';
 
@@ -142,6 +143,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     opponents: [],
     phase: 'running',
     turnNumber: 20,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

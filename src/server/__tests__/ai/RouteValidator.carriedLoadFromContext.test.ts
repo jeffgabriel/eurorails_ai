@@ -16,6 +16,7 @@
  */
 
 import { RouteValidator } from '../../services/ai/RouteValidator';
+import { GameState } from '../../../shared/types/GameTypes';
 import type {
   StrategicRoute,
   GameContext,
@@ -80,6 +81,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     demands: [makeDemand()],
     canDeliver: [],
     canPickup: [],
+    gameState: GameState.Mid,
     ...overrides,
   } as GameContext;
 }

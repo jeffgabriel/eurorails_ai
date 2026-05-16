@@ -13,6 +13,7 @@ import { BuildRouteResolver } from '../../services/ai/BuildRouteResolver';
 import type { ResolverInput } from '../../services/ai/BuildRouteResolver';
 import {
   AIActionType,
+  GameState,
   WorldSnapshot,
   TerrainType,
   TrackSegment,
@@ -343,6 +344,7 @@ describe('TurnValidator.computeSaturatedCityKeys — consistency with checkCityE
       isInitialBuild: false,
       opponents: [],
       phase: 'normal',
+      gameState: GameState.Mid,
       turnNumber: 1,
     }, snapshot);
 
@@ -390,6 +392,7 @@ describe('TurnValidator.computeSaturatedCityKeys — consistency with checkCityE
       isInitialBuild: false,
       opponents: [],
       phase: 'normal',
+      gameState: GameState.Mid,
       turnNumber: 1,
     }, snapshot);
 

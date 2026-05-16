@@ -1,13 +1,13 @@
 import 'jest-canvas-mock';
 import { TrackDrawingManager } from '../components/TrackDrawingManager';
 import { MockScene } from './setupTests';
-import { TerrainType, GameState, GridPoint, TrainType } from '../../shared/types/GameTypes';
+import { TerrainType, FullGameState, GridPoint, TrainType } from '../../shared/types/GameTypes';
 import { MapRenderer } from '../components/MapRenderer';
 
 describe('TrackDrawingManager', () => {
     let scene: InstanceType<typeof MockScene>;
     let mapContainer: any;
-    let gameState: GameState;
+    let gameState: FullGameState;
     let gridPoints: GridPoint[][];
     let trackDrawingManager: TrackDrawingManager;
 
@@ -131,7 +131,7 @@ describe('TrackDrawingManager', () => {
         const mockGameState = {
             players: [{ id: 'player1', color: '#FF0000' }],
             currentPlayerIndex: 0
-        } as GameState;
+        } as FullGameState;
 
         const manager = new TrackDrawingManager(mockScene, mockContainer, mockGameState, gridPoints);
         trackDrawingManager = manager;
@@ -215,7 +215,7 @@ describe('TrackDrawingManager', () => {
             const mockGameState = {
                 players: [{ id: 'player1', color: '#FF0000' }],
                 currentPlayerIndex: 0
-            } as GameState;
+            } as FullGameState;
 
             const manager = new TrackDrawingManager(mockScene, mockContainer, mockGameState, gridPoints);
             calculateTrackCost = manager['calculateTrackCost'].bind(manager);
@@ -439,7 +439,7 @@ describe('TrackDrawingManager', () => {
             const mockGameState = {
                 players: [{ id: 'player1', color: '#FF0000' }],
                 currentPlayerIndex: 0
-            } as GameState;
+            } as FullGameState;
             const manager = new TrackDrawingManager(mockScene, mockContainer, mockGameState, gridPoints);
             // Act: use the world coordinates that should map to (39,21)
             const isTargetOffsetRow = targetRow % 2 === 1;
@@ -479,7 +479,7 @@ describe('TrackDrawingManager', () => {
             const mockGameState = {
                 players: [{ id: 'player1', color: '#FF0000' }],
                 currentPlayerIndex: 0
-            } as GameState;
+            } as FullGameState;
             const manager = new TrackDrawingManager(mockScene as any, mockContainer, mockGameState, gridPoints);
             
             // Test several points on even rows (0, 2, 4)
@@ -538,7 +538,7 @@ describe('TrackDrawingManager', () => {
             const mockGameState = {
                 players: [{ id: 'player1', color: '#FF0000' }],
                 currentPlayerIndex: 0
-            } as GameState;
+            } as FullGameState;
             const manager = new TrackDrawingManager(mockScene as any, mockContainer, mockGameState, gridPoints);
             
             // Act: try to find the water point
@@ -552,7 +552,7 @@ describe('TrackDrawingManager', () => {
     describe('Real-time Cost Display', () => {
         let scene: InstanceType<typeof MockScene>;
         let mapContainer: any;
-        let gameState: GameState;
+        let gameState: FullGameState;
         let gridPoints: GridPoint[][];
         let trackDrawingManager: TrackDrawingManager;
         let costUpdateCallback: jest.Mock;
@@ -1085,7 +1085,7 @@ describe('State consistency on backend failure', () => {
 describe('TrackDrawingManager - Shift+Click Mode', () => {
     let scene: any;
     let mapContainer: any;
-    let gameState: GameState;
+    let gameState: FullGameState;
     let gridPoints: GridPoint[][];
     let trackDrawingManager: TrackDrawingManager;
 

@@ -1,4 +1,4 @@
-import { GameState, BorrowResult } from '../../shared/types/GameTypes';
+import { FullGameState, BorrowResult } from '../../shared/types/GameTypes';
 import { PlayerStateService } from './PlayerStateService';
 import { config } from '../config/apiConfig';
 import { TrainType } from '../../shared/types/GameTypes';
@@ -14,14 +14,14 @@ type StateChangeListener = () => void;
  * For per-player operations, use PlayerStateService instead
  */
 export class GameStateService {
-    private gameState: GameState;
+    private gameState: FullGameState;
     private localPlayerId: string | null = null;
     private playerStateService: PlayerStateService | null = null; // Reference to PlayerStateService for local player checks
     private turnChangeListeners: TurnChangeListener[] = [];
     private stateChangeListeners: StateChangeListener[] = [];
     private pollingInterval: number | null = null;
     
-    constructor(gameState: GameState) {
+    constructor(gameState: FullGameState) {
         this.gameState = gameState;
     }
     
@@ -57,11 +57,11 @@ export class GameStateService {
         return currentPlayer?.id === localPlayerId;
     }
     
-    public getGameState(): GameState {
+    public getGameState(): FullGameState {
         return this.gameState;
     }
     
-    public updateGameState(gameState: GameState): void {
+    public updateGameState(gameState: FullGameState): void {
         this.gameState = gameState;
     }
     
@@ -230,7 +230,7 @@ export class GameStateService {
         }
     }
     
-    public async loadInitialGameState(gameId: string): Promise<GameState | null> {
+    public async loadInitialGameState(gameId: string): Promise<FullGameState | null> {
         try {
             // Get auth token from localStorage to include in request
             const token = localStorage.getItem('eurorails.jwt');

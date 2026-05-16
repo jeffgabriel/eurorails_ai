@@ -6,7 +6,7 @@ import {
   GRID_MARGIN,
 } from "../config/mapConfig";
 import { TerrainType, GridPoint } from "../../shared/types/GameTypes";
-import { GameState } from "../../shared/types/GameTypes";
+import { FullGameState } from "../../shared/types/GameTypes";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
 import { MapElement } from "./map/MapElement";
 import { MapElementFactory } from "./map/MapElementFactory";
@@ -33,7 +33,7 @@ export class MapRenderer {
   constructor(
     scene: Phaser.Scene,
     mapContainer: Phaser.GameObjects.Container,
-    gameState: GameState,
+    gameState: FullGameState,
     trackDrawingManager: TrackDrawingManager
   ) {
     this.scene = scene;

@@ -2,6 +2,7 @@ import { ContextBuilder } from '../../services/ai/ContextBuilder';
 import {
   GridPoint, TerrainType, TrackSegment, TrackNetwork,
   WorldSnapshot, BotSkillLevel, GameStatus,
+  GameState,
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 
@@ -1347,6 +1348,7 @@ describe('ContextBuilder.serializePrompt', () => {
       opponents: [],
       phase: 'Early Game',
       turnNumber: 5,
+    gameState: GameState.Mid,
       ...overrides,
     };
   }
@@ -1785,6 +1787,7 @@ describe('ContextBuilder proximity computation methods', () => {
       opponents: [],
       phase: 'Mid Game',
       turnNumber: 10,
+    gameState: GameState.Mid,
       ...overrides,
     };
   }
@@ -1816,6 +1819,7 @@ describe('ContextBuilder proximity computation methods', () => {
       victoryMajorCitiesEnRoute: 0,
       isAffordable: true,
       projectedFundsAfterDelivery: 50,
+
       ...overrides,
     };
   }
@@ -2238,6 +2242,7 @@ describe('RECENTLY ABANDONED ROUTE section in serializeRoutePlanningPrompt (BE-0
       opponents: [],
       phase: 'Mid Game',
       turnNumber: 10,
+    gameState: GameState.Mid,
       ...overrides,
     };
   }
@@ -2305,6 +2310,7 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
       opponents: [],
       phase: 'Mid Game',
       turnNumber: 10,
+    gameState: GameState.Mid,
       ...overrides,
     };
   }
@@ -2335,6 +2341,7 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
       victoryMajorCitiesEnRoute: 0,
       isAffordable: true,
       projectedFundsAfterDelivery: 50,
+
       ...overrides,
     };
   }
@@ -2940,6 +2947,7 @@ describe('PREVIOUS ROUTE CONTEXT section in serializeRoutePlanningPrompt (BE-010
       opponents: [],
       phase: 'Mid Game',
       turnNumber: 10,
+    gameState: GameState.Mid,
       ...overrides,
     };
   }
@@ -3798,6 +3806,7 @@ describe('JIRA-125: Endgame victory context shaping', () => {
       opponents: [],
       phase: 'Victory Imminent',
       turnNumber: 55,
+    gameState: GameState.Mid,
       ...overrides,
     };
   }

@@ -1,5 +1,5 @@
 import { SolvencyCheck } from '../../services/ai/SolvencyCheck';
-import { TrackSegment, WorldSnapshot, GameContext, TerrainType } from '../../../shared/types/GameTypes';
+import { TrackSegment, WorldSnapshot, GameContext, GameState, TerrainType } from '../../../shared/types/GameTypes';
 
 /** Helper to create a minimal WorldSnapshot for solvency testing */
 function makeSnapshot(overrides: {
@@ -55,6 +55,7 @@ function makeContext(overrides: {
     isInitialBuild: false,
     opponents: [],
     phase: 'active',
+    gameState: GameState.Mid,
     turnNumber: 10,
   };
 }

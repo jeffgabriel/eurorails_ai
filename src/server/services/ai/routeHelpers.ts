@@ -15,12 +15,10 @@ import {
   StrategicRoute,
   GameContext,
   WorldSnapshot,
+  VICTORY_CITY_COUNT,
 } from '../../../shared/types/GameTypes';
 import { loadGridPoints, hexDistance } from './MapTopology';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
-
-/** Number of connected major cities required to win */
-const VICTORY_CITY_COUNT = 7;
 
 /**
  * Cash threshold (ECU M) at which the planner shifts to victory-build mode,

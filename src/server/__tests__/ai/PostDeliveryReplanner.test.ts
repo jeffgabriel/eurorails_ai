@@ -30,7 +30,7 @@ import type {
   StrategicRoute,
   WorldSnapshot,
 } from '../../../shared/types/GameTypes';
-import { BotSkillLevel } from '../../../shared/types/GameTypes';
+import { GameState, BotSkillLevel } from '../../../shared/types/GameTypes';
 import type { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
 import { getTripPlanningPrompt } from '../../services/ai/prompts/systemPrompts';
 
@@ -132,6 +132,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     phase: 'travel',
     turnNumber: 5,
     trainType: 'Freight',
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

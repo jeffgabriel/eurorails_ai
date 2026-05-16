@@ -12,6 +12,7 @@ import {
   WorldSnapshot,
   TerrainType,
   DemandContext,
+  GameState,
 } from '../../../shared/types/GameTypes';
 import { GridPointData } from '../../services/ai/MapTopology';
 
@@ -74,6 +75,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     demands: [makeDemand()],
     canDeliver: [],
     canPickup: [],
+    gameState: GameState.Mid,
     ...overrides,
   } as GameContext;
 }
@@ -111,6 +113,7 @@ function makeRoute(overrides: Partial<StrategicRoute> = {}): StrategicRoute {
     phase: 'build',
     createdAtTurn: 5,
     reasoning: 'Test route',
+
     ...overrides,
   };
 }

@@ -7,6 +7,7 @@ import {
   GameContext,
   StrategicRoute,
   DemandContext,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 // ── Prompt test helpers ──────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     opponents: [],
     phase: 'running',
     turnNumber: 5,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }
@@ -62,6 +64,7 @@ function makeDemand(overrides: Partial<DemandContext> = {}): DemandContext {
     efficiencyPerTurn: 1.5,
     corridorCities: 2,
     onRoute: false,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

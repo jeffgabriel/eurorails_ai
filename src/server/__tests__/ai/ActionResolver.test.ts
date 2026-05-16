@@ -29,6 +29,7 @@ import {
   TurnPlanUpgradeTrain,
   TurnPlanDiscardHand,
   TurnPlanPassTurn,
+  GameState,
 } from '../../../shared/types/GameTypes';
 import type { GridPointData, GridCoord } from '../../services/ai/MapTopology';
 import type { TrackUsageComputation, PathEdge } from '../../../shared/services/trackUsageFees';
@@ -131,6 +132,7 @@ function makeGameContext(overrides: Partial<GameContext> = {}): GameContext {
     opponents: [],
     phase: 'operate',
     turnNumber: 5,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

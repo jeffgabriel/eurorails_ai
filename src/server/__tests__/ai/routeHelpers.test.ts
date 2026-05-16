@@ -7,7 +7,7 @@
  */
 
 import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState, isDeliveryComplete, isRouteImpossible, findNextRoutePickupOffNetwork, BuildTargetResult } from '../../services/ai/routeHelpers';
-import { GameContext, RouteStop, StrategicRoute, TrainType, WorldSnapshot, TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
+import { GameState, GameContext, RouteStop, StrategicRoute, TrainType, WorldSnapshot, TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -58,6 +58,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     opponents: [],
     phase: 'running',
     turnNumber: 5,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }
@@ -1159,6 +1160,7 @@ function makeVictoryContext(overrides: Partial<GameContext> = {}): GameContext {
     loads: ['Wine'],
     position: BOT_NEAR_ROMA,
     speed: 12,
+    gameState: GameState.Mid,
     ...overrides,
   });
 }
@@ -1490,6 +1492,7 @@ function makeBundle6Context(overrides: Partial<GameContext> = {}): GameContext {
         victoryMajorCitiesEnRoute: 0,
       } as any,
     ],
+
     ...overrides,
   });
 }

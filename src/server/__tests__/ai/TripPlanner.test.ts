@@ -33,6 +33,7 @@ import {
   StrategicRoute,
   LlmAttempt,
   TrainType,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 // ── Mock modules ────────────────────────────────────────────────────────
@@ -108,6 +109,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     totalMajorCities: 15,
     trackSummary: 'Essen-Berlin corridor',
     turnBuildCost: 0,
+    gameState: GameState.Mid,
     turnNumber: 5,
     demands: [makeDemand()],
     canDeliver: [],
@@ -120,6 +122,7 @@ function makeSnapshot(money: number = 50): WorldSnapshot {
   return {
     gameId: 'g1',
     gameStatus: 'active',
+    gameState: GameState.Mid,
     turnNumber: 5,
     bot: {
       playerId: 'bot-1',
@@ -144,6 +147,7 @@ function makeMemory(overrides: Partial<BotMemoryState> = {}): BotMemoryState {
     lastAbandonedRouteKey: null,
     previousRouteStops: null,
     consecutiveLlmFailures: 0,
+    gameState: GameState.Mid,
     ...overrides,
   } as BotMemoryState;
 }
@@ -1358,6 +1362,7 @@ describe('JIRA-190: getTripPlanningPrompt — prompt shape and content (AC1–AC
       trackSummary: 'Berlin hub',
       citiesOnNetwork: ['Berlin', 'Essen'],
       turnBuildCost: 0,
+      gameState: GameState.Mid,
       turnNumber: 5,
       demands: [
         {
@@ -1603,6 +1608,7 @@ describe('JIRA-190: TripPlanner scoreCandidates — supplyCity/deliveryCity fiel
       trackSummary: '',
       citiesOnNetwork: ['Bern'],
       turnBuildCost: 0,
+      gameState: GameState.Mid,
       turnNumber: 5,
       demands: [{
         cardIndex: 1, loadType: 'Cattle', supplyCity: 'Bern', deliveryCity: 'Hamburg', payout: 20,
@@ -1659,6 +1665,7 @@ describe('JIRA-190: TripPlanner scoreCandidates — supplyCity/deliveryCity fiel
       trackSummary: '',
       citiesOnNetwork: ['Essen'],
       turnBuildCost: 0,
+      gameState: GameState.Mid,
       turnNumber: 5,
       demands: [{
         cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15,
@@ -1802,6 +1809,7 @@ describe('JIRA-190: Integration — planTrip produces valid route with demand-ca
       trackSummary: 'Ruhr hub',
       citiesOnNetwork: ['Ruhr', 'Bordeaux'],
       turnBuildCost: 0,
+      gameState: GameState.Mid,
       turnNumber: 10,
       demands,
       canDeliver: [],
@@ -2992,6 +3000,7 @@ describe('JIRA-207B: Game 5302ee21 reproduction tests (TEST-002)', () => {
       isInitialBuild: false,
       opponents: [],
       phase: 'execute',
+      gameState: GameState.Mid,
       turnNumber: 9,
     };
 
@@ -3004,6 +3013,7 @@ describe('JIRA-207B: Game 5302ee21 reproduction tests (TEST-002)', () => {
       consecutiveDiscards: 0,
       deliveryCount: UPGRADE_DELIVERY_THRESHOLD, // delivery threshold met
       totalEarnings: 0,
+      gameState: GameState.Mid,
       turnNumber: 9,
       activeRoute: null,
       turnsOnRoute: 0,

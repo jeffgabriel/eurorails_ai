@@ -30,6 +30,7 @@ import {
   GridPoint,
   TerrainType,
   DemandContext,
+  GameState,
 } from '../../../shared/types/GameTypes';
 import { RouteEnrichmentSchema } from '../../services/ai/schemas';
 import { CandidateDetourInfo } from '../../services/ai/RouteDetourEstimator';
@@ -150,6 +151,7 @@ function makeContext(demands: DemandContext[] = []): GameContext {
     isInitialBuild: false,
     opponents: [],
     phase: 'active',
+    gameState: GameState.Mid,
     turnNumber: 3,
   };
 }

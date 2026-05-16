@@ -1,6 +1,6 @@
 import "phaser";
 import {
-  GameState,
+  FullGameState,
   GridPoint,
   Player,
   TerrainType,
@@ -21,7 +21,7 @@ import { MovementExecutor } from "./MovementExecutor";
 
 export class TrainInteractionManager {
   private scene: Phaser.Scene;
-  private gameState: GameState;
+  private gameState: FullGameState;
   private trainMovementManager: TrainMovementManager;
   private mapRenderer: MapRenderer;
   private gameStateService: GameStateService;
@@ -38,7 +38,7 @@ export class TrainInteractionManager {
   private turnActionManager: TurnActionManager | null = null;
   constructor(
     scene: Phaser.Scene,
-    gameState: GameState,
+    gameState: FullGameState,
     trainMovementManager: TrainMovementManager,
     mapRenderer: MapRenderer,
     gameStateService: GameStateService,

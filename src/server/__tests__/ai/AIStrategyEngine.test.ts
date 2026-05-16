@@ -246,6 +246,7 @@ import {
   TrackSegment,
   DeliveryOpportunity,
   StrategicRoute,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 const mockCapture = capture as jest.MockedFunction<typeof capture>;
@@ -334,6 +335,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     opponents: [],
     phase: 'running',
     turnNumber: 5,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

@@ -1,7 +1,7 @@
 // services/socketService.ts
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import type { Server as HTTPServer } from 'http';
-import type { GameState } from '../../shared/types/GameTypes';
+import type { FullGameState } from '../../shared/types/GameTypes';
 import { AuthService } from './authService';
 import { db } from '../db';
 import { GameService } from './gameService';
@@ -796,11 +796,11 @@ export function emitToGame(gameId: string, event: string, data: unknown): void {
 
 /**
  * Emit a state patch to all clients in a game room
- * Uses standardized format: { patch: Partial<GameState>, serverSeq: number }
+ * Uses standardized format: { patch: Partial<FullGameState>, serverSeq: number }
  * @param gameId - The game ID
  * @param patch - The state patch (only changed data, not full state)
  */
-export async function emitStatePatch(gameId: string, patch: Partial<GameState>): Promise<void> {
+export async function emitStatePatch(gameId: string, patch: Partial<FullGameState>): Promise<void> {
   if (!io) {
     console.warn('Socket.IO not initialized, cannot emit state patch');
     return;

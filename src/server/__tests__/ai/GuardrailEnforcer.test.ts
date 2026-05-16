@@ -8,6 +8,7 @@ import {
   DeliveryOpportunity,
   TerrainType,
   TrackSegment,
+  GameState,
 } from '../../../shared/types/GameTypes';
 import * as majorCityGroups from '../../../shared/services/majorCityGroups';
 
@@ -58,6 +59,7 @@ function makeContext(overrides?: Partial<GameContext>): GameContext {
     opponents: [],
     phase: 'normal',
     turnNumber: 5,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

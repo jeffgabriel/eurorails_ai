@@ -1,5 +1,5 @@
 import { CityArrivalHandler } from '../components/CityArrivalHandler';
-import { GameState, GridPoint, TerrainType } from '../../shared/types/GameTypes';
+import { FullGameState, GridPoint, TerrainType } from '../../shared/types/GameTypes';
 import { PlayerStateService } from '../services/PlayerStateService';
 
 // Mock Phaser scene
@@ -15,7 +15,7 @@ const mockScene = {
 } as unknown as Phaser.Scene;
 
 // Mock game state
-const mockGameState: GameState = {
+const mockGameState: FullGameState = {
   id: 'test-game-id',
   players: [],
   currentPlayerIndex: 0,

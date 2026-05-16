@@ -5,6 +5,7 @@ import {
   TurnPlan,
   AIActionType,
   DemandContext,
+  GameState,
 } from '../../shared/types/GameTypes';
 
 // Minimal factory helpers for test data
@@ -85,6 +86,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     opponents: [],
     phase: 'main',
     turnNumber: 10,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }

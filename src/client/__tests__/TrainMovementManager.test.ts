@@ -1,9 +1,9 @@
 import { TrainMovementManager } from '../components/TrainMovementManager';
-import { TerrainType, TrackSegment, GridPoint, GameState, Player, FerryConnection, FerryPoint, Point, PlayerTrackState, TrainType } from '../../shared/types/GameTypes';
+import { TerrainType, TrackSegment, GridPoint, FullGameState, Player, FerryConnection, FerryPoint, Point, PlayerTrackState, TrainType } from '../../shared/types/GameTypes';
 
 describe('TrainMovementManager calculateDistance', () => {
   let manager: TrainMovementManager;
-  let gameState: GameState;
+  let gameState: FullGameState;
 
   beforeEach(() => {
     gameState = {
@@ -12,7 +12,7 @@ describe('TrainMovementManager calculateDistance', () => {
       currentPlayerIndex: 0,
       status: 'active',
       maxPlayers: 4
-    } as GameState;
+    } as FullGameState;
     manager = new TrainMovementManager(gameState);
   });
 
@@ -297,7 +297,7 @@ describe('TrainMovementManager calculateDistance', () => {
 
   describe('Integration tests: Simulating actual canMoveTo behavior', () => {
     let player: Player;
-    let gameStateWithPlayer: GameState;
+    let gameStateWithPlayer: FullGameState;
     let fullManager: TrainMovementManager;
 
     beforeEach(() => {
@@ -323,7 +323,7 @@ describe('TrainMovementManager calculateDistance', () => {
         currentPlayerIndex: 0,
         status: 'active',
         maxPlayers: 4
-      } as GameState;
+      } as FullGameState;
 
       fullManager = new TrainMovementManager(gameStateWithPlayer);
     });
@@ -399,7 +399,7 @@ describe('TrainMovementManager calculateDistance', () => {
 });
 
 describe('TrainMovementManager Ferry Movement', () => {
-  let gameState: GameState;
+  let gameState: FullGameState;
   let player: Player;
   let manager: TrainMovementManager;
   let ferryPort: GridPoint;
@@ -464,7 +464,7 @@ describe('TrainMovementManager Ferry Movement', () => {
     gameState = {
       players: [player],
       currentPlayerIndex: 0
-    } as GameState;
+    } as FullGameState;
     manager = new TrainMovementManager(gameState);
     
     // Mock getGridPointAtPosition to return ferry port for ferry tests
@@ -536,7 +536,7 @@ describe('TrainMovementManager Ferry Movement', () => {
 });
 
 describe('TrainMovementManager City Direction Reversal', () => {
-  let gameState: GameState;
+  let gameState: FullGameState;
   let player: Player;
   let manager: TrainMovementManager;
   let majorCity: GridPoint;
@@ -647,7 +647,7 @@ describe('TrainMovementManager City Direction Reversal', () => {
     gameState = {
       players: [player],
       currentPlayerIndex: 0
-    } as GameState;
+    } as FullGameState;
     
     manager = new TrainMovementManager(gameState);
   });

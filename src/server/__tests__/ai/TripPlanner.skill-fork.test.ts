@@ -81,6 +81,7 @@ import {
   LLMProvider,
   LLMStrategyConfig,
   TrainType,
+  GameState,
 } from '../../../shared/types/GameTypes';
 
 const mockPlanTripDeterministic = planTripDeterministic as jest.MockedFunction<typeof planTripDeterministic>;
@@ -185,6 +186,7 @@ function makeContext(demands: DemandContext[] = [makeDemand(), makeDemand({ card
     opponents: [],
     phase: 'active',
     turnNumber: 5,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }
