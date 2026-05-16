@@ -75,6 +75,22 @@ jest.mock('../../services/ai/AdvisorCoordinator', () => ({
   },
 }));
 
+// JIRA-241: mock simulateTrip so the strictly-faster gate's turn-count comparison
+// is controllable per test. Default: every route is "feasible, 5 turns". Individual
+// tests override via mockSimulateTrip.mockImplementationOnce to assign distinct
+// turn counts to current-route vs candidate-route calls.
+const mockSimulateTrip = jest.fn().mockReturnValue({
+  turnsToComplete: 5,
+  totalBuildCost: 0,
+  feasible: true,
+  minCashRelative: 0,
+  finalCashRelative: 0,
+  builtSegments: [],
+});
+jest.mock('../../services/ai/RouteDetourEstimator', () => ({
+  simulateTrip: (...args: unknown[]) => mockSimulateTrip(...args),
+}));
+
 // Import mocked modules to access their mock functions
 import { TripPlanner } from '../../services/ai/TripPlanner';
 import { NewRoutePlanner } from '../../services/ai/NewRoutePlanner';
@@ -1098,5 +1114,134 @@ describe('JIRA-233 BE-002: t73-t80 regression — opportunistic delivery leaves 
     expect(abandonedLogs).toHaveLength(1);
 
     warnSpy.mockRestore();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// JIRA-241 — Strictly-faster gate in `end` state
+// ────────────────────────────────────────────────────────────────────────
+
+describe('JIRA-241: PostDeliveryReplanner end-state strictly-faster gate', () => {
+  // Helper: queue two simulateTrip calls, the first for the CURRENT in-flight
+  // route (postDeliveryRoute) and the second for the CANDIDATE route returned
+  // by TripPlanner.planTrip.
+  function queueTurnEstimates(currentRemaining: number, candidateTotal: number) {
+    mockSimulateTrip.mockReset();
+    mockSimulateTrip
+      .mockReturnValueOnce({
+        turnsToComplete: currentRemaining,
+        totalBuildCost: 0,
+        feasible: true,
+        minCashRelative: 0,
+        finalCashRelative: 0,
+        builtSegments: [],
+      })
+      .mockReturnValueOnce({
+        turnsToComplete: candidateTotal,
+        totalBuildCost: 0,
+        feasible: true,
+        minCashRelative: 0,
+        finalCashRelative: 0,
+        builtSegments: [],
+      });
+  }
+
+  it('AC1 — strictly faster candidate (3t < 5t remaining) is accepted; moveTargetInvalidated=true', async () => {
+    queueTurnEstimates(5, 3);
+    const candidate = makeRoute({ currentStopIndex: 0, reasoning: 'faster candidate' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({ route: candidate, llmLog: [] }),
+    }));
+
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute({ currentStopIndex: 0 }), // in-flight route with stops remaining
+      makeSnapshot(),
+      makeContext({ gameState: GameState.End }),
+      makeBrain(),
+      makeGridPoints(),
+      0,
+      '[TEST-AC1]',
+    );
+
+    expect(result.moveTargetInvalidated).toBe(true);
+    expect(result.route.reasoning).toBe('faster candidate');
+  });
+
+  it('AC2 — candidate equal to current (3t == 3t) is rejected; existing route preserved with moveTargetInvalidated=false', async () => {
+    queueTurnEstimates(3, 3);
+    const candidate = makeRoute({ currentStopIndex: 0, reasoning: 'would-be replacement' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({ route: candidate, llmLog: [] }),
+    }));
+
+    const existingRoute = makeRoute({ currentStopIndex: 0, reasoning: 'existing in-flight' });
+    const result = await PostDeliveryReplanner.replan(
+      existingRoute,
+      makeSnapshot(),
+      makeContext({ gameState: GameState.End }),
+      makeBrain(),
+      makeGridPoints(),
+      0,
+      '[TEST-AC2]',
+    );
+
+    expect(result.moveTargetInvalidated).toBe(false);
+    expect(result.route.reasoning).toBe('existing in-flight');
+  });
+
+  it('AC3 — mid-state bypass: same fixture as AC2 but gameState=Mid → swap occurs (existing behavior)', async () => {
+    queueTurnEstimates(3, 3);
+    const candidate = makeRoute({ currentStopIndex: 0, reasoning: 'mid-state replacement' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({ route: candidate, llmLog: [] }),
+    }));
+
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute({ currentStopIndex: 0, reasoning: 'existing in-flight' }),
+      makeSnapshot(),
+      makeContext({ gameState: GameState.Mid }),
+      makeBrain(),
+      makeGridPoints(),
+      0,
+      '[TEST-AC3]',
+    );
+
+    expect(result.moveTargetInvalidated).toBe(true);
+    expect(result.route.reasoning).toBe('mid-state replacement');
+  });
+
+  it('AC4 — no in-flight route bypasses the gate (route accepted regardless of turn comparison)', async () => {
+    mockSimulateTrip.mockReset();
+    mockSimulateTrip.mockReturnValue({
+      turnsToComplete: 99,
+      totalBuildCost: 0,
+      feasible: true,
+      minCashRelative: 0,
+      finalCashRelative: 0,
+      builtSegments: [],
+    });
+    const candidate = makeRoute({ currentStopIndex: 0, reasoning: 'fresh route' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({ route: candidate, llmLog: [] }),
+    }));
+
+    // existing route with currentStopIndex == stops.length → "fully complete"
+    const completedRoute = makeRoute({ currentStopIndex: 2 }); // stops.length === 2
+    const result = await PostDeliveryReplanner.replan(
+      completedRoute,
+      makeSnapshot(),
+      makeContext({ gameState: GameState.End }),
+      makeBrain(),
+      makeGridPoints(),
+      0,
+      '[TEST-AC4]',
+    );
+
+    expect(result.moveTargetInvalidated).toBe(true);
+    expect(result.route.reasoning).toBe('fresh route');
   });
 });

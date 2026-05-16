@@ -16,6 +16,7 @@ import {
   GameContext,
   WorldSnapshot,
   VICTORY_CITY_COUNT,
+  GameState,
 } from '../../../shared/types/GameTypes';
 import { loadGridPoints, hexDistance } from './MapTopology';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
@@ -131,8 +132,17 @@ export function resolveBuildTarget(
   route: StrategicRoute,
   context: GameContext,
 ): BuildTargetResult | null {
-  // Victory build override — bot is close to winning but needs more major cities
+  // Victory build override — bot is close to winning but needs more major cities.
+  //
+  // JIRA-241: Suppressed in `end` state. The end-state route-scoring rule in
+  // DeterministicTripPlanner already drives city progress by adding the cheapest
+  // unconnected-major connector cost to candidate routes that don't connect one.
+  // Running this parallel branch in `end` would conflict (route says go to A,
+  // build target says go to B). Once gameState latches to End at cash > 200M,
+  // VICTORY_BUILD_TRIGGER_M (230) is effectively dead — flagged for cleanup
+  // in TD-2 of the master spec.
   const isVictoryEligible =
+    context.gameState !== GameState.End &&
     context.money >= VICTORY_BUILD_TRIGGER_M &&
     context.connectedMajorCities.length < VICTORY_CITY_COUNT;
 

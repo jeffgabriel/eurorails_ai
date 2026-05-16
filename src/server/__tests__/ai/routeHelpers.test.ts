@@ -1632,3 +1632,103 @@ describe('resolveBuildTarget — JIRA-240 bundling guard (AC9-AC12)', () => {
     expect(result!.secondaryEstimatedCost).toBe(3);
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// JIRA-241 — resolveBuildTarget end-state suppression
+// ────────────────────────────────────────────────────────────────────────
+
+describe('JIRA-241: resolveBuildTarget — end-state suppression', () => {
+  it('AC5 — gameState=End suppresses the victory branch (does NOT return cheapest unconnected major)', () => {
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({
+      money: 240,
+      gameState: GameState.End,
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien'], // 5
+      unconnectedMajorCities: [
+        { cityName: 'Moskva', estimatedCost: 5 },
+        { cityName: 'London', estimatedCost: 10 },
+      ],
+      citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien'],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    // Should NOT take the victory branch — falls through to route-based target
+    // (route stops Lyon → Berlin; Berlin is on-network, Lyon is the route target).
+    if (result !== null) {
+      expect(result.isVictoryBuild).toBe(false);
+      expect(result.targetCity).not.toBe('Moskva');
+      expect(result.targetCity).not.toBe('London');
+    }
+  });
+
+  it('AC6 — gameState=End suppresses the JIRA-240 secondary bundling guard', () => {
+    const route = makeRoute({
+      currentStopIndex: 0,
+      stops: [{ action: 'pickup', loadType: 'Marble', city: 'Firenze' }],
+    });
+    const context = makeContext({
+      money: 240,
+      gameState: GameState.End,
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'], // 6
+      unconnectedMajorCities: [{ cityName: 'Moskva', estimatedCost: 5 }],
+      citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
+      demands: [
+        {
+          // Pre-filled fixture that satisfies the DemandContext shape for this test;
+          // only supplyCity and estimatedTrackCostToSupply matter to JIRA-240's bundling guard.
+          loadType: 'Marble',
+          supplyCity: 'Firenze',
+          deliveryCity: 'Birmingham',
+          payout: 20,
+          cardIndex: 0,
+          isLoadAvailable: true,
+          isLoadOnTrain: false,
+          isSupplyReachable: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: false,
+          isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 3,
+          estimatedTrackCostToDelivery: 10,
+          ferryRequired: false,
+          loadChipTotal: 3,
+          loadChipCarried: 0,
+          estimatedTurns: 8,
+          demandScore: 0,
+          efficiencyPerTurn: 0,
+          networkCitiesUnlocked: 0,
+          victoryMajorCitiesEnRoute: 0,
+          isAffordable: true,
+          projectedFundsAfterDelivery: 240,
+        },
+      ],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    // Victory branch is suppressed entirely; result either null or falls through to route-based.
+    // Either way, NO secondaryTarget should be set.
+    if (result !== null) {
+      expect(result.secondaryTarget).toBeUndefined();
+      expect(result.isVictoryBuild).toBe(false);
+    }
+  });
+
+  it('mid-state baseline: same fixture as AC5 but gameState=Mid → victory branch fires', () => {
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({
+      money: 240,
+      gameState: GameState.Mid,
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien'],
+      unconnectedMajorCities: [{ cityName: 'Moskva', estimatedCost: 5 }],
+      citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien'],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    // Mid-state path still takes the victory branch.
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+    expect(result!.targetCity).toBe('Moskva');
+  });
+});

@@ -20,6 +20,7 @@
 import {
   BotMemoryState,
   GameContext,
+  GameState,
   GridPoint,
   LlmAttempt,
   StrategicRoute,
@@ -31,7 +32,45 @@ import { getMemory } from './BotMemory';
 import { TurnExecutorPlanner } from './TurnExecutorPlanner';
 import { NewRoutePlanner } from './NewRoutePlanner';
 import { isRouteImpossible } from './routeHelpers';
+import { simulateTrip } from './RouteDetourEstimator';
 import type { TurnPlanUpgradeTrain } from '../../../shared/types/GameTypes';
+
+/**
+ * JIRA-241: Estimate the total turns required to complete the given route
+ * starting from the bot's current position. Used by the strictly-faster gate
+ * to compare a current in-flight route's remaining work against a candidate's
+ * total work.
+ *
+ * Walks only the stops at or after `route.currentStopIndex` (for in-flight
+ * routes) or all stops (for fresh candidates with currentStopIndex=0).
+ *
+ * Returns Infinity when the simulation reports infeasibility, so an infeasible
+ * route never accidentally beats a feasible one in the gate.
+ */
+function estimateRouteTurns(
+  route: StrategicRoute,
+  snapshot: WorldSnapshot,
+): number {
+  const remaining = route.stops.slice(route.currentStopIndex);
+  if (remaining.length === 0) return 0;
+
+  const startPos = snapshot.bot.position ?? { row: 0, col: 0 };
+  try {
+    const sim = simulateTrip(startPos, remaining, {
+      bot: {
+        playerId: snapshot.bot.playerId,
+        existingSegments: snapshot.bot.existingSegments,
+        trainType: snapshot.bot.trainType,
+        ferryHalfSpeed: snapshot.bot.ferryHalfSpeed ?? false,
+      },
+      allPlayerTracks: snapshot.allPlayerTracks,
+    });
+    if (!sim.feasible) return Infinity;
+    return sim.turnsToComplete;
+  } catch {
+    return Infinity;
+  }
+}
 
 // ── ReplanResult ──────────────────────────────────────────────────────────
 
@@ -177,6 +216,38 @@ export class PostDeliveryReplanner {
       // Sub-path 1: TripPlanner returned a route
       if (replanResult.route) {
         const finalRoute = TurnExecutorPlanner.skipCompletedStops(replanResult.route, context);
+
+        // JIRA-241: Strictly-faster gate. In `end` state, only swap to the
+        // candidate when it shortens the path to victory. When the candidate
+        // is not strictly faster than the current route's remaining turns,
+        // preserve the existing activeRoute and return without invalidating
+        // the move target. This prevents the t80-style abandonment seen in
+        // game 181cf810 where a higher-aggregate-velocity replan diverted the
+        // bot away from a one-turn winning delivery.
+        if (
+          context.gameState === GameState.End &&
+          postDeliveryRoute &&
+          postDeliveryRoute.currentStopIndex < postDeliveryRoute.stops.length
+        ) {
+          const currentRemaining = estimateRouteTurns(postDeliveryRoute, snapshot);
+          const candidateTurns = estimateRouteTurns(finalRoute, snapshot);
+          if (candidateTurns >= currentRemaining) {
+            console.log(
+              `${tag} [PostDeliveryReplanner] END-STATE: candidate (${candidateTurns}t) not strictly faster than current (${currentRemaining}t) — keeping existing route`,
+            );
+            const revalidated = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
+            const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);
+            return {
+              route: skipped,
+              moveTargetInvalidated: false,
+              replanLlmLog,
+              replanSystemPrompt,
+              replanUserPrompt,
+              routeWasAbandoned: routeWasAbandoned || undefined,
+            };
+          }
+        }
+
         console.log(
           `${tag} [PostDeliveryReplanner] Replan succeeded. New route: ${finalRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
         );
