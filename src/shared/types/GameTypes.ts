@@ -142,10 +142,22 @@ export const VICTORY_CITY_COUNT = 7;
 
 /**
  * Persistent game phase for bot decision-making.
- * Transitions are one-way: Initial → Mid → End. Once End, never reverts.
+ *
+ * Turn-based brackets (JIRA-242):
+ *   Initial : turns 1–3 (setup builds + first regular turn)
+ *   Early   : turns 4–25 (expansion phase)
+ *   Mid     : turn ≥ 26 (and cash ≤ END_GAME_ENTRY_CASH)
+ *
+ * Cash-latched (JIRA-241):
+ *   End : cash > END_GAME_ENTRY_CASH (200M) ever, latched and never reverts.
+ *
+ * Initial → Early → Mid is monotonic (turn number only increases), so
+ * those transitions don't need explicit latching. End takes precedence
+ * over any turn-based phase the moment cash crosses 200M.
  */
 export enum GameState {
   Initial = 'initial',
+  Early = 'early',
   Mid = 'mid',
   End = 'end',
 }

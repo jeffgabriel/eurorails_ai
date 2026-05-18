@@ -17,19 +17,25 @@ import {
 /**
  * Compute the bot's persistent game phase.
  *
- * Latching rules (AC1a–AC1d):
- * - If memory.gameState is already End → stay End regardless of cash.
- * - Else if money > END_GAME_ENTRY_CASH (200M) → latch to End.
- * - Else → Mid (never returns Initial here; Initial is implicit in setup code).
+ * Precedence (highest first):
+ *   1. End latch (JIRA-241) — once memory says End, stay End.
+ *   2. Cash trigger (JIRA-241) — money > END_GAME_ENTRY_CASH (200M) → End.
+ *   3. Turn brackets (JIRA-242):
+ *        turnNumber > 25 → Mid
+ *        turnNumber ≥ 4  → Early
+ *        otherwise       → Initial
  *
- * Fail-safe: missing memory.gameState is treated as Mid (default behavior).
+ * Initial → Early → Mid transitions don't need latching because turn numbers
+ * only increase. End takes precedence and is latched.
  *
- * @param context - Minimal context with current cash (money).
+ * Fail-safe: missing memory.gameState is treated as no prior latch.
+ *
+ * @param context - Minimal context with current cash and turn number.
  * @param memory  - Persistent bot memory (may have gameState from a prior turn).
- * @returns The resolved GameState — always End or Mid from this path.
+ * @returns The resolved GameState.
  */
 export function computeGameState(
-  context: { money: number },
+  context: { money: number; turnNumber: number },
   memory: BotMemoryState,
 ): GameState {
   // Latch: once End, never revert — even if cash dips below threshold.
@@ -37,13 +43,19 @@ export function computeGameState(
     return GameState.End;
   }
 
-  // Transition: cash crosses the entry threshold.
+  // Cash trigger: precedence over any turn-based phase (JIRA-241).
   if (context.money > END_GAME_ENTRY_CASH) {
     return GameState.End;
   }
 
-  // Default: mid-game (Initial is deferred per tech debt TD-1).
-  return GameState.Mid;
+  // Turn brackets (JIRA-242):
+  if (context.turnNumber > 25) {
+    return GameState.Mid;
+  }
+  if (context.turnNumber >= 4) {
+    return GameState.Early;
+  }
+  return GameState.Initial;
 }
 
 /**

@@ -177,8 +177,9 @@ export class ContextBuilder {
       previousTurnSummary = parts.join('. ');
     }
 
-    // JIRA-241: Compute persistent game phase and conditionally persist if latched.
-    // computeGameState is a pure latch: Mid → End on first turn cash > 200M, stays End.
+    // JIRA-241 / JIRA-242: Compute persistent game phase and conditionally persist
+    // if changed. computeGameState combines the End cash latch (JIRA-241) with
+    // turn-based Initial/Early/Mid brackets (JIRA-242).
     const memoryForPhase: BotMemoryState = memory ?? {
       currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
       consecutiveDiscards: 0, deliveryCount: 0, totalEarnings: 0,
@@ -186,7 +187,10 @@ export class ContextBuilder {
       lastReasoning: null, lastPlanHorizon: null, previousRouteStops: null,
       consecutiveLlmFailures: 0,
     };
-    const gamePhase = computeGameState({ money: snapshot.bot.money }, memoryForPhase);
+    const gamePhase = computeGameState(
+      { money: snapshot.bot.money, turnNumber: snapshot.turnNumber },
+      memoryForPhase,
+    );
     if (gamePhase !== memoryForPhase.gameState) {
       // Latch changed — persist asynchronously (fire-and-forget, best-effort)
       updateMemory(snapshot.gameId, snapshot.bot.playerId, { gameState: gamePhase }).catch(

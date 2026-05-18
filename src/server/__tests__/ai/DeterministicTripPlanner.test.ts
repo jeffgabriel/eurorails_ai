@@ -2177,3 +2177,114 @@ describe('JIRA-241 end-state scoring', () => {
     });
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// JIRA-242 — Early/Mid expansion bias
+// ────────────────────────────────────────────────────────────────────────
+
+describe('JIRA-242 expansion bonus (multi-delivery)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { applyExpansionBonus, EXPANSION_MULTI_DELIVERY_BONUS_M_PER_TURN } = require('../../services/ai/DeterministicTripPlanner');
+
+  type ScoredCandidateLike = {
+    id: string;
+    rows: unknown[];
+    stops: Array<{ action: 'pickup' | 'deliver'; city: string; loadType?: string }>;
+    payout: number;
+    buildCost: number;
+    turns: number;
+    net: number;
+    feasible: boolean;
+    aggregateScore: number;
+    aggregateFollowup: null;
+    aggregateEmptyLegTurns: number;
+    builtSegments: ReadonlyArray<unknown>;
+  };
+
+  function makeC(over: Partial<ScoredCandidateLike>): ScoredCandidateLike {
+    return {
+      id: 'test',
+      rows: [],
+      stops: [],
+      payout: 0,
+      buildCost: 0,
+      turns: 1,
+      net: 0,
+      feasible: true,
+      aggregateScore: 0,
+      aggregateFollowup: null,
+      aggregateEmptyLegTurns: 0,
+      builtSegments: [],
+      ...over,
+    };
+  }
+
+  it('AC2 — pair (2 deliveries) receives the bonus; single (1 delivery) does not', () => {
+    const single = makeC({
+      id: 'single-Iron',
+      aggregateScore: 0.18,
+      stops: [
+        { action: 'pickup', city: 'Birmingham', loadType: 'Iron' },
+        { action: 'deliver', city: 'Antwerpen', loadType: 'Iron' },
+      ],
+    });
+    const pair = makeC({
+      id: 'pair-China-Iron',
+      aggregateScore: 0.17,
+      stops: [
+        { action: 'pickup', city: 'Birmingham', loadType: 'China' },
+        { action: 'pickup', city: 'Birmingham', loadType: 'Iron' },
+        { action: 'deliver', city: 'Antwerpen', loadType: 'Iron' },
+        { action: 'deliver', city: 'Ruhr', loadType: 'China' },
+      ],
+    });
+
+    applyExpansionBonus(single);
+    applyExpansionBonus(pair);
+
+    expect(single.aggregateScore).toBeCloseTo(0.18); // unchanged
+    expect(pair.aggregateScore).toBeCloseTo(0.17 + EXPANSION_MULTI_DELIVERY_BONUS_M_PER_TURN);
+    expect(pair.aggregateScore).toBeGreaterThan(single.aggregateScore);
+  });
+
+  it('AC3 — single keeps original aggregateScore exactly', () => {
+    const single = makeC({
+      aggregateScore: 0.42,
+      stops: [
+        { action: 'pickup', city: 'A', loadType: 'X' },
+        { action: 'deliver', city: 'B', loadType: 'X' },
+      ],
+    });
+    applyExpansionBonus(single);
+    expect(single.aggregateScore).toBe(0.42);
+  });
+
+  it('AC7 — triple (3 deliveries) receives the SAME flat bonus as pair (not 2×)', () => {
+    const triple = makeC({
+      aggregateScore: 1.0,
+      stops: [
+        { action: 'pickup', city: 'A', loadType: 'X' },
+        { action: 'pickup', city: 'B', loadType: 'Y' },
+        { action: 'pickup', city: 'C', loadType: 'Z' },
+        { action: 'deliver', city: 'D', loadType: 'X' },
+        { action: 'deliver', city: 'E', loadType: 'Y' },
+        { action: 'deliver', city: 'F', loadType: 'Z' },
+      ],
+    });
+    applyExpansionBonus(triple);
+    expect(triple.aggregateScore).toBeCloseTo(1.0 + EXPANSION_MULTI_DELIVERY_BONUS_M_PER_TURN);
+  });
+
+  it('bonus constant matches the t6 trace tip-margin (0.05)', () => {
+    expect(EXPANSION_MULTI_DELIVERY_BONUS_M_PER_TURN).toBe(0.05);
+  });
+
+  it('candidate with zero deliver stops receives no bonus (edge case)', () => {
+    const odd = makeC({
+      aggregateScore: 0.5,
+      stops: [{ action: 'pickup', city: 'A', loadType: 'X' }],
+    });
+    applyExpansionBonus(odd);
+    expect(odd.aggregateScore).toBe(0.5);
+  });
+});

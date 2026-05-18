@@ -1021,6 +1021,36 @@ export function candidateTouchesUnconnectedMajor(
  * Mutates `c1.aggregateScore` in place. Leaves the other fields untouched so
  * post-hoc analysis can still see the raw values.
  */
+// ── Early/Mid expansion bias (JIRA-242) ────────────────────────────────
+
+/**
+ * JIRA-242: Flat additive bonus on `aggregateScore` for multi-delivery candidates
+ * during Early and Mid phases.
+ *
+ * Rationale: in early/mid play, routes that consume two cards per pickup-city
+ * investment are strictly better expansion than single-pickup trips at the same
+ * aggregate velocity. The bonus tips near-tie comparisons (≲0.05 M/turn margin)
+ * toward the pair/triple without overriding clear winners.
+ *
+ * Sized to match the t6 trace in game 8738866e (single Iron 0.18 vs pair 0.17 —
+ * a +0.05 bonus tips the pair). Tunable post-observation.
+ */
+export const EXPANSION_MULTI_DELIVERY_BONUS_M_PER_TURN = 0.05;
+
+/**
+ * JIRA-242: Add the multi-delivery expansion bonus to `c.aggregateScore` when
+ * the candidate has 2 or more deliver stops.
+ *
+ * Mutates `c.aggregateScore` in place. Flat (not per-extra-delivery): pair and
+ * triple receive the same bonus. Singles receive none.
+ */
+export function applyExpansionBonus(c: ScoredCandidate): void {
+  const deliveryCount = c.stops.filter((s) => s.action === 'deliver').length;
+  if (deliveryCount >= 2) {
+    c.aggregateScore += EXPANSION_MULTI_DELIVERY_BONUS_M_PER_TURN;
+  }
+}
+
 export function applyEndStateScoring(
   c1: ScoredCandidate,
   context: GameContext,
@@ -1462,6 +1492,20 @@ export function planTripDeterministic(
     c1.aggregateScore = result.aggregate;
     c1.aggregateFollowup = result.followup;
     c1.aggregateEmptyLegTurns = result.emptyLegTurns;
+  }
+
+  // JIRA-242: Early/Mid expansion bias — flat bonus for multi-delivery candidates.
+  // Applied AFTER computeAggregateScore (so chained look-ahead is reflected) and
+  // BEFORE applyEndStateScoring (which substitutes aggregateScore wholesale in End).
+  // The bonus tips near-tie pair-vs-single races toward expansion without overriding
+  // clearly better single-delivery candidates.
+  if (
+    context.gameState === GameState.Early ||
+    context.gameState === GameState.Mid
+  ) {
+    for (const c1 of feasible) {
+      applyExpansionBonus(c1);
+    }
   }
 
   // JIRA-241: In `end` state, override the aggregate score with the end-state

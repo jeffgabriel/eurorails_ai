@@ -65,43 +65,81 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
 // ── computeGameState ───────────────────────────────────────────────────────
 
 describe('computeGameState', () => {
-  describe('AC1a — cash below threshold, no prior memory → Mid', () => {
-    it('returns Mid when cash is 150 and gameState is undefined', () => {
+  describe('AC1a — cash below threshold, no prior memory → Mid (turn ≥ 26)', () => {
+    it('returns Mid when cash is 150 and gameState is undefined at turn 30', () => {
       const memory = makeMemory({ gameState: undefined });
-      expect(computeGameState({ money: 150 }, memory)).toBe(GameState.Mid);
+      expect(computeGameState({ money: 150, turnNumber: 30 }, memory)).toBe(GameState.Mid);
     });
   });
 
   describe('AC1b — cash above threshold, no prior memory → latches to End', () => {
     it('returns End when cash is 201 and gameState is undefined', () => {
       const memory = makeMemory({ gameState: undefined });
-      expect(computeGameState({ money: 201 }, memory)).toBe(GameState.End);
+      expect(computeGameState({ money: 201, turnNumber: 30 }, memory)).toBe(GameState.End);
     });
   });
 
   describe('AC1c — already End in memory + cash below threshold → stays End', () => {
     it('returns End when cash is 180 but gameState is already End', () => {
       const memory = makeMemory({ gameState: GameState.End });
-      expect(computeGameState({ money: 180 }, memory)).toBe(GameState.End);
+      expect(computeGameState({ money: 180, turnNumber: 30 }, memory)).toBe(GameState.End);
     });
   });
 
   describe('AC1d — already End in memory + cash above threshold → stays End', () => {
     it('returns End when cash is 300 and gameState is already End', () => {
       const memory = makeMemory({ gameState: GameState.End });
-      expect(computeGameState({ money: 300 }, memory)).toBe(GameState.End);
+      expect(computeGameState({ money: 300, turnNumber: 30 }, memory)).toBe(GameState.End);
     });
   });
 
   describe('boundary conditions', () => {
     it('returns Mid when cash is exactly 200 (threshold is exclusive: > 200)', () => {
       const memory = makeMemory({ gameState: undefined });
-      expect(computeGameState({ money: 200 }, memory)).toBe(GameState.Mid);
+      expect(computeGameState({ money: 200, turnNumber: 30 }, memory)).toBe(GameState.Mid);
     });
 
     it('returns End when cash is 200.01', () => {
       const memory = makeMemory({ gameState: undefined });
-      expect(computeGameState({ money: 200.01 }, memory)).toBe(GameState.End);
+      expect(computeGameState({ money: 200.01, turnNumber: 30 }, memory)).toBe(GameState.End);
+    });
+  });
+
+  // ── JIRA-242: turn-based Initial/Early/Mid brackets ──────────────────
+  describe('JIRA-242 turn-based phase brackets', () => {
+    const memory = makeMemory({ gameState: undefined });
+
+    it('returns Initial at turn 1 (setup-build turn)', () => {
+      expect(computeGameState({ money: 50, turnNumber: 1 }, memory)).toBe(GameState.Initial);
+    });
+
+    it('returns Initial at turn 3 (last initial turn)', () => {
+      expect(computeGameState({ money: 50, turnNumber: 3 }, memory)).toBe(GameState.Initial);
+    });
+
+    it('returns Early at turn 4 (first early turn)', () => {
+      expect(computeGameState({ money: 50, turnNumber: 4 }, memory)).toBe(GameState.Early);
+    });
+
+    it('returns Early at turn 25 (last early turn)', () => {
+      expect(computeGameState({ money: 50, turnNumber: 25 }, memory)).toBe(GameState.Early);
+    });
+
+    it('returns Mid at turn 26 (first mid turn)', () => {
+      expect(computeGameState({ money: 50, turnNumber: 26 }, memory)).toBe(GameState.Mid);
+    });
+
+    it('End cash trigger takes precedence over Early turn bracket', () => {
+      expect(computeGameState({ money: 250, turnNumber: 10 }, memory)).toBe(GameState.End);
+    });
+
+    it('End cash trigger takes precedence over Initial turn bracket', () => {
+      expect(computeGameState({ money: 250, turnNumber: 2 }, memory)).toBe(GameState.End);
+    });
+
+    it('End latch survives turn-based brackets', () => {
+      const latchedEnd = makeMemory({ gameState: GameState.End });
+      expect(computeGameState({ money: 50, turnNumber: 4 }, latchedEnd)).toBe(GameState.End);
     });
   });
 });
