@@ -1676,6 +1676,119 @@ describe('JIRA-246 AC2 (partial): partial-path abandon when carrying deliverable
   });
 });
 
+// ── JIRA-247: A3 origin_is_current_position fix ───────────────────────────
+
+describe('JIRA-247 AC5: origin_is_current_position → a3_build_origin_is_current_pos + build target set', () => {
+  /**
+   * Fixture: s1 T36 of game dac9a541.
+   * Bot at Goteborg, route target Stockholm.
+   * computeBuildSegments returns segments with first segment from = Goteborg coord.
+   * Expectation: trace.build.target = 'Stockholm', terminationReason = 'a3_build_origin_is_current_pos'.
+   * The outer loop continues (no abandon, no PassTurn from this branch).
+   */
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(TurnExecutorPlanner, 'revalidateRemainingDeliveries')
+      .mockImplementation((r: StrategicRoute) => r);
+    jest.spyOn(TurnExecutorPlanner, 'skipCompletedStops')
+      .mockImplementation((r: StrategicRoute) => r);
+    jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
+      .mockResolvedValue({ success: false, error: 'default' });
+
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue({ targetCity: 'Stockholm' });
+
+    // Stockholm at (8, 42)
+    const { loadGridPoints } = jest.requireMock('../../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['8,42', { row: 8, col: 42, name: 'Stockholm', terrain: TerrainType.Clear }],
+    ]));
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    mockComputeBuildSegments.mockReturnValue([]); // restore global default
+  });
+
+  it('AC5: bot at Goteborg (3,40), segment from=Goteborg → terminationReason=a3_build_origin_is_current_pos AND trace.build.target=Stockholm', async () => {
+    // computeBuildSegments returns segments with from = Goteborg = bot's current position
+    const goteborgCoord = { row: 3, col: 40 };
+    mockComputeBuildSegments.mockReturnValue([
+      {
+        from: goteborgCoord, // matches bot's position → origin_is_current_position
+        to: { row: 5, col: 41 }, // intermediate (not Stockholm)
+        cost: 3,
+      },
+    ]);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Stockholm')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [], // Stockholm off-network → A3 triggers
+      position: { row: 3, col: 40 }, // bot at Goteborg
+      speed: 9,
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    // AC5 primary assertions
+    expect(trace.a3.terminationReason).toBe('a3_build_origin_is_current_pos');
+    expect(trace.build.target).toBe('Stockholm');
+
+    // No abandon from this branch
+    expect(result.routeAbandoned).toBe(false);
+    // No PassTurn emitted from this branch
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.PassTurn)).toBe(false);
+  });
+
+  it('AC7: true-move case — segment from ≠ currentPos → existing MoveTrain branch fires, not origin fix', async () => {
+    // Bot at Paris (1,1), segment from = Berlin (10,10) ≠ currentPos → R4 does NOT fire
+    mockComputeBuildSegments.mockReturnValue([
+      {
+        from: { row: 10, col: 10 }, // build origin is Berlin, not Paris
+        to: { row: 12, col: 12 },   // intermediate
+        cost: 5,
+      },
+    ]);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Stockholm')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      position: { row: 1, col: 1 }, // bot at Paris, not build origin
+      speed: 9,
+    });
+
+    // resolveMove succeeds → MoveTrain branch fires
+    mockResolveMove.mockResolvedValue({
+      success: true,
+      plan: {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 1, col: 1 }, { row: 5, col: 5 }],
+        milesUsed: 3,
+        cost: 0,
+        trackUsageFees: [],
+      },
+    });
+
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    // R4 did NOT fire — termination reason should be a3_move_success (true-move branch)
+    expect(trace.a3.terminationReason).toBe('a3_move_success');
+    expect(trace.a3.terminationReason).not.toBe('a3_build_origin_is_current_pos');
+    // A move plan was added
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.MoveTrain)).toBe(true);
+    // No abandon
+    expect(result.routeAbandoned).toBe(false);
+  });
+});
+
 // ── JIRA-244 AC3: A3 empty-result disambiguation ──────────────────────────
 
 describe('JIRA-244 AC3: A3 empty-result — a3_target_already_reachable via paid ferry', () => {
