@@ -60,7 +60,7 @@ import { InitialBuildRunner } from './InitialBuildRunner';
 import { NewRoutePlanner } from './NewRoutePlanner';
 import { UPGRADE_DELIVERY_THRESHOLD } from './context/UpgradeGatingConstants';
 import { RECENT_DELIVERIES_WINDOW } from './StrategicConstants';
-import { detectVictoryClinch } from './victoryRules';
+import { detectVictoryClinch, findFinalVictoryRoute } from './victoryRules';
 
 /**
  * @deprecated Use UPGRADE_DELIVERY_THRESHOLD from UpgradeGatingConstants instead.
@@ -240,38 +240,67 @@ export class AIStrategyEngine {
       if (brain) brain.providerAdapter.resetCallIds();
       let activeRoute = memory.activeRoute;
 
-      // JIRA-243: Victory-clinch hard gate. If a carried load + matching demand
-      // card delivery would satisfy both victory conditions (cash ≥ 250M AND
-      // ≥ 7 majors connected) without further building, force the activeRoute
-      // to a single-stop deliver. Bypasses pair/triple scoring and any in-flight
-      // multi-stop plan that would delay victory. See victoryRules.detectVictoryClinch
-      // for the precise conditions and the forensic case (game c990fa47, s2 T74).
+      // JIRA-245: Final-victory route search — runs BEFORE the strict on-train
+      // clinch gate (JIRA-243). When the bot is in End state, search for the
+      // minimum-turn route that simultaneously satisfies cash ≥ 250M AND ≥ 7
+      // majors connected. The broader search is a superset of the clinch gate:
+      // when findFinalVictoryRoute fires, the clinch check is skipped (else-branch).
+      // When the search returns null, we fall through to the existing clinch gate
+      // as a strict-subset fast-path. See victoryRules.findFinalVictoryRoute for
+      // the forensic case (game 95f0aadc, s2 T76) that motivates this change.
       if (!context.isInitialBuild) {
-        const clinch = detectVictoryClinch(context);
-        if (clinch) {
+        const finalVictoryRoute = findFinalVictoryRoute(snapshot, context, memory);
+        if (finalVictoryRoute) {
+          // Idempotency: do not replace the route if the bot is already targeting
+          // the first stop of the returned route (same pattern as JIRA-243).
           const currentStop = activeRoute?.stops[activeRoute.currentStopIndex];
+          const firstStop = finalVictoryRoute.stops[0];
           const alreadyTargeted =
-            currentStop?.action === 'deliver' &&
-            currentStop.loadType === clinch.loadType &&
-            currentStop.city === clinch.deliveryCity;
+            currentStop?.action === firstStop.action &&
+            currentStop.loadType === firstStop.loadType &&
+            currentStop.city === firstStop.city;
           if (!alreadyTargeted) {
-            const clinchReasoning =
-              `[victory-clinch] Carrying ${clinch.loadType}; delivering at ${clinch.deliveryCity} ` +
-              `clinches victory (${context.money}M + ${clinch.payout}M ≥ 250M, ` +
-              `${context.connectedMajorCities.length} majors connected).`;
             activeRoute = {
-              stops: [{
-                action: 'deliver',
-                loadType: clinch.loadType,
-                city: clinch.deliveryCity,
-                demandCardId: clinch.cardIndex,
-                payment: clinch.payout,
-              }],
+              stops: finalVictoryRoute.stops,
               currentStopIndex: 0,
               phase: 'travel',
               createdAtTurn: snapshot.turnNumber,
-              reasoning: clinchReasoning,
+              reasoning: finalVictoryRoute.reasoning,
             };
+          }
+        } else {
+          // JIRA-243: Victory-clinch hard gate. If a carried load + matching demand
+          // card delivery would satisfy both victory conditions (cash ≥ 250M AND
+          // ≥ 7 majors connected) without further building, force the activeRoute
+          // to a single-stop deliver. Bypasses pair/triple scoring and any in-flight
+          // multi-stop plan that would delay victory. See victoryRules.detectVictoryClinch
+          // for the precise conditions and the forensic case (game c990fa47, s2 T74).
+          const clinch = detectVictoryClinch(context);
+          if (clinch) {
+            const currentStop = activeRoute?.stops[activeRoute.currentStopIndex];
+            const alreadyTargeted =
+              currentStop?.action === 'deliver' &&
+              currentStop.loadType === clinch.loadType &&
+              currentStop.city === clinch.deliveryCity;
+            if (!alreadyTargeted) {
+              const clinchReasoning =
+                `[victory-clinch] Carrying ${clinch.loadType}; delivering at ${clinch.deliveryCity} ` +
+                `clinches victory (${context.money}M + ${clinch.payout}M ≥ 250M, ` +
+                `${context.connectedMajorCities.length} majors connected).`;
+              activeRoute = {
+                stops: [{
+                  action: 'deliver',
+                  loadType: clinch.loadType,
+                  city: clinch.deliveryCity,
+                  demandCardId: clinch.cardIndex,
+                  payment: clinch.payout,
+                }],
+                currentStopIndex: 0,
+                phase: 'travel',
+                createdAtTurn: snapshot.turnNumber,
+                reasoning: clinchReasoning,
+              };
+            }
           }
         }
       }
