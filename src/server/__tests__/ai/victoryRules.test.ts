@@ -1,13 +1,23 @@
 /**
- * victoryRules unit tests — computeGameState, cheapestUnconnectedMajorConnectorCost
+ * victoryRules unit tests — computeGameState, cheapestUnconnectedMajorConnectorCost,
+ * cheapestNUnconnectedMajorConnectorCost, detectVictoryClinch, findFinalVictoryRoute
  *
  * Tests cover:
  * - computeGameState: latching rules (once End, never reverts; cash threshold)
  * - cheapestUnconnectedMajorConnectorCost: already connected, partial, empty list
+ * - cheapestNUnconnectedMajorConnectorCost: n=0, n>available, n=partial
+ * - detectVictoryClinch: regression tests for JIRA-243
+ * - findFinalVictoryRoute: JIRA-245 AC1-AC11
  */
 
-import { computeGameState, cheapestUnconnectedMajorConnectorCost, detectVictoryClinch } from '../../services/ai/victoryRules';
-import { GameState, GameContext } from '../../../shared/types/GameTypes';
+import {
+  computeGameState,
+  cheapestUnconnectedMajorConnectorCost,
+  cheapestNUnconnectedMajorConnectorCost,
+  detectVictoryClinch,
+  findFinalVictoryRoute,
+} from '../../services/ai/victoryRules';
+import { GameState, GameContext, TrainType, WorldSnapshot } from '../../../shared/types/GameTypes';
 import type { BotMemoryState, DemandContext } from '../../../shared/types/GameTypes';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -306,5 +316,384 @@ describe('detectVictoryClinch', () => {
       demands: [],
     });
     expect(detectVictoryClinch(ctx)).toBeNull();
+  });
+});
+
+// ── cheapestNUnconnectedMajorConnectorCost (JIRA-245) ─────────────────────
+
+describe('cheapestNUnconnectedMajorConnectorCost', () => {
+  it('AC8 — returns {cost:0, cityNames:[]} when n=0', () => {
+    const ctx = makeContext({
+      connectedMajorCities: ['A', 'B'],
+      unconnectedMajorCities: [
+        { cityName: 'Paris', estimatedCost: 8 },
+        { cityName: 'Roma', estimatedCost: 12 },
+      ],
+    });
+    expect(cheapestNUnconnectedMajorConnectorCost(ctx, 0)).toEqual({ cost: 0, cityNames: [] });
+  });
+
+  it('AC9 — returns sum of all when n > available length (no throw)', () => {
+    const ctx = makeContext({
+      connectedMajorCities: ['A', 'B'],
+      unconnectedMajorCities: [
+        { cityName: 'Paris', estimatedCost: 8 },
+        { cityName: 'Roma', estimatedCost: 12 },
+      ],
+    });
+    // n=5 but only 2 available — should return sum of both
+    expect(cheapestNUnconnectedMajorConnectorCost(ctx, 5)).toEqual({
+      cost: 20,
+      cityNames: ['Paris', 'Roma'],
+    });
+  });
+
+  it('returns cost and names for n=1 (cheapest only)', () => {
+    const ctx = makeContext({
+      connectedMajorCities: ['A', 'B', 'C'],
+      unconnectedMajorCities: [
+        { cityName: 'Paris', estimatedCost: 8 },
+        { cityName: 'Roma', estimatedCost: 20 },
+        { cityName: 'Madrid', estimatedCost: 15 },
+      ],
+    });
+    expect(cheapestNUnconnectedMajorConnectorCost(ctx, 1)).toEqual({
+      cost: 8,
+      cityNames: ['Paris'],
+    });
+  });
+
+  it('returns cost and names for n=2', () => {
+    const ctx = makeContext({
+      connectedMajorCities: ['A', 'B', 'C'],
+      unconnectedMajorCities: [
+        { cityName: 'Paris', estimatedCost: 8 },
+        { cityName: 'Roma', estimatedCost: 12 },
+        { cityName: 'Madrid', estimatedCost: 20 },
+      ],
+    });
+    expect(cheapestNUnconnectedMajorConnectorCost(ctx, 2)).toEqual({
+      cost: 20,
+      cityNames: ['Paris', 'Roma'],
+    });
+  });
+
+  it('AC11 — existing cheapestUnconnectedMajorConnectorCost still works after refactor to delegate', () => {
+    const ctx = makeContext({
+      connectedMajorCities: ['A', 'B', 'C'],
+      unconnectedMajorCities: [
+        { cityName: 'Paris', estimatedCost: 8 },
+        { cityName: 'Roma', estimatedCost: 20 },
+      ],
+    });
+    expect(cheapestUnconnectedMajorConnectorCost(ctx)).toBe(8);
+  });
+});
+
+// ── findFinalVictoryRoute (JIRA-245) ──────────────────────────────────────
+
+function makeSnapshot(overrides: Partial<WorldSnapshot['bot']> = {}): WorldSnapshot {
+  return {
+    gameId: 'test-game',
+    gameStatus: 'active',
+    turnNumber: 50,
+    bot: {
+      playerId: 'bot-1',
+      userId: 'user-1',
+      money: 210,
+      position: { row: 10, col: 10 },
+      existingSegments: [],
+      demandCards: [],
+      resolvedDemands: [],
+      trainType: TrainType.Freight,
+      loads: [],
+      botConfig: { skillLevel: 'hard' },
+      connectedMajorCityCount: 7,
+      ...overrides,
+    },
+    allPlayerTracks: [],
+    loadAvailability: {},
+  };
+}
+
+function makeEndContext(overrides: Partial<GameContext> = {}): GameContext {
+  return makeContext({
+    money: 241,
+    gameState: GameState.End,
+    connectedMajorCities: SEVEN_CONNECTED,
+    unconnectedMajorCities: [],
+    ...overrides,
+  });
+}
+
+function makeEndMemory(): BotMemoryState {
+  return makeMemory({ gameState: GameState.End });
+}
+
+describe('findFinalVictoryRoute', () => {
+  // ── AC1: returns null when gameState !== End ───────────────────────────
+  it('AC1 — returns null when gameState is Mid', () => {
+    const snapshot = makeSnapshot();
+    const ctx = makeContext({ money: 241, gameState: GameState.Mid, demands: [makeDemand()] });
+    expect(findFinalVictoryRoute(snapshot, ctx, makeEndMemory())).toBeNull();
+  });
+
+  it('AC1 — returns null when gameState is Early', () => {
+    const snapshot = makeSnapshot();
+    const ctx = makeContext({ money: 241, gameState: GameState.Early, demands: [makeDemand()] });
+    expect(findFinalVictoryRoute(snapshot, ctx, makeEndMemory())).toBeNull();
+  });
+
+  it('AC1 — returns null when gameState is Initial', () => {
+    const snapshot = makeSnapshot();
+    const ctx = makeContext({ money: 241, gameState: GameState.Initial, demands: [makeDemand()] });
+    expect(findFinalVictoryRoute(snapshot, ctx, makeEndMemory())).toBeNull();
+  });
+
+  // ── AC2: returns null when context.demands is empty ────────────────────
+  it('AC2 — returns null when demands is empty', () => {
+    const snapshot = makeSnapshot();
+    const ctx = makeEndContext({ demands: [] });
+    expect(findFinalVictoryRoute(snapshot, ctx, makeEndMemory())).toBeNull();
+  });
+
+  // ── AC3: single-stop deliver-only (carried load) ───────────────────────
+  // Covers the JIRA-243 c990fa47 case: load on train + matching demand + delivery on network.
+  it('AC3 — returns deliver-only route when carried load + matching demand + delivery on network covers 250M', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: ['Beer'] });
+    // money=240, payout=10 → cashAtVictory=250
+    const ctx = makeEndContext({
+      money: 240,
+      connectedMajorCities: SEVEN_CONNECTED,
+      demands: [
+        makeDemand({
+          loadType: 'Beer',
+          deliveryCity: 'Bruxelles',
+          payout: 10,
+          isLoadOnTrain: true,
+          isDeliveryOnNetwork: true,
+          isSupplyOnNetwork: true,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          estimatedTurns: 1,
+        }),
+      ],
+    });
+    const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
+    expect(result).not.toBeNull();
+    // Should be a single deliver stop (no pickup — load is on train)
+    expect(result!.stops).toHaveLength(1);
+    expect(result!.stops[0]).toMatchObject({ action: 'deliver', loadType: 'Beer', city: 'Bruxelles' });
+    expect(result!.cashAtVictory).toBeGreaterThanOrEqual(250);
+    expect(result!.reasoning).toContain('[final-victory]');
+  });
+
+  // ── AC4: two-stop (pickup + deliver) route for 95f0aadc case ──────────
+  // Bot has 7 majors, 241M cash, Beer→Bruxelles 10M; supply and delivery on network.
+  it('AC4 — returns pickup+deliver route when supply and delivery on network and cash clears 250M', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const ctx = makeEndContext({
+      money: 241,
+      connectedMajorCities: SEVEN_CONNECTED,
+      demands: [
+        makeDemand({
+          loadType: 'Beer',
+          supplyCity: 'Frankfurt',
+          deliveryCity: 'Bruxelles',
+          payout: 10,
+          isLoadOnTrain: false,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          estimatedTurns: 2,
+        }),
+      ],
+    });
+    const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
+    expect(result).not.toBeNull();
+    expect(result!.stops.some((s) => s.action === 'pickup')).toBe(true);
+    expect(result!.stops.some((s) => s.action === 'deliver')).toBe(true);
+    expect(result!.cashAtVictory).toBeGreaterThanOrEqual(250);
+    expect(result!.majorsAtVictory).toBeGreaterThanOrEqual(7);
+  });
+
+  // ── AC5: connector cost factored when fewer than 7 majors ─────────────
+  it('AC5 — returns null when payout does not cover both cash gap AND connector cost', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    // 6 majors connected → need 1 more connector at cost 8M
+    // money=240, cashGap=10, connectorCost=8, need payout >= 18 but payout=9 → infeasible
+    const ctx = makeEndContext({
+      money: 240,
+      connectedMajorCities: SEVEN_CONNECTED.slice(0, 6),
+      unconnectedMajorCities: [{ cityName: 'Madrid', estimatedCost: 8 }],
+      demands: [
+        makeDemand({
+          loadType: 'Beer',
+          supplyCity: 'Frankfurt',
+          deliveryCity: 'Bruxelles',
+          payout: 9, // 240+9=249 < 250+8 connector cost → infeasible
+          isLoadOnTrain: false,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          estimatedTurns: 2,
+        }),
+      ],
+    });
+    const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
+    expect(result).toBeNull();
+  });
+
+  it('AC5 — returns route when payout covers cash gap AND connector cost', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    // 6 majors → connectorCost=8, money=240, cashGap=10, need payout>=18; payout=20 → feasible
+    const ctx = makeEndContext({
+      money: 240,
+      connectedMajorCities: SEVEN_CONNECTED.slice(0, 6),
+      unconnectedMajorCities: [{ cityName: 'Madrid', estimatedCost: 8 }],
+      demands: [
+        makeDemand({
+          loadType: 'Beer',
+          supplyCity: 'Frankfurt',
+          deliveryCity: 'Bruxelles',
+          payout: 20,
+          isLoadOnTrain: false,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          estimatedTurns: 2,
+        }),
+      ],
+    });
+    const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
+    expect(result).not.toBeNull();
+    expect(result!.cashAtVictory).toBeGreaterThanOrEqual(250);
+    expect(result!.majorConnectors).toContain('Madrid');
+  });
+
+  // ── AC6: tiebreak — higher cashAtVictory wins when equal turns ─────────
+  it('AC6 — picks route with higher cashAtVictory when estimatedTurns are equal', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const ctx = makeEndContext({
+      money: 241,
+      connectedMajorCities: SEVEN_CONNECTED,
+      demands: [
+        makeDemand({
+          cardIndex: 1,
+          loadType: 'Beer',
+          supplyCity: 'Frankfurt',
+          deliveryCity: 'Bruxelles',
+          payout: 10,
+          isLoadOnTrain: false,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          estimatedTurns: 2,
+        }),
+        makeDemand({
+          cardIndex: 2,
+          loadType: 'Coal',
+          supplyCity: 'Ruhr',
+          deliveryCity: 'Paris',
+          payout: 15,
+          isLoadOnTrain: false,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          estimatedTurns: 2, // same turns as Beer
+        }),
+      ],
+    });
+    const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
+    expect(result).not.toBeNull();
+    // Coal pays 15M → cashAtVictory = 241+15=256 vs Beer pays 10M → 241+10=251
+    // Same turns → higher cashAtVictory wins (Coal route)
+    expect(result!.totalPayout).toBe(15);
+  });
+
+  // ── AC7: train capacity respected ─────────────────────────────────────
+  it('AC7 — 2-load train never produces a 3-delivery candidate that exceeds capacity', () => {
+    // With Freight (cap=2), we should only get 1- or 2-delivery routes.
+    // A single demand of 9M won't clear 250 alone (money=241), but pair might.
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const demands = [
+      makeDemand({ cardIndex: 0, payout: 9, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
+      makeDemand({ cardIndex: 1, payout: 9, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
+      makeDemand({ cardIndex: 2, payout: 9, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
+    ];
+    const ctx = makeEndContext({ money: 232, demands });
+    // 232 + 9+9=18 = 250 → pair exactly covers 250, route feasible
+    const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
+    expect(result).not.toBeNull();
+    // The deliver stops count should be ≤ 2 (cap=2 for Freight)
+    const deliverCount = result!.stops.filter((s) => s.action === 'deliver').length;
+    expect(deliverCount).toBeLessThanOrEqual(2);
+  });
+
+  it('AC7 — 3-load train (HeavyFreight) can produce a 3-delivery candidate', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.HeavyFreight, loads: [] });
+    // Need 3 deliveries to reach 250M: money=241, each demand=3M. 3*3=9 → 241+9=250 exactly
+    const demands = [
+      makeDemand({ cardIndex: 0, payout: 3, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 1 }),
+      makeDemand({ cardIndex: 1, payout: 3, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 1 }),
+      makeDemand({ cardIndex: 2, payout: 3, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 1 }),
+    ];
+    const ctx = makeEndContext({ money: 241, demands });
+    const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
+    expect(result).not.toBeNull();
+    const deliverCount = result!.stops.filter((s) => s.action === 'deliver').length;
+    expect(deliverCount).toBeLessThanOrEqual(3);
+  });
+
+  // ── AC10: existing detectVictoryClinch tests unaffected ────────────────
+  // (The full detectVictoryClinch suite above confirms this — AC10 is implicit.)
+
+  // ── AC11: cheapestUnconnectedMajorConnectorCost still works as wrapper ─
+  // (Tested in the cheapestNUnconnectedMajorConnectorCost suite above.)
+
+  // ── Additional: returns null when no demand covers cash gap ────────────
+  it('returns null when no demand can satisfy the cash gap (payout too low)', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    // money=220, cashGap=30; only demand pays 5M → infeasible
+    const ctx = makeEndContext({
+      money: 220,
+      demands: [
+        makeDemand({
+          payout: 5,
+          isLoadOnTrain: false,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          estimatedTurns: 2,
+        }),
+      ],
+    });
+    expect(findFinalVictoryRoute(snapshot, ctx, makeEndMemory())).toBeNull();
+  });
+
+  // ── reasoning string contains [final-victory] on success ───────────────
+  it('includes [final-victory] in reasoning when returning a route', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const ctx = makeEndContext({
+      money: 241,
+      demands: [
+        makeDemand({
+          payout: 10,
+          isLoadOnTrain: false,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+          estimatedTurns: 2,
+        }),
+      ],
+    });
+    const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
+    expect(result).not.toBeNull();
+    expect(result!.reasoning).toMatch(/^\[final-victory\]/);
   });
 });
