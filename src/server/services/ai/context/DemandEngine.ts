@@ -808,11 +808,6 @@ export function computeAllDemandContexts(
       );
     }
   }
-  // JIRA-231: Log infeasible demand count once per turn (no per-demand noise)
-  const infeasibleCount = contexts.filter(c => c.isFeasible === false).length;
-  if (infeasibleCount > 0) {
-    console.log(`[DemandEngine] JIRA-231: ${infeasibleCount} demand(s) marked infeasible — supply/delivery cities saturated`);
-  }
   return contexts;
 }
 

@@ -16,7 +16,6 @@ import {
   GameContext,
   WorldSnapshot,
   VICTORY_CITY_COUNT,
-  GameState,
 } from '../../../shared/types/GameTypes';
 import { loadGridPoints, hexDistance } from './MapTopology';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
@@ -134,15 +133,13 @@ export function resolveBuildTarget(
 ): BuildTargetResult | null {
   // Victory build override — bot is close to winning but needs more major cities.
   //
-  // JIRA-241: Suppressed in `end` state. The end-state route-scoring rule in
-  // DeterministicTripPlanner already drives city progress by adding the cheapest
-  // unconnected-major connector cost to candidate routes that don't connect one.
-  // Running this parallel branch in `end` would conflict (route says go to A,
-  // build target says go to B). Once gameState latches to End at cash > 200M,
-  // VICTORY_BUILD_TRIGGER_M (230) is effectively dead — flagged for cleanup
-  // in TD-2 of the master spec.
+  // JIRA-243 reverts JIRA-241's End-state suppression. With End-state scoring's
+  // payoff cap at zero (cash ≥ 250M), every candidate scores negative and the
+  // planner picks zero-build same-network routes forever; the city count gets
+  // stuck. Letting the victory-build branch fire in End restores the pre-JIRA-241
+  // fallback: target the cheapest unconnected major and build toward it until
+  // 7 cities are connected.
   const isVictoryEligible =
-    context.gameState !== GameState.End &&
     context.money >= VICTORY_BUILD_TRIGGER_M &&
     context.connectedMajorCities.length < VICTORY_CITY_COUNT;
 
@@ -212,10 +209,6 @@ export function resolveBuildTarget(
       d => d.isLoadOnTrain && d.isDeliveryOnNetwork,
     );
     if (hasDeliverableOnNetwork) {
-      console.log(
-        `[routeHelpers] JIRA-165: Skipping build toward ${routeTarget.targetCity} — ` +
-        `bot has <5M and carries a load deliverable on-network. Deliver first.`,
-      );
       return null;
     }
   }

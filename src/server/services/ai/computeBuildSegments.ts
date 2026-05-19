@@ -228,7 +228,6 @@ export function computeBuildSegments(
 ): TrackSegment[] {
   const tag = '[computeBuild]';
   if (budget <= 0) {
-    console.log(`${tag} budget=${budget}, returning empty`);
     return [];
   }
 
@@ -261,7 +260,6 @@ export function computeBuildSegments(
     ferryEdgeKeys.add(`${bKey}-${aKey}`);
   }
 
-  console.log(`${tag} grid loaded: ${grid.size} points, budget=${budget}, maxSegments=${maxSegments}, ferries=${ferryEdges.length}`);
 
   // Determine starting frontier
   const trackEndpoints = extractTrackEndpoints(existingSegments);
@@ -289,10 +287,7 @@ export function computeBuildSegments(
     }
   }
 
-  console.log(`${tag} sources: ${sources.length} (endpoints=${trackEndpoints.length}, startPositions=${startPositions.length}, cityExpanded=${sources.length - rawSources.length})`);
-
   if (sources.length === 0) {
-    console.log(`${tag} no sources, returning empty`);
     return [];
   }
 
@@ -366,7 +361,6 @@ export function computeBuildSegments(
             t => sourceLandmass.has(makeKey(t.row, t.col))
           );
           effectiveTargets = [...localTargets, ...ferryInfo.departurePorts];
-          console.log(`${tag} ferry waypoint: ${crossWaterTargets.length} cross-water target(s) → ${ferryInfo.departurePorts.length} departure port(s)`);
         }
       }
     }
@@ -406,13 +400,10 @@ export function computeBuildSegments(
       }
     }
 
-    if (earlyTermPath) {
-      console.log(`${tag} findBuildPath: target reached at cost=${earlyTermPath.cost}, path=${earlyTermPath.path.length} nodes`);
-    } else {
+    if (!earlyTermPath) {
       // All findBuildPath calls returned empty — fall back to Dijkstra hex-distance
       console.warn(`${tag} target unreachable via findBuildPath, falling back to hex-distance Dijkstra`);
     }
-    console.log(`${tag} findBuildPath done (targeted, ${sources.length} sources × ${effectiveTargets.length} targets)`);
   }
 
   // ── Untargeted builds + fallback: multi-source Dijkstra ───────────────────
@@ -548,7 +539,6 @@ export function computeBuildSegments(
         }
       }
     }
-    console.log(`${tag} Dijkstra done: ${bestPaths.size} reachable destinations`);
   }
 
   // ── Path selection ─────────────────────────────────────────────────────────
@@ -558,9 +548,6 @@ export function computeBuildSegments(
     if (earlyTermPath) {
       // findBuildPath found cheapest route to target — use directly.
       bestPath = earlyTermPath;
-      const ep = bestPath.path[bestPath.path.length - 1];
-      const gridPt = grid.get(makeKey(ep.row, ep.col));
-      console.log(`${tag} target-aware: direct path to ${gridPt?.name ?? `(${ep.row},${ep.col})`}, cost=${bestPath.cost}, path=${bestPath.path.length} nodes, targets=${effectiveTargets.length} (${targetPositions!.length - effectiveTargets.length} already on network)`);
     } else {
       // Fallback: target unreachable via findBuildPath, use hex-distance scoring
       // against Dijkstra-explored destinations (already populated in bestPaths above).
@@ -586,11 +573,6 @@ export function computeBuildSegments(
         }
       }
 
-      if (bestPath) {
-        const ep = bestPath.path[bestPath.path.length - 1];
-        const gridPt = grid.get(makeKey(ep.row, ep.col));
-        console.log(`${tag} target-aware fallback: aiming for ${gridPt?.name ?? `(${ep.row},${ep.col})`}, dist=${bestTargetDist}`);
-      }
     }
   } else {
     // Original untargeted selection: most new segments, then cheapest
@@ -612,11 +594,8 @@ export function computeBuildSegments(
   }
 
   if (!bestPath) {
-    console.log(`${tag} no valid path found, returning empty`);
     return [];
   }
-
-  console.log(`${tag} best path: ${bestPath.path.length} nodes, cost=${bestPath.cost}, newSegments=${countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup)}`);
 
   // Valid cold-start positions: major cities + any explicitly provided startPositions.
   // JIRA-80: When startPositions include non-major city coords (e.g., Small City),
@@ -633,9 +612,7 @@ export function computeBuildSegments(
   // Extract up to maxSegments new segments from the path.
   // For targeted builds with a direct path, pick the first valid run (start of optimal route).
   const pickFirstRun = hasTargets && earlyTermPath !== null;
-  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts, ferryEdgeKeys, validColdStartKeys, majorCityLookup, pickFirstRun);
-  console.log(`${tag} extracted ${segments.length} segments, totalCost=${segments.reduce((s, seg) => s + seg.cost, 0)}`);
-  return segments;
+  return extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts, ferryEdgeKeys, validColdStartKeys, majorCityLookup, pickFirstRun);
 }
 
 /**

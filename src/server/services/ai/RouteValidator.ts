@@ -125,12 +125,6 @@ export class RouteValidator {
     const feasibleStops = validations.filter(v => v.feasible).map(v => v.stop);
     const errors = validations.filter(v => !v.feasible).map(v => v.error!);
 
-    // Log validation results
-    for (const v of validations) {
-      const status = v.feasible ? 'OK' : `INFEASIBLE: ${v.error}`;
-      console.log(`${tag} ${v.stop.action}(${v.stop.loadType}@${v.stop.city}): ${status}`);
-    }
-
     if (feasibleStops.length === route.stops.length) {
       // All stops feasible
       // Check for marginal budget — warn but accept
@@ -149,7 +143,6 @@ export class RouteValidator {
     }
 
     // Some stops pruned — build a pruned route
-    console.log(`${tag} Pruned ${route.stops.length - feasibleStops.length}/${route.stops.length} stops`);
     const prunedRoute: StrategicRoute = {
       ...route,
       stops: feasibleStops,

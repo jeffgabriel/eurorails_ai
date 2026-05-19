@@ -76,41 +76,31 @@ const LOG_PREFIX = '[NetworkBuildAnalyzer]';
 export class NetworkBuildAnalyzer {
   /** Check whether network analysis should be skipped (early game / too few segments) */
   static shouldSkipAnalysis(existingSegments: TrackSegment[]): boolean {
-    if (existingSegments.length < MIN_SEGMENTS_FOR_ANALYSIS) {
-      console.log(`${LOG_PREFIX} Skipping analysis — network too small (${existingSegments.length} segments < ${MIN_SEGMENTS_FOR_ANALYSIS})`);
-      return true;
-    }
-    return false;
+    return existingSegments.length < MIN_SEGMENTS_FOR_ANALYSIS;
   }
 
   /** Log nearest-network-point search results */
   static logNearestPointResult(
-    targetCity: string,
-    result: NearestNetworkResult | null,
-    maxDistance: number,
+    _targetCity: string,
+    _result: NearestNetworkResult | null,
+    _maxDistance: number,
   ): void {
-    if (result) {
-      console.log(`${LOG_PREFIX} Nearest network point to ${targetCity}: (${result.point.row},${result.point.col}) at ${result.distance} segments, buildCost=${result.buildCost}M`);
-    } else {
-      console.log(`${LOG_PREFIX} No network point within ${maxDistance} segments of ${targetCity}`);
-    }
+    // Logging removed — verbose narration
   }
 
   /** Log parallel path detection results */
-  static logParallelDetection(detection: ParallelDetection): void {
-    if (detection.isParallel && detection.suggestedWaypoint) {
-      console.log(`${LOG_PREFIX} Parallel path detected: ${detection.parallelSegmentCount} segments within 1-2 hexes of existing track near (${detection.suggestedWaypoint.row},${detection.suggestedWaypoint.col})`);
-    }
+  static logParallelDetection(_detection: ParallelDetection): void {
+    // Logging removed — verbose narration
   }
 
   /** Log reroute decision */
-  static logRerouteDecision(waypoint: GridCoord, savedSegments: number): void {
-    console.log(`${LOG_PREFIX} Rerouting build through existing track at (${waypoint.row},${waypoint.col}) — saves ${savedSegments} segments`);
+  static logRerouteDecision(_waypoint: GridCoord, _savedSegments: number): void {
+    // Logging removed — verbose narration
   }
 
   /** Log reroute fallback when rerouted path exceeds budget */
-  static logRerouteFallback(cost: number, budget: number): void {
-    console.log(`${LOG_PREFIX} Rerouted path exceeds budget (${cost}M > ${budget}M), using original path`);
+  static logRerouteFallback(_cost: number, _budget: number): void {
+    // Logging removed — verbose narration
   }
 
   /** Log unexpected errors during analysis (graceful degradation) */
@@ -183,7 +173,6 @@ export class NetworkBuildAnalyzer {
             ferryCost: ferry.cost,
             destinationSide: { row: destination.row, col: destination.col },
           });
-          console.log(`${LOG_PREFIX} Ferry near-miss: ${ferry.name} — network at (${port.row},${port.col}) is 0 segments from port, spurCost=0M`);
           continue;
         }
 
@@ -204,7 +193,6 @@ export class NetworkBuildAnalyzer {
             ferryCost: ferry.cost,
             destinationSide: { row: destination.row, col: destination.col },
           });
-          console.log(`${LOG_PREFIX} Ferry near-miss: ${ferry.name} — network at (${result.point.row},${result.point.col}) is ${result.distance} segments from port, spurCost=${result.buildCost}M`);
         }
       }
     }
@@ -255,7 +243,6 @@ export class NetworkBuildAnalyzer {
           spurCost: result.buildCost,
           spurSegments: result.distance,
         });
-        console.log(`${LOG_PREFIX} Spur opportunity: ${city} is ${result.distance} segments from network at (${result.point.row},${result.point.col}), cost=${result.buildCost}M`);
       }
     }
 
@@ -293,8 +280,6 @@ export class NetworkBuildAnalyzer {
 
     // Determine if the build is worthwhile
     const isWorthwhile = turnsSaved > 0 && turnsSaved * valuePerTurn > option.buildCost;
-
-    console.log(`${LOG_PREFIX} Evaluating build: turnsSaved=${turnsSaved.toFixed(1)}, buildCost=${option.buildCost}M, valuePerTurn=${valuePerTurn}M, isWorthwhile=${isWorthwhile}`);
 
     return {
       turnsSaved,
@@ -646,7 +631,6 @@ export class NetworkBuildAnalyzer {
         // Suggest rerouting through the midpoint of existing track in this region
         const midIdx = Math.floor(entry.points.length / 2);
         const suggestedWaypoint = entry.points[midIdx];
-        console.log(`${LOG_PREFIX} Region duplication detected: region (${regionRow},${regionCol}) has ${entry.count} segments, proposed path passes through`);
         return {
           isDuplicate: true,
           region: { row: regionRow, col: regionCol },

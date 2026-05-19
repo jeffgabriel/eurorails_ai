@@ -119,7 +119,6 @@ export class NewRoutePlanner {
     // When the bot has no active route but can immediately deliver, execute deliveries
     // against the DB now so TripPlanner sees fresh demand cards when planning next trip.
     if (context.canDeliver.length > 0) {
-      console.log(`${tag} [JIRA-170] Auto-delivering ${context.canDeliver.length} load(s) before LLM consultation`);
       for (const opp of context.canDeliver) {
         const deliverPlan: TurnPlanDeliverLoad = {
           type: AIActionType.DeliverLoad,
@@ -138,7 +137,6 @@ export class NewRoutePlanner {
               payment: deliverResult.payment ?? opp.payout,
               cardId: opp.cardIndex,
             });
-            console.log(`${tag} [JIRA-170] Auto-delivered ${opp.loadType} at ${opp.deliveryCity} for ${deliverResult.payment ?? opp.payout}M`);
           } else {
             console.warn(`${tag} [JIRA-170] Auto-delivery of ${opp.loadType} at ${opp.deliveryCity} failed: ${deliverResult.error ?? 'unknown error'}`);
           }
@@ -153,7 +151,6 @@ export class NewRoutePlanner {
         try {
           snapshot = await capture(gameId, botPlayerId);
           context = await ContextBuilder.build(snapshot, skillLevel, gridPoints, memory);
-          console.log(`${tag} [JIRA-170] Refreshed snapshot and context after auto-delivery`);
         } catch (refreshErr) {
           console.warn(`${tag} [JIRA-170] Failed to refresh context after auto-delivery: ${(refreshErr as Error).message}`);
         }
@@ -197,7 +194,6 @@ export class NewRoutePlanner {
     // In practice this fires when carry-loads exist but no affordable new card is available.
     // The turn will proceed to movement/build phases without a new plan being forced.
     if (!tripResult.route && tripResult.selection?.fallbackReason === 'keep_current_plan') {
-      console.log(`${tag} [NewRoutePlanner] keep_current_plan: no new options but carry-loads committed; skip replan`);
       return {
         decision: {
           plan: { type: AIActionType.PassTurn },
@@ -235,7 +231,6 @@ export class NewRoutePlanner {
 
     if (routeResult.route) {
       activeRoute = routeResult.route;
-      console.log(`${tag} Trip planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
 
       // ── D4: JIRA-105 — Consume upgradeOnRoute from LLM route plan ──
       if (activeRoute.upgradeOnRoute) {
@@ -257,7 +252,6 @@ export class NewRoutePlanner {
         const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
         const botCity = gridPointsMap.get(posKey)?.name;
         if (botCity) {
-          console.log(`${tag} JIRA-89: Dead loads detected: ${deadLoads.join(', ')} — dropping at ${botCity}`);
           for (const load of deadLoads) {
             deadLoadDropPlans.push({ type: AIActionType.DropLoad, load, city: botCity });
           }
@@ -296,8 +290,6 @@ export class NewRoutePlanner {
         routePickupCount > effectiveFreeSlots &&
         skillLevel !== BotSkillLevel.Easy
       ) {
-        console.log(`${tag} JIRA-92: Cargo conflict — route needs ${routePickupCount} pickup slots, only ${effectiveFreeSlots} free`);
-
         // ── D6a: JIRA-105b — Upgrade-before-drop check ──
         // Before asking to drop, check if upgrading gives enough capacity
         let upgradeBeforeDropHandled = false;
@@ -324,7 +316,6 @@ export class NewRoutePlanner {
           if (upgradeOptions.length > 0) {
             // Sort by cost ascending (cheapest first)
             upgradeOptions.sort((a, b) => a.cost - b.cost);
-            console.log(`${tag} JIRA-105b: Upgrade-before-drop check — ${routePickupCount} pickups needed, ${effectiveFreeSlots} free slots, upgrade to ${upgradeOptions[0].targetTrain} available`);
 
             // Calculate total route payout
             const totalRoutePayout = activeRoute.stops
@@ -341,7 +332,6 @@ export class NewRoutePlanner {
                 // Validate the target train is in our options
                 const matchedOption = upgradeOptions.find(o => o.targetTrain === upgradeResult.targetTrain);
                 if (matchedOption) {
-                  console.log(`${tag} JIRA-105b: Upgrade-before-drop → upgrading to ${upgradeResult.targetTrain} instead of dropping — ${upgradeResult.reasoning}`);
                   pendingUpgradeAction = {
                     type: AIActionType.UpgradeTrain,
                     targetTrain: matchedOption.targetTrain,
@@ -353,7 +343,6 @@ export class NewRoutePlanner {
                 }
               } else {
                 const skipReason = upgradeResult?.reasoning ?? 'LLM returned null';
-                console.log(`${tag} JIRA-105b: Upgrade-before-drop → skip — ${skipReason}`);
                 // JIRA-161: Capture suppression reason for debug overlay
                 upgradeSuppressionReason = `LLM chose drop over upgrade: ${skipReason}`;
               }
@@ -377,14 +366,11 @@ export class NewRoutePlanner {
               const conflictResult = await brain.evaluateCargoConflict(cargoPrompt, snapshot, context);
 
               if (conflictResult?.action === 'drop' && conflictResult.dropLoad) {
-                console.log(`${tag} JIRA-92: evaluateCargoConflict → drop "${conflictResult.dropLoad}" — ${conflictResult.reasoning}`);
                 // Remove the load from snapshot so downstream sees updated capacity
                 const dropIndex = snapshot.bot.loads.indexOf(conflictResult.dropLoad);
                 if (dropIndex >= 0) {
                   snapshot.bot.loads.splice(dropIndex, 1);
                 }
-              } else {
-                console.log(`${tag} JIRA-92: evaluateCargoConflict → keep — ${conflictResult?.reasoning ?? 'LLM returned null'}`);
               }
             } catch (err) {
               console.warn(`${tag} JIRA-92: evaluateCargoConflict LLM call failed:`, err instanceof Error ? err.message : err);
@@ -407,7 +393,6 @@ export class NewRoutePlanner {
       if (deadLoadDropPlans.length > 0) {
         const routeSteps = execPlan.type === 'MultiAction' ? execPlan.steps : [execPlan];
         execPlan = { type: 'MultiAction' as const, steps: [...deadLoadDropPlans, ...routeSteps] };
-        console.log(`${tag} JIRA-89: Prepended ${deadLoadDropPlans.length} dead load drop(s) to route plan`);
       }
 
       decision = {
@@ -444,7 +429,6 @@ export class NewRoutePlanner {
       const fallbackContext = { ...context, consecutiveLlmFailures: memory.consecutiveLlmFailures ?? 0 };
       const fallback = await ActionResolver.heuristicFallback(fallbackContext, snapshot, { llmFailed: true });
       if (fallback.success && fallback.plan && fallback.plan.type !== AIActionType.PassTurn) {
-        console.log(`${tag} [heuristic] Fallback produced ${fallback.plan.type}`);
         decision = {
           plan: fallback.plan,
           reasoning: `[heuristic-fallback] LLM planning failed — heuristic produced ${fallback.plan.type}`,
@@ -530,7 +514,6 @@ export class NewRoutePlanner {
       return { action: null, reason: `Upgrade blocked: ${reason}` };
     }
 
-    console.log(`${tag} JIRA-105: Consuming upgradeOnRoute → ${targetTrain} (cost=${cost}M)`);
     return { action: { type: AIActionType.UpgradeTrain, targetTrain, cost } };
   }
 }

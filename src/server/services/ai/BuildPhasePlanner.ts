@@ -172,13 +172,9 @@ export class BuildPhasePlanner {
     if (!buildTarget) {
       trace.build.skipped = true;
       trace.build.target = null;
-      console.log(`${tag} Phase B: no build target — skipping build`);
     } else {
       trace.build.target = buildTarget.targetCity;
       trace.build.skipped = false;
-      console.log(
-        `${tag} Phase B: build target "${buildTarget.targetCity}" (isVictoryBuild=${buildTarget.isVictoryBuild})`,
-      );
 
       // AC13(b): Build direction must agree with move direction
       TurnExecutorPlanner.assertBuildDirectionAgreesWithMove(

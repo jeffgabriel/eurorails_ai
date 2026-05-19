@@ -53,7 +53,6 @@ async function loadMemoryFromDB(gameId: string, playerId: string): Promise<BotMe
       console.warn(`[BotMemory] Unexpected bot_memory type for player ${playerId}: ${typeof raw}`);
       return defaultState();
     }
-    console.log(`[BotMemory] Loaded memory from DB for player ${playerId} in game ${gameId}`);
     return raw as BotMemoryState;
   } catch (err) {
     console.error(`[BotMemory] Failed to load memory from DB for player ${playerId}:`, err);

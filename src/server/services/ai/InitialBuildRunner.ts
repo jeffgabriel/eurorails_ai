@@ -78,7 +78,6 @@ export class InitialBuildRunner {
       demandScores.set(`${d.loadType}:${d.deliveryCity}`, d.demandScore);
     }
     const buildPlan = InitialBuildPlanner.planInitialBuild(snapshot, gridPoints, demandScores);
-    console.log(`${tag} Initial build: chose ${buildPlan.route.length > 2 ? 'double' : 'single'} delivery, startingCity=${buildPlan.startingCity}, payout=${buildPlan.totalPayout}M, buildCost=${buildPlan.totalBuildCost}M`);
 
     let activeRoute = {
       stops: buildPlan.route,

@@ -332,7 +332,6 @@ export class TurnExecutorPlanner {
     // Check build budget
     const remainingBudget = Math.min(TURN_BUILD_BUDGET - context.turnBuildCost, snapshot.bot.money);
     if (remainingBudget <= 0) {
-      console.log(`${tag} Phase B: no build budget (turnBuildCost=${context.turnBuildCost}, money=${snapshot.bot.money})`);
       return null;
     }
 
@@ -349,9 +348,6 @@ export class TurnExecutorPlanner {
         targetCity,
         trainSpeed,
         buildTargetStopIndex >= 0 ? buildTargetStopIndex : undefined,
-      );
-      console.log(
-        `${tag} JIT gate: ${deferResult.deferred ? 'DEFERRED' : 'BUILD'} (reason=${deferResult.reason}, runway=${deferResult.effectiveRunway.toFixed(1)})`,
       );
       if (deferResult.deferred) {
         trace.build.skipped = true;
@@ -386,7 +382,6 @@ export class TurnExecutorPlanner {
 
     // ── Heuristic fallback (merged near-miss + demand-based) ─────────────
     // Single code path: build toward resolveBuildTarget().targetCity (R7)
-    console.log(`${tag} Heuristic fallback: building toward "${targetCity}"`);
     try {
       const heuristicResult = await ActionResolver.resolve(
         {
@@ -554,9 +549,6 @@ export class TurnExecutorPlanner {
     while (idx < route.stops.length) {
       const stop = route.stops[idx];
       if (isStopComplete(stop, idx, route.stops, context)) {
-        console.log(
-          `[TurnExecutorPlanner] Skipping completed stop: ${stop.action}(${stop.loadType}@${stop.city})`,
-        );
         idx++;
       } else {
         break;

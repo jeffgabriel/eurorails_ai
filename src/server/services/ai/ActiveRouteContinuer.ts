@@ -67,7 +67,6 @@ export class ActiveRouteContinuer {
     memory: BotMemoryState,
   ): Promise<Pick<Stage3Result, 'decision' | 'activeRoute' | 'routeWasCompleted' | 'routeWasAbandoned' | 'hasDelivery' | 'execCompositionTrace' | 'pendingUpgradeAction' | 'upgradeSuppressionReason'>> {
     // ── Auto-execute from active route (no LLM call) ──
-    console.log(`${tag} Active route: stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}`);
     const execResult = await TurnExecutorPlanner.execute(activeRoute, snapshot, context, brain, gridPoints);
 
     // Convert TurnExecutorResult.plans[] to a single TurnPlan
@@ -146,13 +145,10 @@ export class ActiveRouteContinuer {
 
     if (execResult.routeComplete) {
       routeWasCompleted = true;
-      console.log(`${tag} Route completed!`);
     } else if (execResult.routeAbandoned) {
       routeWasAbandoned = true;
-      console.log(`${tag} Route abandoned: ${execResult.compositionTrace.a2.terminationReason}`);
     } else if (isStuck) {
       routeWasAbandoned = true;
-      console.log(`${tag} Route abandoned: stuck for ${turnsOnRoute + 1} turns with no progress (a2.terminationReason=${execResult.compositionTrace.a2.terminationReason || 'none'})`);
     } else {
       // Save updated route state (advanced stop/phase)
       activeRoute = execResult.updatedRoute;

@@ -93,7 +93,6 @@ export class MovementPhasePlanner {
 
     // ── Route complete check ─────────────────────────────────────────────
     if (activeRoute.currentStopIndex >= activeRoute.stops.length) {
-      console.log(`${tag} Route complete — all stops done`);
       trace.a2.terminationReason = 'route_complete';
       return MovementPhasePlanner.makeResult(activeRoute, [], false, null, 0, snapshot, context, true, false, undefined, undefined, undefined, undefined, undefined);
     }
@@ -135,8 +134,6 @@ export class MovementPhasePlanner {
 
       // ── Already at the stop city? Execute the action ─────────────────
       if (TurnExecutorPlanner.isBotAtCity(context, targetCity)) {
-        console.log(`${tag} At ${targetCity}, executing ${currentStop.action}`);
-
         const _stopActionStart = Date.now();
         const actionResult = await TurnExecutorPlanner.executeStopAction(
           currentStop,
@@ -180,10 +177,6 @@ export class MovementPhasePlanner {
               const earlyPickupResult = await TurnExecutor.executePlan(pickupPlan, snapshot);
               if (earlyPickupResult.success) {
                 (pickupPlan as { preExecuted?: boolean }).preExecuted = true;
-                console.log(
-                  `${tag} JIRA-220 early pickup execution succeeded ` +
-                  `(${pickupPlan.load}@${pickupPlan.city}). DB committed; deliver early-exec can now succeed.`,
-                );
               } else {
                 console.warn(
                   `${tag} JIRA-220 early pickup execution failed ` +
@@ -201,7 +194,6 @@ export class MovementPhasePlanner {
           }
 
           trace.pickups.push({ load: currentStop.loadType, city: targetCity });
-          console.log(`${tag} Picked up ${currentStop.loadType} at ${targetCity}. Advancing stop index (no reorder — ADR-4).`);
 
           const stopsBeforePickup = activeRoute.stops;
           activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
@@ -220,7 +212,6 @@ export class MovementPhasePlanner {
             activeRoute, targetCity, snapshot, context, brain, gridPoints, tag,
           );
         } else if (currentStop.action === 'drop') {
-          console.log(`${tag} Dropped ${currentStop.loadType} at ${targetCity}. Advancing stop index.`);
           activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
           activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
 
@@ -234,19 +225,13 @@ export class MovementPhasePlanner {
           deliveriesThisTurn++;
           trace.deliveries.push({ load: currentStop.loadType, city: targetCity });
 
-          console.log(`${tag} Context updated: loads=[${context.loads.join(',')}]`);
-
           // Filter the just-delivered demand from context.demands
           const deliveredLoadType = currentStop.loadType;
           const deliveredCity = targetCity;
           const deliveredCardId = currentStop.demandCardId;
-          const prevDemandCount = context.demands.length;
           context.demands = context.demands.filter(d =>
             !(d.loadType === deliveredLoadType && d.deliveryCity === deliveredCity),
           );
-          if (context.demands.length < prevDemandCount) {
-            console.log(`${tag} Filtered delivered demand (${deliveredLoadType}→${deliveredCity}) from context.demands`);
-          }
 
           // Filter from snapshot.bot.resolvedDemands
           if (snapshot.bot.resolvedDemands) {
@@ -270,11 +255,6 @@ export class MovementPhasePlanner {
                 (deliveryPlan as { preExecuted?: boolean }).preExecuted = true;
                 snapshot.bot.money = earlyExecResult.remainingMoney;
                 context.money = snapshot.bot.money;
-                console.log(
-                  `${tag} JIRA-173: Early delivery execution succeeded ` +
-                  `(${deliveryPlan.load}→${deliveryPlan.city}, payment=${earlyExecResult.payment ?? 0}M). ` +
-                  `Snapshot.money updated to ${snapshot.bot.money}M.`,
-                );
               } else {
                 console.warn(
                   `${tag} JIRA-173: Early delivery execution failed (${earlyExecResult.error ?? 'unknown error'}). ` +
@@ -299,14 +279,6 @@ export class MovementPhasePlanner {
               context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
               context.canDeliver = ContextBuilder.rebuildCanDeliver(freshSnapshot, gridPoints);
               snapshot.bot.resolvedDemands = freshSnapshot.bot.resolvedDemands;
-              console.log(
-                `${tag} JIRA-165: Refreshed demands from DB after delivery — ` +
-                `${context.demands.length} demand(s) now in context`,
-              );
-              console.log(
-                `${tag} JIRA-165: Refreshed canDeliver after delivery — ` +
-                `${context.canDeliver.length} opportunit(ies) now in context`,
-              );
             } catch (refreshErr) {
               console.warn(
                 `${tag} JIRA-165: Demand refresh failed (${(refreshErr as Error).message}), ` +
@@ -314,8 +286,6 @@ export class MovementPhasePlanner {
               );
             }
           }
-
-          console.log(`${tag} Delivered ${currentStop.loadType} at ${targetCity}.`);
 
           // Advance stop index
           activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
@@ -342,11 +312,8 @@ export class MovementPhasePlanner {
           const nextStopAfterDelivery = activeRoute.stops[activeRoute.currentStopIndex];
           const nextStopIsSameCity = !!nextStopAfterDelivery && nextStopAfterDelivery.city === targetCity;
           if (nextStopIsSameCity && !isRouteImpossible(activeRoute, context)) {
-            console.log(`${tag} Deferring post-delivery replan — next stop (${nextStopAfterDelivery.action} ${nextStopAfterDelivery.loadType}) also at ${targetCity}.`);
             continue;
           }
-
-          console.log(`${tag} Triggering post-delivery replan.`);
           // Delegate post-delivery replan to PostDeliveryReplanner
           const _replanStart = Date.now();
           const replanResult = await PostDeliveryReplanner.replan(
@@ -394,7 +361,6 @@ export class MovementPhasePlanner {
       // ── Stop city on network but bot is not there? → MOVE ────────────
       if (context.citiesOnNetwork.includes(targetCity)) {
         lastMoveTargetCity = targetCity;
-        console.log(`${tag} ${targetCity} is on network, moving (budget=${remainingBudget})`);
 
         const _moveResolveStart = Date.now();
         const moveResult = await ActionResolver.resolveMove(
@@ -428,7 +394,6 @@ export class MovementPhasePlanner {
           const cityName = arrivedGp?.city?.name ?? undefined;
           context.position = { row: dest.row, col: dest.col, city: cityName };
           snapshot.bot.position = { row: dest.row, col: dest.col };
-          console.log(`${tag} Context updated: position=${dest.row},${dest.col} (${cityName ?? 'no city'})`);
         }
 
         // Ferry arrival guard takes precedence over arrival stop action (R5).
@@ -437,7 +402,6 @@ export class MovementPhasePlanner {
           const destTerrain = gridPointMap.get(`${dest.row},${dest.col}`)?.terrain;
           if (destTerrain === TerrainType.FerryPort) {
             trace.a2.terminationReason = 'ferry_arrival';
-            console.log(`${tag} [Ferry] Turn ends at ferry port (${dest.row},${dest.col}) — bot must wait until next turn to cross`);
             break;
           }
         }
@@ -449,7 +413,6 @@ export class MovementPhasePlanner {
           // isBotAtCity branch handles the stop action (R1, R2, R3).
           if (TurnExecutorPlanner.isBotAtCity(context, targetCity)) {
             trace.a2.terminationReason = 'arrival_stop_action';
-            console.log(`${tag} Arrived at stop city ${targetCity} on last milepost — executing stop action this turn`);
             pendingArrivalStopAction = true;
             continue;
           }
@@ -461,14 +424,12 @@ export class MovementPhasePlanner {
       }
 
       // ── Stop city not on network → A3 build-origin preview, then Phase B ─
-      console.log(`${tag} ${targetCity} not on network. Attempting A3 build-origin preview move before Phase B.`);
       trace.a2.terminationReason = 'stop_city_not_on_network';
 
       if (remainingBudget > 0) {
         const a3BuildTarget = resolveBuildTarget(activeRoute, context);
         if (!a3BuildTarget) {
           trace.a3.terminationReason = 'no_build_target';
-          console.log(`${tag} A3 skipped — reason=no_build_target`);
         } else {
           const grid = loadGridPointsMap();
           let a3TargetCoord: { row: number; col: number } | null = null;
@@ -481,7 +442,6 @@ export class MovementPhasePlanner {
 
           if (!a3TargetCoord) {
             trace.a3.terminationReason = 'build_dijkstra_failed';
-            console.log(`${tag} A3 skipped — reason=build_dijkstra_failed (target city "${a3BuildTarget.targetCity}" not in grid)`);
           } else {
             const a3OccupiedEdges = new Set<string>();
             for (const pt of (snapshot.allPlayerTracks ?? [])) {
@@ -505,7 +465,6 @@ export class MovementPhasePlanner {
 
             if (a3OriginResult.length === 0) {
               trace.a3.terminationReason = 'build_dijkstra_failed';
-              console.log(`${tag} A3 skipped — reason=build_dijkstra_failed (Dijkstra returned no segments toward "${a3BuildTarget.targetCity}")`);
             } else {
               const previewBuildOrigin = a3OriginResult[0].from;
               const currentPos = context.position;
@@ -516,7 +475,6 @@ export class MovementPhasePlanner {
                 previewBuildOrigin.col === currentPos.col
               ) {
                 trace.a3.terminationReason = 'origin_is_current_position';
-                console.log(`${tag} A3 skipped — reason=origin_is_current_position (bot already at build origin (${previewBuildOrigin.row},${previewBuildOrigin.col}))`);
               } else {
                 const _a3MoveStart = Date.now();
                 const a3MoveResult = await ActionResolver.resolveMove(
@@ -539,13 +497,9 @@ export class MovementPhasePlanner {
                   trace.moveBudget.used = context.speed - remainingBudget;
                   trace.a3.movePreprended = true;
                   trace.a3.terminationReason = 'a3_move_success';
-                  console.log(
-                    `${tag} A3 move toward build origin (${previewBuildOrigin.row},${previewBuildOrigin.col}) for "${a3BuildTarget.targetCity}" — reason=a3_move_success (${a3Miles}mp consumed, remaining=${remainingBudget})`,
-                  );
                 } else {
                   const moveError = (a3MoveResult as { success: false; error?: string }).error ?? 'unknown';
                   trace.a3.terminationReason = `a3_move_failed:${moveError}`;
-                  console.log(`${tag} A3 skipped — reason=a3_move_failed:${moveError}`);
                 }
               }
             }
@@ -563,7 +517,6 @@ export class MovementPhasePlanner {
 
     // ── Route complete check (post-loop) ─────────────────────────────────
     if (activeRoute.currentStopIndex >= activeRoute.stops.length) {
-      console.log(`${tag} Route complete after movement loop`);
       trace.a2.terminationReason = 'route_complete';
       return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, true, false, replanLlmLog, replanSystemPrompt, replanUserPrompt, pendingUpgradeAction, upgradeSuppressionReason);
     }
@@ -633,7 +586,6 @@ export class MovementPhasePlanner {
     });
 
     if (earlyPassCandidates.length === 0) {
-      console.log(`[RouteEnrichmentAdvisor] no viable candidates at ${currentCity}`);
       return route;
     }
 
@@ -663,7 +615,6 @@ export class MovementPhasePlanner {
     });
 
     if (viableCandidates.length === 0) {
-      console.log(`[RouteEnrichmentAdvisor] no viable candidates at ${currentCity}`);
       return route;
     }
 

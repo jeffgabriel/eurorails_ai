@@ -243,7 +243,6 @@ export class ActionResolver {
             return dist <= distanceThreshold;
           });
           if (biasedSources.length > 0) {
-            console.log(`[ActionResolver] Target-biased source selection: ${biasedSources.length}/${startPositions.length} sources within ${distanceThreshold} of target ${targetCity}`);
             startPositions = biasedSources;
           }
         }
@@ -280,9 +279,6 @@ export class ActionResolver {
       // The flag-off path below is byte-for-byte identical to the pre-change implementation.
       // JIRA-203: Compute saturated city keys so the resolver excludes paths through capped cities.
       const saturatedCityKeys = TurnValidator.computeSaturatedCityKeys(snapshot);
-      if (saturatedCityKeys.size > 0) {
-        console.log(`[ActionResolver] JIRA-203: ${saturatedCityKeys.size} saturated city/cities excluded from build paths`);
-      }
       resolverOutcome = BuildRouteResolver.resolve({
         waypoints,
         startPositions,
@@ -294,7 +290,6 @@ export class ActionResolver {
         saturatedCityKeys,
       });
       segments = resolverOutcome.selected.segments;
-      console.log(`[ActionResolver] BuildRouteResolver selected=${resolverOutcome.selected.id} ruleBranch=${resolverOutcome.ruleBranch} cost=${resolverOutcome.selected.totalCost}`);
     } else if (waypoints.length > 0) {
       segments = [];
       let remainingBudget = budget;
@@ -396,7 +391,6 @@ export class ActionResolver {
           if (duplication) {
             // Re-run with suggested waypoint through dense existing track region
             const rerouteStartPositions = [...startPositions, duplication.suggestedWaypoint];
-            console.log(`[ActionResolver] Region duplication reroute: waypoint (${duplication.suggestedWaypoint.row},${duplication.suggestedWaypoint.col}) in dense region`);
 
             const reroutedSegments = computeBuildSegments(
               rerouteStartPositions,
@@ -542,7 +536,6 @@ export class ActionResolver {
       const trainType = snapshot.bot.trainType as TrainType;
       const rawSpeed = TRAIN_PROPERTIES[trainType]?.speed ?? 9;
       speed = Math.ceil(rawSpeed / 2);
-      console.log(`[Ferry] Crossing ${ferryCrossing.ferryName}: (${skipFerryPortKey}) → (${fromPosition.row},${fromPosition.col}) — half speed (${speed})`);
 
       // After ferry teleportation, check if the bot landed at the target city.
       // Dublin is both a Small City and a ferry endpoint — when the target IS the
@@ -556,7 +549,6 @@ export class ActionResolver {
           && ferryGrid.get(`${tp.row},${tp.col}`)?.terrain !== TerrainType.FerryPort,
       );
       if (atTargetAfterFerry) {
-        console.log(`[Ferry] Bot arrived at ${targetDescription} via ferry crossing — zero movement`);
         const plan: TurnPlanMoveTrain = {
           type: AIActionType.MoveTrain,
           path: [fromPosition],

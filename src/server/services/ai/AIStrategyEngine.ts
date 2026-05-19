@@ -40,6 +40,7 @@ import {
   TurnPlanUpgradeTrain,
   TRAIN_PROPERTIES,
   TrainType,
+  GameState,
   InitialBuildPlan,
 } from '../../../shared/types/GameTypes';
 import { db } from '../../db/index';
@@ -59,6 +60,7 @@ import { InitialBuildRunner } from './InitialBuildRunner';
 import { NewRoutePlanner } from './NewRoutePlanner';
 import { UPGRADE_DELIVERY_THRESHOLD } from './context/UpgradeGatingConstants';
 import { RECENT_DELIVERIES_WINDOW } from './StrategicConstants';
+import { detectVictoryClinch } from './victoryRules';
 
 /**
  * @deprecated Use UPGRADE_DELIVERY_THRESHOLD from UpgradeGatingConstants instead.
@@ -89,6 +91,8 @@ export interface BotTurnResult {
   demandRanking?: Array<{ loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean; efficiencyPerTurn?: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number; ferryRequired?: boolean; isFeasible?: boolean; infeasibleReason?: string }>;
   // JIRA-32: Strategic context and composition trace for NDJSON game log
   gamePhase?: string;
+  /** JIRA-243 (AC3): Persistent bot game phase for post-game traceability. */
+  gameState?: GameState;
   cash?: number;
   trainType?: string;
   compositionTrace?: CompositionTrace;
@@ -197,13 +201,9 @@ export class AIStrategyEngine {
     try {
       // ── Stage 1: Capture world snapshot ──
       snapshot = await capture(gameId, botPlayerId);
-      console.log(`${tag} Snapshot: status=${snapshot.gameStatus}, money=${snapshot.bot.money}, segments=${snapshot.bot.existingSegments.length}, position=${snapshot.bot.position ? `${snapshot.bot.position.row},${snapshot.bot.position.col}` : 'none'}, loads=[${snapshot.bot.loads.join(',')}]`);
-
       // Auto-place bot if no position and has track (skip during initialBuild — no train placement yet)
       if (!snapshot.bot.position && snapshot.bot.existingSegments.length > 0 && snapshot.gameStatus !== 'initialBuild') {
         await AIStrategyEngine.autoPlaceBot(snapshot, memory.activeRoute);
-        const placed = snapshot.bot.position as { row: number; col: number } | null;
-        console.log(`${tag} Auto-placed bot at ${placed ? `${placed.row},${placed.col}` : 'failed'}`);
       }
 
       const botConfig = snapshot.bot.botConfig as BotConfig | null;
@@ -224,16 +224,9 @@ export class AIStrategyEngine {
       // enRoutePickups, previousTurnSummary) are computed correctly in a single pass.
       let context = await ContextBuilder.build(snapshot, skillLevel, gridPoints, memory);
 
-      console.log(`${tag} Context: canDeliver=${context.canDeliver.length}, canPickup=${context.canPickup.length}, canBuild=${context.canBuild}, canUpgrade=${context.canUpgrade}, reachable=${context.reachableCities.length} cities, onNetwork=${context.citiesOnNetwork.length} cities`);
-
       // INF-002: Zero-money gate — warn when bot has no funds
       AIStrategyEngine.zeroMoneyGate(tag, snapshot, context);
 
-      if (context.phase) {
-        const uc = context.unconnectedMajorCities ?? [];
-        const ucStr = uc.length > 0 ? uc.map(u => `${u.cityName}~${u.estimatedCost}M`).join(', ') : 'none';
-        console.log(`${tag} Victory: phase=${context.phase}, unconnected=${ucStr}`);
-      }
 
       // ── Stage 3: Decision Gate — activeRoute check ──
       // If the bot has an active route, auto-execute the next step.
@@ -246,6 +239,42 @@ export class AIStrategyEngine {
       // JIRA-143: Reset LLM call tracking at turn start
       if (brain) brain.providerAdapter.resetCallIds();
       let activeRoute = memory.activeRoute;
+
+      // JIRA-243: Victory-clinch hard gate. If a carried load + matching demand
+      // card delivery would satisfy both victory conditions (cash ≥ 250M AND
+      // ≥ 7 majors connected) without further building, force the activeRoute
+      // to a single-stop deliver. Bypasses pair/triple scoring and any in-flight
+      // multi-stop plan that would delay victory. See victoryRules.detectVictoryClinch
+      // for the precise conditions and the forensic case (game c990fa47, s2 T74).
+      if (!context.isInitialBuild) {
+        const clinch = detectVictoryClinch(context);
+        if (clinch) {
+          const currentStop = activeRoute?.stops[activeRoute.currentStopIndex];
+          const alreadyTargeted =
+            currentStop?.action === 'deliver' &&
+            currentStop.loadType === clinch.loadType &&
+            currentStop.city === clinch.deliveryCity;
+          if (!alreadyTargeted) {
+            const clinchReasoning =
+              `[victory-clinch] Carrying ${clinch.loadType}; delivering at ${clinch.deliveryCity} ` +
+              `clinches victory (${context.money}M + ${clinch.payout}M ≥ 250M, ` +
+              `${context.connectedMajorCities.length} majors connected).`;
+            activeRoute = {
+              stops: [{
+                action: 'deliver',
+                loadType: clinch.loadType,
+                city: clinch.deliveryCity,
+                demandCardId: clinch.cardIndex,
+                payment: clinch.payout,
+              }],
+              currentStopIndex: 0,
+              phase: 'travel',
+              createdAtTurn: snapshot.turnNumber,
+              reasoning: clinchReasoning,
+            };
+          }
+        }
+      }
 
       let routeWasCompleted = false;
       let routeWasAbandoned = false;
@@ -313,8 +342,6 @@ export class AIStrategyEngine {
         };
       }
 
-      console.log(`${tag} Decision: plan=${decision.plan.type}, model=${decision.model}, latency=${decision.latencyMs}ms, retried=${decision.retried}`);
-
       // ── JIRA-195b sub-slice A: Assemble Stage3Result from four-branch locals ──
       // The four decision branches still write to bare locals above; this temporary
       // assembly point makes the typed handoff contract explicit so that F1 (and
@@ -347,7 +374,6 @@ export class AIStrategyEngine {
         decision.plan = newSteps.length === 1
           ? newSteps[0]
           : { type: 'MultiAction' as const, steps: newSteps };
-        console.log(`${tag} JIRA-105: Injected UpgradeTrain(${stage3.pendingUpgradeAction.targetTrain}) into turn plan${buildStepsDropped > 0 ? ` (dropped ${buildStepsDropped} BuildTrack step(s))` : ''}`);
       }
 
       // ── Stage 3b: Validate composed plan against hard gates ──
@@ -442,12 +468,8 @@ export class AIStrategyEngine {
           activeRoute = null;
           lockupTerminationReason = 'lockup_route_abandoned';
         } else {
-          // One-off strip — not a lockup yet. Surface informational trace only.
+          // One-off strip — not a lockup yet.
           lockupTerminationReason = 'phaseb_stripped_passturn';
-          console.log(
-            `${tag} [JIRA-203] Phase B stripped → PassTurn (gate=${strippedGateName ?? 'unknown'}). ` +
-            `Not a consecutive lockup — no recovery fired this turn.`,
-          );
         }
       }
 
@@ -478,9 +500,6 @@ export class AIStrategyEngine {
         const remaining = activeRoute.stops.slice(activeRoute.currentStopIndex);
         if (remaining.length > 0) {
           previousRouteStops = remaining;
-          console.log(`${tag} Delivery detected — preserving ${remaining.length} remaining route stops for LLM context`);
-        } else {
-          console.log(`${tag} Delivery detected — no remaining stops, clearing active route`);
         }
         // TurnExecutorPlanner handles internal replan — activeRoute stays as-is (updated by exec above)
       }
@@ -503,9 +522,6 @@ export class AIStrategyEngine {
         const isBuildAction = continuation.plan?.type === AIActionType.BuildTrack;
         if (continuation.success && continuation.plan && continuation.plan.type !== AIActionType.PassTurn && !isBuildAction) {
           decision.plan = { type: 'MultiAction' as const, steps: [...planSteps, continuation.plan] };
-          console.log(`${tag} Route complete — continuation ${continuation.plan.type}`);
-        } else if (isBuildAction) {
-          console.log(`${tag} JIRA-97: Blocked speculative BuildTrack from heuristic continuation (no validated route)`);
         }
       }
 
@@ -513,7 +529,6 @@ export class AIStrategyEngine {
       if (deadLoadDropActions.length > 0) {
         const existingSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
         decision.plan = { type: 'MultiAction' as const, steps: [...deadLoadDropActions, ...existingSteps] };
-        console.log(`${tag} JIRA-89: Prepended ${deadLoadDropActions.length} dead load drop action(s) to plan`);
       }
 
       // ── Stage 4: Apply guardrails ──
@@ -528,7 +543,6 @@ export class AIStrategyEngine {
       let originalPlan: { action: string; reasoning: string } | undefined;
 
       if (guardrailResult.overridden) {
-        console.log(`${tag} Guardrail override: ${guardrailResult.reason}`);
         decision.guardrailOverride = true;
         originalPlan = preGuardrailPlan;
 
@@ -537,9 +551,6 @@ export class AIStrategyEngine {
         // when cards change — but we must guarantee a fresh TripPlanner call on the next turn
         // regardless of whether the new hand references the same load types.
         if (finalPlan.type === AIActionType.DiscardHand && activeRoute != null && guardrailResult.reason?.includes('Broke-and-stuck')) {
-          console.log(
-            `${tag} JIRA-177: Clearing stale active route after broke-and-stuck guardrail forced discard`,
-          );
           activeRoute = null;
         }
       }
@@ -694,10 +705,6 @@ export class AIStrategyEngine {
         const freshSnapshot = await capture(gameId, botPlayerId);
         context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
         context.canDeliver = ContextBuilder.rebuildCanDeliver(freshSnapshot, gridPoints);
-        console.log(
-          `${tag} JIRA-165: Refreshed canDeliver after DiscardHand — ` +
-          `${context.canDeliver.length} opportunit(ies) now in context`,
-        );
         // Track newly acquired card indices for hand staleness calculation
         const updatedCardAcquisitionTurn = { ...(memory.cardAcquisitionTurn ?? {}) };
         for (const d of context.demands) {
@@ -720,10 +727,6 @@ export class AIStrategyEngine {
             !context.demands.some(d => d.loadType === stop.loadType),
           );
           if (hasOrphanedStop) {
-            console.log(
-              `[AIStrategyEngine] JIRA-61: Clearing stale route after discard — ` +
-              `route references demand cards no longer in hand`,
-            );
             memoryPatch.activeRoute = null;
             memoryPatch.turnsOnRoute = 0;
             activeRoute = null;
@@ -737,10 +740,6 @@ export class AIStrategyEngine {
         const freshSnapshot = await capture(gameId, botPlayerId);
         context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
         context.canDeliver = ContextBuilder.rebuildCanDeliver(freshSnapshot, gridPoints);
-        console.log(
-          `${tag} JIRA-165: Refreshed canDeliver after delivery — ` +
-          `${context.canDeliver.length} opportunit(ies) now in context`,
-        );
         // Track newly drawn cards and remove delivered card from acquisition map
         const updatedCardAcquisitionTurnOnDelivery = { ...(memoryPatch.cardAcquisitionTurn ?? memory.cardAcquisitionTurn ?? {}) };
         for (const d of context.demands) {
@@ -762,10 +761,6 @@ export class AIStrategyEngine {
             !context.demands.some(d => d.loadType === stop.loadType),
           );
           if (hasOrphanedStop) {
-            console.log(
-              `${tag} JIRA-64: Clearing stale route after delivery — ` +
-              `route references demand cards no longer in hand`,
-            );
             memoryPatch.activeRoute = null;
             memoryPatch.turnsOnRoute = 0;
             activeRoute = null;
@@ -924,6 +919,8 @@ export class AIStrategyEngine {
         llmLog: decision.llmLog,
         // JIRA-32: Strategic context and composition trace for game log
         gamePhase: context.phase || undefined,
+        // JIRA-243 (AC3): pipe persistent gameState through to game log
+        gameState: context.gameState,
         cash: result.remainingMoney,
         trainType: context.trainType,
         milepostsMoved,
@@ -1274,7 +1271,6 @@ export class AIStrategyEngine {
       return { action: null, reason: `Upgrade blocked: ${reason}` };
     }
 
-    console.log(`${tag} JIRA-105: Consuming upgradeOnRoute → ${targetTrain} (cost=${cost}M)`);
     return { action: { type: AIActionType.UpgradeTrain, targetTrain, cost } };
   }
 

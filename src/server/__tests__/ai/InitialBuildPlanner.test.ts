@@ -1115,18 +1115,10 @@ describe('InitialBuildPlanner', () => {
 
       const plan = InitialBuildPlanner.planInitialBuild(snapshot, extendedGrid);
 
-      // Diagnostic output — this test exists to make the scoring visible
-      console.log('\n[JIRA-148 DIAGNOSTIC]');
-      console.log(`  Chosen: ${plan.route.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`);
-      console.log(`  Starting city: ${plan.startingCity}`);
-      console.log(`  Build cost: ${plan.totalBuildCost}M, Payout: ${plan.totalPayout}M, Est turns: ${plan.estimatedTurns}`);
-
       // The planner should NOT pick Cars→Marseille as best single —
       // China Leipzig→Ruhr should score higher (short route, Ruhr is a major city starting point)
       const firstPickup = plan.route.find(s => s.action === 'pickup');
       const firstDeliver = plan.route.find(s => s.action === 'deliver');
-      console.log(`  First pickup: ${firstPickup?.loadType}@${firstPickup?.city}`);
-      console.log(`  First deliver: ${firstDeliver?.loadType}@${firstDeliver?.city}`);
 
       // Assert that Cars→Marseille is NOT the chosen single delivery
       // (This assertion documents the expected fix — currently it may fail, proving the bug)

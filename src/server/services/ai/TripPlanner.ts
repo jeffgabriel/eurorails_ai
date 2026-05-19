@@ -158,11 +158,9 @@ export class TripPlanner {
 
         if (commitmentExists) {
           // Keep current plan — no new options available but bot has existing commitment
-          console.log(`[TripPlanner] keep_current_plan: no OPTIONS available; existing route/loads preserved`);
           return this.makeShortCircuitResult('keep_current_plan');
         } else {
           // No options, no commitment — let heuristic fallback produce DiscardHand
-          console.log(`[TripPlanner] no_actionable_options: no OPTIONS and no current plan; heuristic fallback`);
           return this.makeShortCircuitResult('no_actionable_options');
         }
       }
@@ -190,7 +188,6 @@ export class TripPlanner {
           const totalCost = validatedRoute.buildCostEstimate + validatedRoute.usageFeeEstimate;
 
           if (totalCost <= availableCash) {
-            console.log(`[TripPlanner] single_option_shortcircuit: only ${demand.loadType}@${demand.supplyCity}→${demand.deliveryCity} available; skipping LLM`);
             const route: StrategicRoute = {
               stops: validatedRoute.stops,
               currentStopIndex: 0,
@@ -214,7 +211,6 @@ export class TripPlanner {
 
       if (detResult.outcome === 'success' && detResult.route !== null) {
         const latencyMs = detResult.synthesizedAttempt.latencyMs;
-        console.log(`[TripPlanner] Medium deterministic: ${detResult.route.stops.length} stops, latency=${latencyMs}ms`);
         return {
           route: detResult.route,
           llmLatencyMs: latencyMs,
@@ -376,7 +372,6 @@ export class TripPlanner {
               const proposeScore = proposeNetValue / proposeTurns;
 
               if (proposeScore > finalCandidateScore + PROPOSE_MIN_SCORE_DELTA) {
-                console.log(`[TripPlanner.propose] accepted: score ${proposeScore.toFixed(2)} > status-quo ${finalCandidateScore.toFixed(2)} (skill=Medium, gameId=${snapshot.gameId})`);
                 finalCandidateStops = proposeValidation.prunedRoute?.stops ?? proposeStops;
                 finalCandidateScore = proposeScore;
               } else {
@@ -406,7 +401,6 @@ export class TripPlanner {
         const totalCost = validatedRoute.buildCostEstimate + validatedRoute.usageFeeEstimate;
         if (totalCost > availableCash) {
           const gapMsg = `Your previous route failed: cost_exceeds_budget: route costs ${totalCost}M but only ${availableCash}M available (cash=${snapshot.bot.money}M - upgrade=${upgradeCost}M). Propose a route fundable from ${availableCash}M (omit upgradeOnRoute if needed).`;
-          console.log(`[TripPlanner] Affordability check failed — retrying with hint`);
           llmLog.push({ attemptNumber: attempt + 1, status: 'validation_error', responseText: response.text.substring(0, 500), error: gapMsg, latencyMs });
           lastError = gapMsg;
           continue;
@@ -444,7 +438,6 @@ export class TripPlanner {
           if (simulation) {
             if (!simulation.feasible) {
               const gapMsg = `Your previous route failed: route_infeasible: at least one leg is blocked (opponent track or no buildable path). Propose a different route.`;
-              console.log(`[TripPlanner][JIRA-234] simulator feasibility check failed — retrying with hint`);
               llmLog.push({ attemptNumber: attempt + 1, status: 'validation_error', responseText: response.text.substring(0, 500), error: gapMsg, latencyMs });
               lastError = gapMsg;
               continue;
@@ -453,7 +446,6 @@ export class TripPlanner {
             if (projectedMin < AFFORDABILITY_FLOOR_M) {
               const stopSummary = finalCandidateStops.map((s) => `${s.action}:${s.city}`).join(',');
               const gapMsg = `Your previous route failed: cash_dips_below_floor: simulated trip dips to ${projectedMin}M (floor=${AFFORDABILITY_FLOOR_M}M). Build cost ${simulation.totalBuildCost}M exceeds what cash=${snapshot.bot.money}M can support. Propose a shorter route or one with earlier payouts.`;
-              console.log(`[TripPlanner][JIRA-234] simulator affordability gate rejected: stops=${stopSummary} startingCash=${snapshot.bot.money}M minRelative=${simulation.minCashRelative}M projectedMin=${projectedMin}M floor=${AFFORDABILITY_FLOOR_M}M`);
               llmLog.push({ attemptNumber: attempt + 1, status: 'validation_error', responseText: response.text.substring(0, 500), error: gapMsg, latencyMs });
               lastError = gapMsg;
               continue;

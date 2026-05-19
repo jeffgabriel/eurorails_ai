@@ -151,7 +151,6 @@ export async function onTurnChange(
   // Double execution guard — queue the turn instead of dropping it
   if (pendingBotTurns.has(gameId)) {
     queuedBotTurns.set(gameId, { gameId, currentPlayerIndex, currentPlayerId });
-    console.log(`[BotTurnTrigger] Queued bot turn for game ${gameId} (another bot turn in progress)`);
     return;
   }
 
@@ -159,7 +158,6 @@ export async function onTurnChange(
   const humanConnected = await hasConnectedHuman(gameId);
   if (!humanConnected) {
     queuedBotTurns.set(gameId, { gameId, currentPlayerIndex, currentPlayerId });
-    console.log(`[BotTurnTrigger] Queued bot turn for game ${gameId} (no human connected)`);
     return;
   }
 
@@ -299,6 +297,7 @@ export async function onTurnChange(
         composition: result.compositionTrace,
         demandRanking: result.demandRanking,
         gamePhase: result.gamePhase,
+        gameState: result.gameState,
         cash: result.cash,
         train: result.trainType,
         upgradeAdvice: result.upgradeAdvice,
@@ -362,7 +361,6 @@ export async function onTurnChange(
     const queued = queuedBotTurns.get(gameId);
     if (queued) {
       queuedBotTurns.delete(gameId);
-      console.log(`[BotTurnTrigger] Dequeuing chained bot turn for game ${gameId}`);
       onTurnChange(queued.gameId, queued.currentPlayerIndex, queued.currentPlayerId).catch(err => {
         console.error(`[BotTurnTrigger] Chained bot turn error for game ${gameId}:`, err);
       });
@@ -382,7 +380,6 @@ export async function onHumanReconnect(gameId: string): Promise<void> {
   // Case 1: Queued turn waiting for human
   const queued = queuedBotTurns.get(gameId);
   if (queued) {
-    console.log(`[BotTurnTrigger] Dequeuing bot turn for game ${gameId} (human reconnected)`);
     queuedBotTurns.delete(gameId);
     await onTurnChange(queued.gameId, queued.currentPlayerIndex, queued.currentPlayerId);
     return;
@@ -408,7 +405,6 @@ export async function onHumanReconnect(gameId: string): Promise<void> {
     if (!currentPlayer?.is_bot) return;
 
     // It's a bot's turn, nothing is pending or queued — this bot is stuck
-    console.log(`[BotTurnTrigger] Stuck bot detected on reconnect: game ${gameId}, player "${currentPlayer.name}" (index ${game.current_player_index}). Re-triggering turn.`);
     onTurnChange(gameId, game.current_player_index, currentPlayer.id).catch(err => {
       console.error(`[BotTurnTrigger] Stuck bot recovery failed for game ${gameId}:`, err);
     });

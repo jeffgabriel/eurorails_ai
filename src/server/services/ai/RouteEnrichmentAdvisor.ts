@@ -212,7 +212,6 @@ export class RouteEnrichmentAdvisor {
     );
 
     if (decision.decision === 'keep') {
-      console.log(`[RouteEnrichmentAdvisor] LLM decided keep. Reasoning: ${decision.reasoning}`);
       return route;
     }
 
@@ -297,10 +296,6 @@ export class RouteEnrichmentAdvisor {
         );
       }
 
-      console.log(
-        `[RouteEnrichmentAdvisor] insert: added ${validInsertions.length} stop(s). New route: ${newStops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
-      );
-
       return { ...route, stops: newStops };
     }
 
@@ -331,10 +326,6 @@ export class RouteEnrichmentAdvisor {
         demandCardId: s.demandCardId,
         payment: s.payment,
       }));
-
-      console.log(
-        `[RouteEnrichmentAdvisor] reorder: new order: ${newStops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
-      );
 
       return { ...route, stops: newStops };
     }

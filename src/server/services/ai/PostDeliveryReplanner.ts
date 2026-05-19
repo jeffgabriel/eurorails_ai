@@ -160,7 +160,6 @@ export class PostDeliveryReplanner {
         );
         return { route: skipped, moveTargetInvalidated: true, routeWasAbandoned: true };
       }
-      console.log(`${tag} [PostDeliveryReplanner] No brain/gridPoints — revalidating existing route`);
       return { route: skipped, moveTargetInvalidated: true };
     }
 
@@ -232,9 +231,6 @@ export class PostDeliveryReplanner {
           const currentRemaining = estimateRouteTurns(postDeliveryRoute, snapshot);
           const candidateTurns = estimateRouteTurns(finalRoute, snapshot);
           if (candidateTurns >= currentRemaining) {
-            console.log(
-              `${tag} [PostDeliveryReplanner] END-STATE: candidate (${candidateTurns}t) not strictly faster than current (${currentRemaining}t) — keeping existing route`,
-            );
             const revalidated = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
             const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);
             return {
@@ -247,10 +243,6 @@ export class PostDeliveryReplanner {
             };
           }
         }
-
-        console.log(
-          `${tag} [PostDeliveryReplanner] Replan succeeded. New route: ${finalRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
-        );
 
         // JIRA-198: Consume the LLM-emitted upgradeOnRoute hint (if any) through
         // the existing eligibility gate. Pass deliveries-already-done-this-turn so
@@ -284,7 +276,6 @@ export class PostDeliveryReplanner {
       // Preserve the existing activeRoute without heuristic-fallback or DiscardHand.
       const replanSelection = 'selection' in replanResult ? replanResult.selection : undefined;
       if (!replanResult.route && replanSelection?.fallbackReason === 'keep_current_plan') {
-        console.log(`${tag} [PostDeliveryReplanner] keep_current_plan: preserving existing activeRoute, no replan triggered`);
         const revalidated = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
         const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);
         return {

@@ -83,7 +83,6 @@ export class RouteOptimizer {
             if (!coords) return false;
             return estimateHopDistance(currentPos.row, currentPos.col, coords.row, coords.col) <= NEARBY_PICKUP_THRESHOLD;
           });
-          console.log(`${tag} Detour-cost gate: nearby pickup ${nearbyPickup?.city} prevents carried-load delivery promotion`);
           carriedDelivers = [];
         }
       }
@@ -103,7 +102,6 @@ export class RouteOptimizer {
             nearest = stop;
           }
         }
-        console.log(`${tag} Carried-load priority: deliver(${nearest.loadType}@${nearest.city}) promoted ahead of pickup stops`);
       } else {
         // Pick the nearest eligible stop (original behavior)
         nearest = eligible[0];
@@ -130,13 +128,6 @@ export class RouteOptimizer {
       if (coords) {
         currentPos = { row: coords.row, col: coords.col };
       }
-    }
-
-    // Log if order changed
-    const originalOrder = stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ');
-    const newOrder = ordered.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ');
-    if (originalOrder !== newOrder) {
-      console.log(`${tag} Reordered stops by proximity:\n  was: ${originalOrder}\n  now: ${newOrder}`);
     }
 
     return ordered;

@@ -82,8 +82,6 @@ export class InitialBuildPlanner {
       estimatedTurns: o.estimatedTurns,
       efficiency: Math.round(o.efficiency * 100) / 100,
     }));
-    console.log(`[InitialBuildPlanner] ${options.length} options evaluated — top: ${sorted[0]?.loadType} ${sorted[0]?.supplyCity}→${sorted[0]?.deliveryCity} eff=${sorted[0]?.efficiency.toFixed(2)}`);
-
     const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings(options, gridPoints);
 
     // Map top 10 pairings to diagnostics shape
@@ -101,9 +99,6 @@ export class InitialBuildPlanner {
       efficiency: Math.round(p.efficiency * 100) / 100,
       pairingScore: Math.round(p.pairingScore * 100) / 100,
     }));
-    const topPairing = pairings[0];
-    console.log(`[InitialBuildPlanner] ${pairings.length} pairings evaluated${topPairing ? ` — top: ${topPairing.first.loadType} ${topPairing.first.supplyCity}→${topPairing.first.deliveryCity} + ${topPairing.second.loadType} ${topPairing.second.supplyCity}→${topPairing.second.deliveryCity} score=${topPairing.pairingScore.toFixed(2)}` : ''}`);
-
     const bestSingle = options.reduce((a, b) => a.efficiency > b.efficiency ? a : b);
     const bestDouble = pairings.length > 0
       ? pairings.reduce((a, b) => a.pairingScore > b.pairingScore ? a : b)

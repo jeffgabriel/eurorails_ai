@@ -818,10 +818,6 @@ export function scoreCandidate(
   const startingCash = snapshot.bot.money;
   const projectedMin = startingCash + result.minCashRelative;
   if (projectedMin < floor) {
-    const stopSummary = candidate.stops.map((s) => `${s.action}:${s.city}`).join(',');
-    console.log(
-      `[DTP] affordability gate rejected: stops=${stopSummary} startingCash=${startingCash}M minRelative=${result.minCashRelative}M projectedMin=${projectedMin}M floor=${floor}M`,
-    );
     return {
       ...candidate,
       buildCost: result.totalBuildCost,
@@ -1428,9 +1424,6 @@ export function planTripDeterministic(
   const rawCount = allCandidates.length;
 
   // JIRA-230 BE-004: perf budget alarm
-  console.log(
-    `[deterministic-top-1] Candidates: raw=${rawCount} survivors=${survivors.length} enumerationMs=${enumerationMs}`,
-  );
   if (rawCount > 5000 || enumerationMs > 200) {
     console.warn(
       `[perf-budget] planTripDeterministic overrun: raw=${rawCount} survivors=${survivors.length} enumerationMs=${enumerationMs}`,
@@ -1529,7 +1522,6 @@ export function planTripDeterministic(
   console.log(
     `[JIRA-232][predict] id=${top1.id} predictedBuildCost=${top1.buildCost}M stops=${top1.stops.map((s) => `${s.action}:${s.city}`).join(',')}`,
   );
-
 
   // JIRA-220 follow-up: deterministic upgrade decision. Upgrade as soon as the
   // bot can afford it given the chosen trip's build cost. Fast → Superfreight

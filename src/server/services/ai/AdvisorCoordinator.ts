@@ -91,7 +91,6 @@ export class AdvisorCoordinator {
         );
 
         if (buildResult.success && buildResult.plan) {
-          console.log(`${tag} BuildAdvisor succeeded: building toward "${advisorTargetCity}"`);
           const result: AdviseBuildResult = { plan: buildResult.plan };
           if (buildResult.buildResolverLog) result.buildResolverLog = buildResult.buildResolverLog as Record<string, unknown>;
           return result;
@@ -124,7 +123,6 @@ export class AdvisorCoordinator {
           );
 
           if (retryBuildResult.success && retryBuildResult.plan) {
-            console.log(`${tag} BuildAdvisor solvency retry succeeded: building toward "${retryCity}"`);
             const result: AdviseBuildResult = { plan: retryBuildResult.plan };
             if (retryBuildResult.buildResolverLog) result.buildResolverLog = retryBuildResult.buildResolverLog as Record<string, unknown>;
             return result;

@@ -92,7 +92,6 @@ export class TurnExecutor {
     // JIRA-173: Skip plans that were already executed during TurnExecutorPlanner's
     // early delivery path (preExecuted=true prevents double-execution).
     if ((plan as { preExecuted?: boolean }).preExecuted) {
-      console.log(`[TurnExecutor] JIRA-173: Skipping preExecuted ${plan.type} plan (already committed to DB)`);
       return {
         success: true,
         action: plan.type as AIActionType,
@@ -208,7 +207,6 @@ export class TurnExecutor {
       // early delivery path. The delivery has already been committed to DB and the
       // plan carries preExecuted=true to prevent double-execution here.
       if ((step as { preExecuted?: boolean }).preExecuted) {
-        console.log(`[TurnExecutor] JIRA-173: Skipping preExecuted ${step.type} plan (already committed to DB)`);
         continue;
       }
 
@@ -310,11 +308,6 @@ export class TurnExecutor {
     const cost = plan.estimatedCost ?? newSegments.reduce((s, seg) => s + seg.cost, 0);
     const allSegments = [...snapshot.bot.existingSegments, ...newSegments];
     const totalCost = allSegments.reduce((s, seg) => s + seg.cost, 0);
-
-    // JIRA-232 Defect B: emit actual build cost for post-game diff against predicted.
-    console.log(
-      `[JIRA-232][actual] gameId=${snapshot.gameId} playerId=${snapshot.bot.playerId} turn=${snapshot.turnNumber} actualBuildCost=${cost}M`,
-    );
 
     const client = await db.connect();
     let remainingMoney = snapshot.bot.money - cost;
@@ -668,24 +661,6 @@ export class TurnExecutor {
       };
     }
 
-    // JIRA-188: Diagnostic logging before delivery attempt
-    const demandDeck = DemandDeckService.getInstance();
-    const cardForLog = demandDeck.getCard(cardId);
-    console.log(
-      `[TurnExecutor.handleDeliverLoad] JIRA-188 delivery attempt:`,
-      JSON.stringify({
-        loadType: plan.loadType,
-        cardId: plan.cardId,
-        targetCity: plan.targetCity,
-        derivedCityName: cityName,
-        posKey,
-        position: snapshot.bot.position,
-        loads: snapshot.bot.loads,
-        cardDemands: cardForLog ?? null,
-        resolvedDemandCardIds: snapshot.bot.resolvedDemands.map(r => r.cardId),
-      }),
-    );
-
     // Delegate to PlayerService — handles validation, payment, debt, card draw, DB update
     let deliverResult: Awaited<ReturnType<typeof PlayerService.deliverLoadForUser>>;
     try {
@@ -707,7 +682,6 @@ export class TurnExecutor {
           posKey,
           position: snapshot.bot.position,
           loads: snapshot.bot.loads,
-          cardDemands: cardForLog ?? null,
           resolvedDemandCardIds: snapshot.bot.resolvedDemands.map(r => r.cardId),
           errorMessage: deliverError instanceof Error ? deliverError.message : String(deliverError),
         }),

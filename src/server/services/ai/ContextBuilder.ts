@@ -302,7 +302,6 @@ export class ContextBuilder {
       if (pairedPort) {
         const pairedKey = `${pairedPort.row},${pairedPort.col}`;
         if (network.nodes.has(pairedKey)) {
-          console.log(`[ContextBuilder] Ferry teleport: BFS starting from paired port (${pairedPort.row},${pairedPort.col}) instead of ferry port`);
           const ferryReachable = ContextBuilder.computeReachableCities(pairedPort, speed, network, gridPoints, visitedFerryPorts);
           const pairedPoint = gridPoints.find(gp => gp.row === pairedPort.row && gp.col === pairedPort.col);
           const pairedCityName = pairedPoint?.city?.name ?? pairedPoint?.name;
