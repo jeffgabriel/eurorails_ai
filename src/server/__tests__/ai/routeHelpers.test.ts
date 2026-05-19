@@ -826,7 +826,7 @@ describe('getNetworkFrontier — city name lookup', () => {
   });
 });
 
-// ── JIRA-165: Capital allocation gate ─────────────────────────────────────
+// ── JIRA-246: Cash-floor gate removed ────────────────────────────────────
 
 /** Helper to build a minimal DemandContext for testing */
 function makeDemandContext(overrides: Partial<{
@@ -862,8 +862,11 @@ function makeDemandContext(overrides: Partial<{
   } as any;
 }
 
-describe('resolveBuildTarget — JIRA-165 capital allocation gate', () => {
-  it('returns null when bot has <5M, off-network build target, and carries deliverable on-network load', () => {
+// JIRA-246 AC9: The JIRA-165 cash-floor gate has been removed. These tests
+// verify that resolveBuildTarget now returns the build target unconditionally
+// for broke bots carrying deliverable on-network loads (gate no longer fires).
+describe('resolveBuildTarget — JIRA-246: cash-floor gate removed (was JIRA-165)', () => {
+  it('returns the build target (not null) when bot has <5M, off-network build target, and carries deliverable on-network load', () => {
     const route = makeRoute({
       stops: [
         { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
@@ -872,7 +875,7 @@ describe('resolveBuildTarget — JIRA-165 capital allocation gate', () => {
       currentStopIndex: 0,
     });
     const context = makeContext({
-      money: 3, // broke
+      money: 3, // broke — gate formerly triggered here
       citiesOnNetwork: [], // Berlin is off-network (build target)
       demands: [
         makeDemandContext({
@@ -886,11 +889,13 @@ describe('resolveBuildTarget — JIRA-165 capital allocation gate', () => {
 
     const result = resolveBuildTarget(route, context);
 
-    // Should skip build — deliver Wine@München first for income
-    expect(result).toBeNull();
+    // JIRA-246: gate removed — now returns the build target unconditionally.
+    // The abandon logic has moved to MovementPhasePlanner A3.
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Berlin');
   });
 
-  it('does NOT skip build when bot has <5M but no load on train', () => {
+  it('returns the build target when bot has <5M but no load on train', () => {
     const route = makeRoute({
       stops: [
         { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
@@ -913,12 +918,11 @@ describe('resolveBuildTarget — JIRA-165 capital allocation gate', () => {
 
     const result = resolveBuildTarget(route, context);
 
-    // No carried load — capital gate should not block
     expect(result).not.toBeNull();
     expect(result!.targetCity).toBe('Berlin');
   });
 
-  it('does NOT skip build when bot has <5M, carries load, but delivery is off-network', () => {
+  it('returns the build target when bot has <5M, carries load, but delivery is off-network', () => {
     const route = makeRoute({
       stops: [
         { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
@@ -934,19 +938,18 @@ describe('resolveBuildTarget — JIRA-165 capital allocation gate', () => {
           loadType: 'Wine',
           deliveryCity: 'Frankfurt',
           isLoadOnTrain: true,
-          isDeliveryOnNetwork: false, // delivery is also off-network — can't deliver yet
+          isDeliveryOnNetwork: false, // delivery is also off-network
         }),
       ],
     });
 
     const result = resolveBuildTarget(route, context);
 
-    // Delivery is also off-network — gate should not block building
     expect(result).not.toBeNull();
     expect(result!.targetCity).toBe('Berlin');
   });
 
-  it('does NOT skip build when bot has enough money (>=5M)', () => {
+  it('returns the build target when bot has enough money (>=5M)', () => {
     const route = makeRoute({
       stops: [
         { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
@@ -969,13 +972,12 @@ describe('resolveBuildTarget — JIRA-165 capital allocation gate', () => {
 
     const result = resolveBuildTarget(route, context);
 
-    // Has enough money — capital gate not triggered
     expect(result).not.toBeNull();
     expect(result!.targetCity).toBe('Berlin');
   });
 
-  it('returns null immediately for victory build even if capital gate condition met (victory overrides)', () => {
-    // Victory build takes priority and bypasses the route-based capital gate
+  it('returns victory build target when bot has low money (victory overrides route target)', () => {
+    // Victory build takes priority regardless of cash level
     const route = makeRoute({
       stops: [
         { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
@@ -983,9 +985,8 @@ describe('resolveBuildTarget — JIRA-165 capital allocation gate', () => {
       currentStopIndex: 0,
     });
     const context = makeContext({
-      money: 1, // broke
+      money: 230, // victory build trigger
       citiesOnNetwork: [],
-      // Make victory check pass
       unconnectedMajorCities: [{ cityName: 'Roma', estimatedCost: 5 }],
       connectedMajorCities: ['Paris', 'Berlin', 'München', 'Wien', 'Hamburg', 'Barcelona'],
       demands: [
@@ -997,12 +998,9 @@ describe('resolveBuildTarget — JIRA-165 capital allocation gate', () => {
         }),
       ],
     });
-    // Override money to victory build trigger for the context check
-    context.money = 230; // victory build trigger
 
     const result = resolveBuildTarget(route, context);
 
-    // Victory build found Roma — capital gate does not apply to victory builds
     expect(result).not.toBeNull();
     expect(result!.isVictoryBuild).toBe(true);
     expect(result!.targetCity).toBe('Roma');

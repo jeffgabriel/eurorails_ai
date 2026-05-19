@@ -177,6 +177,7 @@ import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PostDeliveryReplanner } from '../../services/ai/PostDeliveryReplanner';
 import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
 import { computeCandidateDetourCosts } from '../../services/ai/RouteDetourEstimator';
+import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
 import type { DemandContext } from '../../../shared/types/GameTypes';
 
 const mockIsStopComplete = isStopComplete as jest.Mock;
@@ -186,6 +187,7 @@ const mockResolveMove = ActionResolver.resolveMove as jest.Mock;
 const mockPostDeliveryReplan = PostDeliveryReplanner.replan as jest.Mock;
 const mockEnrichRoute = RouteEnrichmentAdvisor.enrich as jest.Mock;
 const mockComputeDetourCosts = computeCandidateDetourCosts as jest.Mock;
+const mockComputeBuildSegments = computeBuildSegments as jest.Mock;
 let mockRevalidate: jest.SpyInstance;
 let mockSkipCompleted: jest.SpyInstance;
 let mockExecuteStopAction: jest.SpyInstance;
@@ -1378,6 +1380,299 @@ describe('JIRA-214 P2: Advisor trigger after pickup at city (AC10)', () => {
     // Should include Kaliningrad, not Krakow
     expect(passedCandidates.some((c: { deliveryCity: string }) => c.deliveryCity === 'Kaliningrad')).toBe(true);
     expect(passedCandidates.some((c: { deliveryCity: string }) => c.deliveryCity === 'Krakow')).toBe(false);
+  });
+});
+
+// ── JIRA-246 / JIRA-247: A3 abandon + build-origin-is-current-pos ───────────
+
+/**
+ * Helper: build a DemandContext that has isLoadOnTrain and isDeliveryOnNetwork
+ * set as specified.
+ */
+function makeDemandOnTrain(overrides: {
+  isLoadOnTrain: boolean;
+  isDeliveryOnNetwork: boolean;
+  loadType?: string;
+  deliveryCity?: string;
+}): DemandContext {
+  return {
+    ...makeDemand(overrides.loadType ?? 'Wheat', 'Bern', overrides.deliveryCity ?? 'Berlin', 12),
+    isLoadOnTrain: overrides.isLoadOnTrain,
+    isDeliveryOnNetwork: overrides.isDeliveryOnNetwork,
+  };
+}
+
+describe('JIRA-246 AC8: hasCarriedDeliverableOnNetwork helper (via A3 abandon paths)', () => {
+  // These tests verify the 4-case truth table for the predicate by driving
+  // the A3 code path that calls hasCarriedDeliverableOnNetwork.
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(TurnExecutorPlanner, 'revalidateRemainingDeliveries')
+      .mockImplementation((r: StrategicRoute) => r);
+    jest.spyOn(TurnExecutorPlanner, 'skipCompletedStops')
+      .mockImplementation((r: StrategicRoute) => r);
+    jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
+      .mockResolvedValue({ success: false, error: 'default' });
+
+    mockIsStopComplete.mockReturnValue(false);
+    // computeBuildSegments returns [] (empty path) by default — triggers R2 branch
+    mockComputeBuildSegments.mockReturnValue([]);
+    // resolveBuildTarget returns a valid target at (20,20)
+    mockResolveBuildTarget.mockReturnValue({ targetCity: 'Bern' });
+    // loadGridPoints: Bern at (20,20), not on existing segments → reachability check fails
+    const { loadGridPoints } = jest.requireMock('../../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['20,20', { row: 20, col: 20, name: 'Bern', terrain: TerrainType.Clear }],
+    ]));
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    mockComputeBuildSegments.mockReturnValue([]); // restore global default
+  });
+
+  it('AC8 case 1: isLoadOnTrain=true AND isDeliveryOnNetwork=true → predicate true → R2 fires (a3_abandon_for_carry_deliver)', async () => {
+    const route = makeRoute({ stops: [makeStop('pickup', 'Bern')], currentStopIndex: 0 });
+    const context = makeContext({
+      citiesOnNetwork: [], // Bern not on network → A3 triggers
+      demands: [makeDemandOnTrain({ isLoadOnTrain: true, isDeliveryOnNetwork: true })],
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    expect(trace.a3.terminationReason).toBe('a3_abandon_for_carry_deliver');
+    expect(result.routeAbandoned).toBe(true);
+  });
+
+  it('AC8 case 2: isLoadOnTrain=false AND isDeliveryOnNetwork=false → predicate false → R2 does NOT fire', async () => {
+    const route = makeRoute({ stops: [makeStop('pickup', 'Bern')], currentStopIndex: 0 });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      demands: [makeDemandOnTrain({ isLoadOnTrain: false, isDeliveryOnNetwork: false })],
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    // R2 did NOT fire — should fall through to build_dijkstra_failed
+    expect(trace.a3.terminationReason).toBe('build_dijkstra_failed');
+    expect(result.routeAbandoned).toBe(false);
+  });
+
+  it('AC8 case 3: isLoadOnTrain=true BUT isDeliveryOnNetwork=false → predicate false → R2 does NOT fire', async () => {
+    const route = makeRoute({ stops: [makeStop('pickup', 'Bern')], currentStopIndex: 0 });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      demands: [makeDemandOnTrain({ isLoadOnTrain: true, isDeliveryOnNetwork: false })],
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    expect(trace.a3.terminationReason).toBe('build_dijkstra_failed');
+    expect(result.routeAbandoned).toBe(false);
+  });
+
+  it('AC8 case 4: both demands partially match but none has BOTH true → predicate false → R2 does NOT fire', async () => {
+    const route = makeRoute({ stops: [makeStop('pickup', 'Bern')], currentStopIndex: 0 });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      demands: [
+        // First: on train but delivery off-network
+        makeDemandOnTrain({ isLoadOnTrain: true, isDeliveryOnNetwork: false }),
+        // Second: not on train but delivery on-network
+        makeDemandOnTrain({ isLoadOnTrain: false, isDeliveryOnNetwork: true }),
+      ],
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    expect(trace.a3.terminationReason).toBe('build_dijkstra_failed');
+    expect(result.routeAbandoned).toBe(false);
+  });
+});
+
+describe('JIRA-246 AC2: empty-path abandon when carrying deliverable (R2)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(TurnExecutorPlanner, 'revalidateRemainingDeliveries')
+      .mockImplementation((r: StrategicRoute) => r);
+    jest.spyOn(TurnExecutorPlanner, 'skipCompletedStops')
+      .mockImplementation((r: StrategicRoute) => r);
+    jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
+      .mockResolvedValue({ success: false, error: 'default' });
+
+    mockIsStopComplete.mockReturnValue(false);
+    mockComputeBuildSegments.mockReturnValue([]); // empty path
+    mockResolveBuildTarget.mockReturnValue({ targetCity: 'Bern' });
+
+    const { loadGridPoints } = jest.requireMock('../../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['20,20', { row: 20, col: 20, name: 'Bern', terrain: TerrainType.Clear }],
+    ]));
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    mockComputeBuildSegments.mockReturnValue([]); // restore global default
+  });
+
+  it('AC2: broke bot carrying Wheat with Berlin delivery on-network → routeWasAbandoned=true, no PassTurn, terminationReason=a3_abandon_for_carry_deliver', async () => {
+    // Fixture: s1 T16 of game eb20489f
+    const route = makeRoute({
+      stops: [
+        makeStop('pickup', 'Bern'),   // Bern off-network (current stop)
+        makeStop('deliver', 'Berlin', 'Wheat'),
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      money: 4, // broke
+      citiesOnNetwork: [],
+      demands: [
+        {
+          ...makeDemand('Wheat', 'SomeCity', 'Berlin', 15),
+          isLoadOnTrain: true,
+          isDeliveryOnNetwork: true,
+        },
+      ],
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    expect(result.routeAbandoned).toBe(true);
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.PassTurn)).toBe(false);
+    expect(trace.a3.terminationReason).toBe('a3_abandon_for_carry_deliver');
+  });
+
+  it('AC3: sufficient-cash case ($50M) — A3 does NOT abandon (no carry-deliverable present)', async () => {
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Bern')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      money: 50,
+      citiesOnNetwork: [],
+      demands: [], // no carry-deliverable demand
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    // R2 predicate is false (no demands) → no abandon
+    expect(result.routeAbandoned).toBe(false);
+    expect(trace.a3.terminationReason).toBe('build_dijkstra_failed');
+  });
+
+  it('AC4: no-carry-deliverable case — A3 does NOT abandon even if broke', async () => {
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Bern')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      money: 2,
+      citiesOnNetwork: [],
+      demands: [
+        // Load not on train — predicate fails
+        { ...makeDemand('Cattle', 'Bern', 'Berlin', 10), isLoadOnTrain: false, isDeliveryOnNetwork: true },
+      ],
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    expect(result.routeAbandoned).toBe(false);
+    expect(trace.a3.terminationReason).toBe('build_dijkstra_failed');
+  });
+});
+
+describe('JIRA-246 AC2 (partial): partial-path abandon when carrying deliverable (R3)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(TurnExecutorPlanner, 'revalidateRemainingDeliveries')
+      .mockImplementation((r: StrategicRoute) => r);
+    jest.spyOn(TurnExecutorPlanner, 'skipCompletedStops')
+      .mockImplementation((r: StrategicRoute) => r);
+    jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
+      .mockResolvedValue({ success: false, error: 'default' });
+
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue({ targetCity: 'Bern' });
+
+    const { loadGridPoints } = jest.requireMock('../../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['20,20', { row: 20, col: 20, name: 'Bern', terrain: TerrainType.Clear }],
+    ]));
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    mockComputeBuildSegments.mockReturnValue([]); // restore global default
+  });
+
+  it('R3: partial path (last seg.to ≠ target coord) + carry-deliverable → a3_abandon_for_carry_deliver_partial', async () => {
+    // computeBuildSegments returns 1 segment that does NOT reach target (20,20)
+    mockComputeBuildSegments.mockReturnValue([
+      {
+        from: { row: 5, col: 5 },
+        to: { row: 10, col: 10 }, // not (20,20)
+        cost: 5,
+      },
+    ]);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Bern')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      position: { row: 1, col: 1 }, // not at origin (5,5) → not R4
+      demands: [
+        { ...makeDemand('Wheat', 'SomeCity', 'Berlin', 15), isLoadOnTrain: true, isDeliveryOnNetwork: true },
+      ],
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    expect(trace.a3.terminationReason).toBe('a3_abandon_for_carry_deliver_partial');
+    expect(result.routeAbandoned).toBe(true);
+  });
+
+  it('R3: path reaches target exactly → R3 does NOT fire, falls through to move/build logic', async () => {
+    // computeBuildSegments returns segment reaching target (20,20) exactly
+    mockComputeBuildSegments.mockReturnValue([
+      {
+        from: { row: 5, col: 5 },
+        to: { row: 20, col: 20 }, // exactly the target coord
+        cost: 8,
+      },
+    ]);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Bern')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      position: { row: 1, col: 1 }, // not at origin → not R4
+      demands: [
+        { ...makeDemand('Wheat', 'SomeCity', 'Berlin', 15), isLoadOnTrain: true, isDeliveryOnNetwork: true },
+      ],
+    });
+    // resolveMove fails → exits with empty plan
+    mockResolveMove.mockResolvedValue({ success: false, error: 'no path' });
+
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    // R3 did NOT fire — path reached target
+    expect(trace.a3.terminationReason).not.toBe('a3_abandon_for_carry_deliver_partial');
+    expect(result.routeAbandoned).toBe(false);
   });
 });
 

@@ -49,6 +49,14 @@ import { computeCandidateDetourCosts, MAX_DETOUR_TURNS } from './RouteDetourEsti
 // ── MovementPhasePlanner ──────────────────────────────────────────────────
 
 /**
+ * JIRA-246: Returns true when any demand has a load on the train AND its
+ * delivery city is on the bot's track network.  Used by A3 abandon paths.
+ */
+function hasCarriedDeliverableOnNetwork(context: GameContext): boolean {
+  return context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork);
+}
+
+/**
  * MovementPhasePlanner — Phase A orchestrator.
  *
  * Consumes the movement budget by advancing through route stops. Delegates
@@ -478,17 +486,46 @@ export class MovementPhasePlanner {
                 trace.a3.terminationReason = 'a3_target_already_reachable';
                 continue;
               }
+              // JIRA-246 R2: No path to build target AND bot is carrying a load it can
+              // deliver on-network right now → abandon this route so the planner can
+              // produce a fresh carry-deliver plan next turn.
+              if (hasCarriedDeliverableOnNetwork(context)) {
+                console.log(`[JIRA-246] a3_abandon_for_carry_deliver — empty build path, carry-deliverable on-network`);
+                trace.a3.terminationReason = 'a3_abandon_for_carry_deliver';
+                routeAbandonedByImpossibility = true;
+                break;
+              }
               trace.a3.terminationReason = 'build_dijkstra_failed';
             } else {
               const previewBuildOrigin = a3OriginResult[0].from;
               const currentPos = context.position;
+              const lastSeg = a3OriginResult[a3OriginResult.length - 1];
+
+              // JIRA-246 R3: computeBuildSegments returned segments but the path does
+              // not reach the build target (partial path) AND bot carries a deliverable
+              // on-network load → abandon so the planner can produce a carry-deliver plan.
+              if (
+                lastSeg &&
+                (lastSeg.to.row !== a3TargetCoord.row || lastSeg.to.col !== a3TargetCoord.col) &&
+                hasCarriedDeliverableOnNetwork(context)
+              ) {
+                console.log(`[JIRA-246] a3_abandon_for_carry_deliver_partial — partial build path, carry-deliverable on-network`);
+                trace.a3.terminationReason = 'a3_abandon_for_carry_deliver_partial';
+                routeAbandonedByImpossibility = true;
+                break;
+              }
 
               if (
                 currentPos &&
                 previewBuildOrigin.row === currentPos.row &&
                 previewBuildOrigin.col === currentPos.col
               ) {
-                trace.a3.terminationReason = 'origin_is_current_position';
+                // JIRA-247 R4: Build origin is the bot's current position — set build
+                // target and continue so Phase B composes a BuildTrack action.
+                console.log(`[JIRA-247] a3_build_origin_is_current_pos — build origin matches current position, continuing to Phase B`);
+                trace.a3.terminationReason = 'a3_build_origin_is_current_pos';
+                trace.build.target = a3BuildTarget.targetCity;
+                continue;
               } else {
                 const _a3MoveStart = Date.now();
                 const a3MoveResult = await ActionResolver.resolveMove(

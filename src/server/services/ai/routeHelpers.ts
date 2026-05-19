@@ -199,20 +199,6 @@ export function resolveBuildTarget(
   // Route-based target — find first off-network stop city
   const routeTarget = findRouteBasedTarget(route, context);
 
-  // JIRA-165 Fix 2: Capital allocation gate — if the bot is carrying a load
-  // that can be delivered on-network, AND is broke (<5M), skip building now
-  // so the executor advances to the deliverable stop for income first.
-  // This prevents the death spiral: bot spends last cash building toward
-  // an off-network pickup while carrying a deliverable load for free.
-  if (routeTarget && !routeTarget.isVictoryBuild && context.money < 5) {
-    const hasDeliverableOnNetwork = context.demands.some(
-      d => d.isLoadOnTrain && d.isDeliveryOnNetwork,
-    );
-    if (hasDeliverableOnNetwork) {
-      return null;
-    }
-  }
-
   return routeTarget;
 }
 
