@@ -1634,49 +1634,44 @@ describe('resolveBuildTarget — JIRA-240 bundling guard (AC9-AC12)', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────
-// JIRA-241 — resolveBuildTarget end-state suppression
+// JIRA-243 — resolveBuildTarget victory-build fires in End state
+// (reverts JIRA-241's End-state suppression; restores pre-241 behavior)
 // ────────────────────────────────────────────────────────────────────────
 
-describe('JIRA-241: resolveBuildTarget — end-state suppression', () => {
-  it('AC5 — gameState=End suppresses the victory branch (does NOT return cheapest unconnected major)', () => {
+describe('JIRA-243: resolveBuildTarget — End-state victory-build override', () => {
+  it('AC1 — gameState=End fires the victory branch (returns cheapest unconnected major)', () => {
     const route = makeRoute({ currentStopIndex: 0 });
     const context = makeContext({
-      money: 240,
+      money: 286,
       gameState: GameState.End,
-      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien'], // 5
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'], // 6
       unconnectedMajorCities: [
         { cityName: 'Moskva', estimatedCost: 5 },
         { cityName: 'London', estimatedCost: 10 },
       ],
-      citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien'],
+      citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
     });
 
     const result = resolveBuildTarget(route, context);
 
-    // Should NOT take the victory branch — falls through to route-based target
-    // (route stops Lyon → Berlin; Berlin is on-network, Lyon is the route target).
-    if (result !== null) {
-      expect(result.isVictoryBuild).toBe(false);
-      expect(result.targetCity).not.toBe('Moskva');
-      expect(result.targetCity).not.toBe('London');
-    }
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+    expect(result!.targetCity).toBe('Moskva'); // cheapest unconnected
   });
 
-  it('AC6 — gameState=End suppresses the JIRA-240 secondary bundling guard', () => {
+  it('AC2 — gameState=End applies the JIRA-240 secondary bundling guard normally', () => {
     const route = makeRoute({
       currentStopIndex: 0,
       stops: [{ action: 'pickup', loadType: 'Marble', city: 'Firenze' }],
     });
     const context = makeContext({
-      money: 240,
+      money: 286,
       gameState: GameState.End,
       connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'], // 6
       unconnectedMajorCities: [{ cityName: 'Moskva', estimatedCost: 5 }],
       citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
       demands: [
         {
-          // Pre-filled fixture that satisfies the DemandContext shape for this test;
-          // only supplyCity and estimatedTrackCostToSupply matter to JIRA-240's bundling guard.
           loadType: 'Marble',
           supplyCity: 'Firenze',
           deliveryCity: 'Birmingham',
@@ -1706,29 +1701,29 @@ describe('JIRA-241: resolveBuildTarget — end-state suppression', () => {
 
     const result = resolveBuildTarget(route, context);
 
-    // Victory branch is suppressed entirely; result either null or falls through to route-based.
-    // Either way, NO secondaryTarget should be set.
-    if (result !== null) {
-      expect(result.secondaryTarget).toBeUndefined();
-      expect(result.isVictoryBuild).toBe(false);
-    }
-  });
-
-  it('mid-state baseline: same fixture as AC5 but gameState=Mid → victory branch fires', () => {
-    const route = makeRoute({ currentStopIndex: 0 });
-    const context = makeContext({
-      money: 240,
-      gameState: GameState.Mid,
-      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien'],
-      unconnectedMajorCities: [{ cityName: 'Moskva', estimatedCost: 5 }],
-      citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien'],
-    });
-
-    const result = resolveBuildTarget(route, context);
-
-    // Mid-state path still takes the victory branch.
     expect(result).not.toBeNull();
     expect(result!.isVictoryBuild).toBe(true);
     expect(result!.targetCity).toBe('Moskva');
+    // Moskva 5M + Firenze 3M = 8M ≤ 20M → bundle fires (same as mid-state behavior)
+    expect(result!.secondaryTarget).toBe('Firenze');
+  });
+
+  it('AC3 — End and Mid produce the same victory-build result for the same inputs', () => {
+    const baseContext = {
+      money: 240,
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien'],
+      unconnectedMajorCities: [{ cityName: 'Moskva', estimatedCost: 5 }],
+      citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien'],
+    };
+    const route = makeRoute({ currentStopIndex: 0 });
+
+    const endResult = resolveBuildTarget(route, makeContext({ ...baseContext, gameState: GameState.End }));
+    const midResult = resolveBuildTarget(route, makeContext({ ...baseContext, gameState: GameState.Mid }));
+
+    expect(endResult).not.toBeNull();
+    expect(midResult).not.toBeNull();
+    expect(endResult!.isVictoryBuild).toBe(true);
+    expect(midResult!.isVictoryBuild).toBe(true);
+    expect(endResult!.targetCity).toBe(midResult!.targetCity);
   });
 });

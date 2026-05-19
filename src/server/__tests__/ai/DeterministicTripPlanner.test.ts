@@ -916,17 +916,18 @@ describe('scoreCandidate — affordability gate (JIRA-223)', () => {
     expect(result.feasible).toBe(false);
   });
 
-  it('affordability gate rejection logs exactly once with "unaffordable" in log content', () => {
+  it('affordability gate rejection returns feasible=false silently (no per-candidate log)', () => {
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 8, totalBuildCost: 30, feasible: true,
       minCashRelative: -25, finalCashRelative: -5,
     });
     const snapshot = makeSnapshot({ money: 7 });
-    scoreCandidate(makeCandidate('log-test'), { row: 5, col: 5 }, snapshot, defaultOpts);
-    expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(logSpy.mock.calls[0][0]).toContain('affordability gate rejected');
-    expect(logSpy.mock.calls[0][0]).toContain('startingCash=7M');
+    const result = scoreCandidate(makeCandidate('log-test'), { row: 5, col: 5 }, snapshot, defaultOpts);
+    expect(result.feasible).toBe(false);
+    // No per-candidate log — the rejection signal is in result.feasible.
+    const affordabilityLogs = logSpy.mock.calls.filter((c) => String(c[0]).includes('affordability gate rejected'));
+    expect(affordabilityLogs).toHaveLength(0);
     logSpy.mockRestore();
   });
 
