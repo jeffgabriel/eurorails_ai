@@ -6,9 +6,9 @@
  * - cheapestUnconnectedMajorConnectorCost: already connected, partial, empty list
  */
 
-import { computeGameState, cheapestUnconnectedMajorConnectorCost } from '../../services/ai/victoryRules';
+import { computeGameState, cheapestUnconnectedMajorConnectorCost, detectVictoryClinch } from '../../services/ai/victoryRules';
 import { GameState, GameContext } from '../../../shared/types/GameTypes';
-import type { BotMemoryState } from '../../../shared/types/GameTypes';
+import type { BotMemoryState, DemandContext } from '../../../shared/types/GameTypes';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -186,5 +186,125 @@ describe('cheapestUnconnectedMajorConnectorCost', () => {
       });
       expect(cheapestUnconnectedMajorConnectorCost(ctx)).toBe(0);
     });
+  });
+});
+
+// ── detectVictoryClinch (JIRA-243) ────────────────────────────────────────
+
+function makeDemand(overrides: Partial<DemandContext> = {}): DemandContext {
+  return {
+    cardIndex: 0,
+    loadType: 'Labor',
+    supplyCity: 'Zagreb',
+    deliveryCity: 'Bordeaux',
+    payout: 34,
+    isSupplyReachable: true,
+    isDeliveryReachable: true,
+    isSupplyOnNetwork: true,
+    isDeliveryOnNetwork: true,
+    estimatedTrackCostToSupply: 0,
+    estimatedTrackCostToDelivery: 0,
+    isLoadAvailable: true,
+    isLoadOnTrain: true,
+    ferryRequired: false,
+    loadChipTotal: 3,
+    loadChipCarried: 1,
+    estimatedTurns: 3,
+    demandScore: 0,
+    efficiencyPerTurn: 0,
+    networkCitiesUnlocked: 0,
+    victoryMajorCitiesEnRoute: 0,
+    isAffordable: true,
+    projectedFundsAfterDelivery: 0,
+    ...overrides,
+  };
+}
+
+const SEVEN_CONNECTED = ['Paris', 'Holland', 'Ruhr', 'Berlin', 'London', 'Wien', 'Madrid'];
+
+describe('detectVictoryClinch', () => {
+  it('returns the clinch when carrying a load with a matching demand that clears 250M and 7 majors are connected', () => {
+    const ctx = makeContext({
+      money: 226,
+      connectedMajorCities: SEVEN_CONNECTED,
+      demands: [makeDemand({ cardIndex: 78, loadType: 'Labor', deliveryCity: 'Bordeaux', payout: 34 })],
+    });
+    expect(detectVictoryClinch(ctx)).toEqual({
+      loadType: 'Labor',
+      deliveryCity: 'Bordeaux',
+      payout: 34,
+      cardIndex: 78,
+    });
+  });
+
+  it('returns null when fewer than 7 majors are connected', () => {
+    const ctx = makeContext({
+      money: 226,
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F'], // 6
+      demands: [makeDemand({ payout: 100 })],
+    });
+    expect(detectVictoryClinch(ctx)).toBeNull();
+  });
+
+  it('returns null when no carried demand reaches 250M post-delivery', () => {
+    const ctx = makeContext({
+      money: 200,
+      connectedMajorCities: SEVEN_CONNECTED,
+      demands: [makeDemand({ payout: 30 })], // 200 + 30 = 230 < 250
+    });
+    expect(detectVictoryClinch(ctx)).toBeNull();
+  });
+
+  it('returns null when the load is not on the train (no carry)', () => {
+    const ctx = makeContext({
+      money: 226,
+      connectedMajorCities: SEVEN_CONNECTED,
+      demands: [makeDemand({ isLoadOnTrain: false })],
+    });
+    expect(detectVictoryClinch(ctx)).toBeNull();
+  });
+
+  it('returns null when the delivery city is not on the bot network', () => {
+    const ctx = makeContext({
+      money: 226,
+      connectedMajorCities: SEVEN_CONNECTED,
+      demands: [makeDemand({ isDeliveryOnNetwork: false })],
+    });
+    expect(detectVictoryClinch(ctx)).toBeNull();
+  });
+
+  it('picks the highest-payout carried demand when multiple qualify', () => {
+    const ctx = makeContext({
+      money: 226,
+      connectedMajorCities: SEVEN_CONNECTED,
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Labor', deliveryCity: 'Bordeaux', payout: 30 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', deliveryCity: 'Roma', payout: 45 }),
+      ],
+    });
+    expect(detectVictoryClinch(ctx)).toEqual({
+      loadType: 'Wine',
+      deliveryCity: 'Roma',
+      payout: 45,
+      cardIndex: 2,
+    });
+  });
+
+  it('boundary: returns the clinch when cash + payout equals exactly 250M', () => {
+    const ctx = makeContext({
+      money: 216,
+      connectedMajorCities: SEVEN_CONNECTED,
+      demands: [makeDemand({ payout: 34 })], // 216 + 34 = 250 exactly
+    });
+    expect(detectVictoryClinch(ctx)).not.toBeNull();
+  });
+
+  it('returns null when demands array is empty', () => {
+    const ctx = makeContext({
+      money: 300,
+      connectedMajorCities: SEVEN_CONNECTED,
+      demands: [],
+    });
+    expect(detectVictoryClinch(ctx)).toBeNull();
   });
 });
