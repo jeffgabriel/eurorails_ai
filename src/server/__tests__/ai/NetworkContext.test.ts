@@ -17,13 +17,17 @@ import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
+// Spy holder so individual tests can override getFerryEdges
+const mockGetFerryEdges = jest.fn(() => [] as ReturnType<typeof import('../../../shared/services/majorCityGroups').getFerryEdges>);
+
 jest.mock('../../../shared/services/majorCityGroups', () => ({
   getMajorCityGroups: jest.fn(() => [
     { cityName: 'Wien', center: { row: 37, col: 55 }, outposts: [] },
     { cityName: 'Berlin', center: { row: 24, col: 52 }, outposts: [] },
     { cityName: 'Paris', center: { row: 29, col: 32 }, outposts: [] },
   ]),
-  getFerryEdges: jest.fn(() => []),
+  // Use indirection so tests can call mockGetFerryEdges.mockReturnValueOnce(...)
+  getFerryEdges: (...args: unknown[]) => mockGetFerryEdges(...args),
 }));
 
 jest.mock('../../services/ai/MapTopology', () => ({
@@ -174,6 +178,102 @@ describe('NetworkContext.computeCitiesOnNetwork', () => {
     const network = buildTrackNetwork([]);
     const result = NetworkContext.computeCitiesOnNetwork(network, []);
     expect(result).toEqual([]);
+  });
+
+  // ── JIRA-244: Ferry-aware citiesOnNetwork ────────────────────────────────
+
+  it('AC1: segments terminating at Liverpool (13,29) → Dublin in returned set', () => {
+    // Bot has track from (14,29) to Liverpool (13,29) — the Dublin_Liverpool ferry port.
+    // getFerryEdges returns the Dublin_Liverpool ferry: pointA=Liverpool(13,29), pointB=Dublin(10,24).
+    mockGetFerryEdges.mockReturnValueOnce([
+      {
+        name: 'Dublin_Liverpool',
+        pointA: { row: 13, col: 29 }, // Liverpool
+        pointB: { row: 10, col: 24 }, // Dublin
+        cost: 8,
+      },
+    ]);
+
+    const segments = [makeSegment(14, 29, 13, 29)]; // track ending at Liverpool
+    const network = buildTrackNetwork(segments);
+    const gridPoints = [
+      makeGridPoint(14, 29),
+      makeGridPoint(13, 29, { terrain: TerrainType.FerryPort }),
+      makeCityPoint(10, 24, 'Dublin', TerrainType.MajorCity),
+    ];
+
+    const result = NetworkContext.computeCitiesOnNetwork(network, gridPoints);
+    expect(result).toContain('Dublin');
+  });
+
+  it('AC4: segments terminating at Stranraer (7,28) → Belfast in returned set', () => {
+    // Belfast_Stranraer ferry: pointA=Stranraer(7,28), pointB=Belfast(7,26)
+    mockGetFerryEdges.mockReturnValueOnce([
+      {
+        name: 'Belfast_Stranraer',
+        pointA: { row: 7, col: 28 }, // Stranraer
+        pointB: { row: 7, col: 26 }, // Belfast
+        cost: 4,
+      },
+    ]);
+
+    const segments = [makeSegment(8, 28, 7, 28)]; // track ending at Stranraer
+    const network = buildTrackNetwork(segments);
+    const gridPoints = [
+      makeGridPoint(8, 28),
+      makeGridPoint(7, 28, { terrain: TerrainType.FerryPort }),
+      makeCityPoint(7, 26, 'Belfast', TerrainType.MajorCity),
+    ];
+
+    const result = NetworkContext.computeCitiesOnNetwork(network, gridPoints);
+    expect(result).toContain('Belfast');
+  });
+
+  it('AC5: segments not touching any ferry port → returned set unchanged from pre-fix behavior', () => {
+    // No ferry edges returned → purely segment-endpoint cities
+    mockGetFerryEdges.mockReturnValueOnce([]);
+
+    const segments = [makeSegment(0, 0, 0, 1), makeSegment(0, 1, 0, 2)];
+    const network = buildTrackNetwork(segments);
+    const gridPoints = [
+      makeCityPoint(0, 0, 'CityA'),
+      makeGridPoint(0, 1),
+      makeCityPoint(0, 2, 'CityB'),
+    ];
+
+    const result = NetworkContext.computeCitiesOnNetwork(network, gridPoints);
+    expect(result).toContain('CityA');
+    expect(result).toContain('CityB');
+    expect(result).not.toContain('Dublin');
+    expect(result).not.toContain('Belfast');
+  });
+
+  it('AC6: segments at BOTH Liverpool (13,29) AND Dublin (10,24) → Dublin appears exactly once', () => {
+    // Both ferry endpoints are in network.nodes → Dublin is added by the nodes loop, not duplicated.
+    mockGetFerryEdges.mockReturnValueOnce([
+      {
+        name: 'Dublin_Liverpool',
+        pointA: { row: 13, col: 29 }, // Liverpool
+        pointB: { row: 10, col: 24 }, // Dublin
+        cost: 8,
+      },
+    ]);
+
+    const segments = [
+      makeSegment(14, 29, 13, 29), // track to Liverpool
+      makeSegment(10, 24, 10, 23), // track starting at Dublin
+    ];
+    const network = buildTrackNetwork(segments);
+    const gridPoints = [
+      makeGridPoint(14, 29),
+      makeGridPoint(13, 29, { terrain: TerrainType.FerryPort }),
+      makeCityPoint(10, 24, 'Dublin', TerrainType.MajorCity),
+      makeGridPoint(10, 23),
+    ];
+
+    const result = NetworkContext.computeCitiesOnNetwork(network, gridPoints);
+    const dublinCount = result.filter(c => c === 'Dublin').length;
+    expect(dublinCount).toBe(1);
   });
 });
 

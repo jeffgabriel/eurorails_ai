@@ -35,8 +35,10 @@ import { ActionResolver } from './ActionResolver';
 import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
 import { TurnExecutor } from './TurnExecutor';
 import { PostDeliveryReplanner } from './PostDeliveryReplanner';
-import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { computeEffectivePathLength, getMajorCityLookup, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
+import { isCoordOnNetwork } from './context/NetworkContext';
+import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { capture } from './WorldSnapshotService';
 import { ContextBuilder } from './ContextBuilder';
 import { loadGridPoints as loadGridPointsMap } from './MapTopology';
@@ -464,6 +466,18 @@ export class MovementPhasePlanner {
             );
 
             if (a3OriginResult.length === 0) {
+              // JIRA-244 Fix B: distinguish "target already reachable" from "no path found".
+              // computeBuildSegments returns [] when no NEW segments are needed (target is
+              // already on-network via the existing track or a paid ferry crossing).
+              const a3Network = snapshot.bot.existingSegments.length > 0
+                ? buildTrackNetwork(snapshot.bot.existingSegments)
+                : null;
+              const a3FerryEdges = getFerryEdges();
+              if (a3Network && isCoordOnNetwork(a3TargetCoord, a3Network, a3FerryEdges)) {
+                // Target is reachable — A2 will handle movement on next loop iteration.
+                trace.a3.terminationReason = 'a3_target_already_reachable';
+                continue;
+              }
               trace.a3.terminationReason = 'build_dijkstra_failed';
             } else {
               const previewBuildOrigin = a3OriginResult[0].from;

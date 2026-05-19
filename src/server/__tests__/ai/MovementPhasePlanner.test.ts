@@ -69,6 +69,20 @@ jest.mock('../../services/ai/ActionResolver', () => ({
 jest.mock('../../../shared/services/majorCityGroups', () => ({
   getMajorCityLookup: jest.fn(() => new Map()),
   computeEffectivePathLength: jest.fn(() => 3),
+  getFerryEdges: jest.fn(() => [
+    {
+      name: 'Dublin_Liverpool',
+      pointA: { row: 13, col: 29 }, // Liverpool
+      pointB: { row: 10, col: 24 }, // Dublin
+      cost: 8,
+    },
+    {
+      name: 'Belfast_Stranraer',
+      pointA: { row: 7, col: 28 }, // Stranraer
+      pointB: { row: 7, col: 26 }, // Belfast
+      cost: 4,
+    },
+  ]),
 }));
 
 jest.mock('../../services/ai/PostDeliveryReplanner', () => ({
@@ -1364,5 +1378,74 @@ describe('JIRA-214 P2: Advisor trigger after pickup at city (AC10)', () => {
     // Should include Kaliningrad, not Krakow
     expect(passedCandidates.some((c: { deliveryCity: string }) => c.deliveryCity === 'Kaliningrad')).toBe(true);
     expect(passedCandidates.some((c: { deliveryCity: string }) => c.deliveryCity === 'Krakow')).toBe(false);
+  });
+});
+
+// ── JIRA-244 AC3: A3 empty-result disambiguation ──────────────────────────
+
+describe('JIRA-244 AC3: A3 empty-result — a3_target_already_reachable via paid ferry', () => {
+  /**
+   * Fixture: bot has track reaching Liverpool (13,29) — the Dublin_Liverpool ferry port.
+   * citiesOnNetwork is deliberately stubbed to EXCLUDE Dublin (simulating a future
+   * regression where Fix A is broken). computeBuildSegments returns [] (no new segments
+   * needed). Fix B should detect that Dublin is reachable via the paid ferry and set
+   * a3.terminationReason = 'a3_target_already_reachable' rather than 'build_dijkstra_failed',
+   * and should NOT emit a PassTurn plan.
+   */
+  it('AC3: sets a3_target_already_reachable and does not emit PassTurn when target is reachable via paid ferry', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    // Route: deliver Cheese to Dublin. Dublin is NOT in citiesOnNetwork (regression stub).
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Dublin', 'Cheese')],
+      currentStopIndex: 0,
+    });
+
+    // citiesOnNetwork deliberately excludes Dublin (the bug we're guarding against).
+    const context = makeContext({
+      citiesOnNetwork: ['Liverpool'], // Dublin excluded
+      position: { row: 14, col: 29 }, // near Liverpool but not at Dublin
+      speed: 9,
+    });
+
+    // Snapshot: bot has a segment ending at Liverpool (13,29) — the ferry port.
+    const snapshot = {
+      ...makeSnapshot(),
+      bot: {
+        ...makeSnapshot().bot,
+        existingSegments: [
+          {
+            from: { x: 14 * 40, y: 29 * 40, row: 14, col: 29, terrain: TerrainType.Clear },
+            to: { x: 13 * 40, y: 29 * 40, row: 13, col: 29, terrain: TerrainType.FerryPort },
+            cost: 1,
+          },
+        ],
+      },
+    } as unknown as import('../../../shared/types/GameTypes').WorldSnapshot;
+
+    // A3 target resolution: resolveBuildTarget → Dublin, loadGridPoints → Dublin at (10,24)
+    mockResolveBuildTarget.mockReturnValue({ targetCity: 'Dublin' });
+    const { loadGridPoints } = jest.requireMock('../../services/ai/MapTopology');
+    const dublinGridMap = new Map([
+      ['10,24', { row: 10, col: 24, name: 'Dublin', terrain: TerrainType.MajorCity, city: { name: 'Dublin' } }],
+      ['13,29', { row: 13, col: 29, name: undefined, terrain: TerrainType.FerryPort, city: undefined }],
+      ['14,29', { row: 14, col: 29, name: undefined, terrain: TerrainType.Clear, city: undefined }],
+    ]);
+    (loadGridPoints as jest.Mock).mockReturnValue(dublinGridMap);
+
+    // computeBuildSegments returns [] (Dublin reachable, no new segments needed)
+    // — already the global mock default.
+
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, snapshot, context, trace);
+
+    // Primary assertion: Fix B diagnosed the reachability correctly
+    expect(trace.a3.terminationReason).toBe('a3_target_already_reachable');
+
+    // Secondary assertion: MovementPhasePlanner did NOT produce a PassTurn plan
+    // (PassTurn is only added by TurnExecutorPlanner from an empty accumulatedPlans;
+    // what we verify here is that A3 did not emit it from this branch)
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.PassTurn)).toBe(false);
   });
 });

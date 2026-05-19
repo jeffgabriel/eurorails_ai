@@ -41,6 +41,34 @@ export interface NetworkContextResult {
   positionCityName: string | undefined;
 }
 
+/**
+ * JIRA-244: Returns true if `coord` is reachable on the given track network,
+ * accounting for paid ferry crossings.
+ *
+ * A coord is on-network if:
+ *   (a) it is a direct node in network.nodes ("row,col"), OR
+ *   (b) it is the partner endpoint of a ferry edge whose other endpoint IS in network.nodes.
+ *
+ * This is the shared reachability check used by both computeCitiesOnNetwork (Fix A)
+ * and the MovementPhasePlanner A3 empty-result branch (Fix B).
+ */
+export function isCoordOnNetwork(
+  coord: { row: number; col: number },
+  network: ReturnType<typeof buildTrackNetwork>,
+  ferryEdges: ReturnType<typeof getFerryEdges>,
+): boolean {
+  const coordKey = `${coord.row},${coord.col}`;
+  if (network.nodes.has(coordKey)) return true;
+
+  for (const ferry of ferryEdges) {
+    const aKey = `${ferry.pointA.row},${ferry.pointA.col}`;
+    const bKey = `${ferry.pointB.row},${ferry.pointB.col}`;
+    if (coordKey === bKey && network.nodes.has(aKey)) return true;
+    if (coordKey === aKey && network.nodes.has(bKey)) return true;
+  }
+  return false;
+}
+
 export class NetworkContext {
   /**
    * Compute all network-topology context fields from the world snapshot.
@@ -185,7 +213,11 @@ export class NetworkContext {
     return Array.from(reachableCityNames);
   }
 
-  /** All city names anywhere on the bot's track network (not speed-limited). */
+  /** All city names anywhere on the bot's track network (not speed-limited).
+   *
+   * JIRA-244: Includes cities reachable via paid ferry crossing — if the bot
+   * has track to a ferry port, the partner endpoint's city is also on-network.
+   */
   static computeCitiesOnNetwork(
     network: ReturnType<typeof buildTrackNetwork>,
     gridPoints: GridPoint[],
@@ -197,6 +229,29 @@ export class NetworkContext {
         cityNames.add(point.city.name);
       }
     }
+
+    // JIRA-244 Fix A: walk ferry edges and include partner-endpoint cities when
+    // exactly one endpoint is in network.nodes (paid ferry grants access to partner).
+    const ferryEdges = getFerryEdges();
+    for (const ferry of ferryEdges) {
+      const aKey = `${ferry.pointA.row},${ferry.pointA.col}`;
+      const bKey = `${ferry.pointB.row},${ferry.pointB.col}`;
+      const aOnNetwork = network.nodes.has(aKey);
+      const bOnNetwork = network.nodes.has(bKey);
+      if (aOnNetwork && !bOnNetwork) {
+        const partnerPoint = gridPoints.find(gp => gp.row === ferry.pointB.row && gp.col === ferry.pointB.col);
+        if (partnerPoint?.city?.name) {
+          cityNames.add(partnerPoint.city.name);
+        }
+      } else if (bOnNetwork && !aOnNetwork) {
+        const partnerPoint = gridPoints.find(gp => gp.row === ferry.pointA.row && gp.col === ferry.pointA.col);
+        if (partnerPoint?.city?.name) {
+          cityNames.add(partnerPoint.city.name);
+        }
+      }
+      // Both on network: partner city already added by the nodes loop above — no duplicate.
+    }
+
     return Array.from(cityNames);
   }
 
