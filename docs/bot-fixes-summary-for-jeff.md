@@ -2,8 +2,8 @@
 
 **Branch:** `compounds/guardrail-updates`
 **Diverged from main:** 2026-03-12 (commit `44d38ce` — JIRA-106 server-side victory check)
-**Last commit on our side:** 2026-05-16
-**Scale:** 410 commits · 605 files changed · +108K / -26K lines
+**Last commit on our side:** 2026-05-19
+**Scale:** 423 commits · ~610 files changed · +108K / -26K lines
 
 ---
 
@@ -54,11 +54,17 @@ Replaces the prior reactive "best-demand-right-now" heuristic. Recent extension:
 
 `RouteValidator.ts` — step-by-step route feasibility + stop-completion detection. Result types: `RouteValidationResult`, `StopValidation`.
 
+**Policy note (JIRA-246):** The bot is allowed to spend to zero — there is no cash-floor / reserve gate at trip selection or route validation. JIRA-246 removed the last vestige of the cash-floor and added A3 carry-deliver abandon paths so the bot can drop a route mid-execution when carry-delivery becomes irrational rather than refusing to commit because of an affordability buffer.
+
 ### 5. Victory rules & end-game (`victoryRules.ts`)
 
 Persistent `GameState` enum: `Initial` → `Early` → `Mid` → `End`. **End is latched** — once cash crosses `END_GAME_ENTRY_CASH` (200M), the bot stays in End for the rest of the game even if cash dips. JIRA-241.
 
 `detectVictoryClinch()` — short-circuits trip planning when the bot is already carrying a load whose delivery completes both victory conditions. Came from JIRA-243 forensic analysis (game `c990fa47`) where the bot missed a 7th-city + delivery clinch at T74 and continued executing a 15-turn Wroclaw → Antwerpen detour.
+
+`findFinalVictoryRoute()` (JIRA-245) — end-game speed-to-win route search. Uses the new `cheapestNUnconnectedMajorConnectorCost(context, N)` to price connecting *N* remaining major cities (the prior helper was single-city only). Wired into `AIStrategyEngine` as a strict-subset fast-path that fires before the clinch check during End phase.
+
+Phase brackets themselves are now landed end-to-end (JIRA-242: early-game phase + multi-delivery expansion bonus).
 
 ### 6. Multi-provider LLM adapter layer (`services/ai/providers/`)
 
@@ -83,17 +89,17 @@ Single source of truth for: `isStopComplete`, `resolveBuildTarget`, `getNetworkF
 
 ## JIRA scope
 
-294 tickets in `docs/ai/done/`. Currently active: JIRA-241 (landed), JIRA-242 (in progress).
+~300 tickets, all shipped, filed under `docs/ai/done/` (canonical location — no in-progress dir at the moment). Most recent landings: JIRA-241 (persistent gameState), 242 (early-phase brackets), 243 (victory clinch), 244 (ferry-aware citiesOnNetwork), 245 (findFinalVictoryRoute), 246 (cash-floor removal), 247 (origin-is-current-position fix).
 
-Themed clusters across the JIRA-1 to JIRA-242 range:
+Themed clusters across the JIRA-1 to JIRA-247 range:
 
 - **1–20:** starting-city, initial-build, demand-scoring foundations.
 - **22–100:** post-delivery, ferry handling, route-stop ordering, train upgrades, double-delivery bugs.
 - **100–130:** build-without-route, cost-estimation accuracy, post-delivery loops, network-aware building.
 - **130–200:** holistic turn validation, network frontier, supply-aware enumeration, ContextBuilder decomposition (JIRA-195).
-- **200–242:** spider-web vs corridor builds, deterministic trip planner introduction, end-state scoring, BuildAdvisor re-enablement experiments, persistent gameState.
+- **200–247:** spider-web vs corridor builds, deterministic trip planner introduction, end-state scoring + persistent phase, victory clinch + final-victory route, cash-floor removal, BuildAdvisor re-enablement experiments.
 
-Most tickets follow a two-file pattern in `docs/ai/done/`: `jira-N-*-behavioral.md` (problem-only) + `jira-N-*-technical.md` (fix plan). Cherry-pick anything you want to read in depth.
+Most tickets follow a two-file pattern: `jira-N-*-behavioral.md` (problem-only) + `jira-N-*-technical.md` (fix plan). Cherry-pick anything you want to read in depth.
 
 ---
 
