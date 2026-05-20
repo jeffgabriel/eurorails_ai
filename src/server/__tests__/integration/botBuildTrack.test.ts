@@ -26,7 +26,7 @@ jest.mock('../../services/socketService', () => ({
 }));
 
 // Mock MapTopology (loaded by ActionResolver, ContextBuilder, computeBuildSegments)
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => {
     const map = new Map();
     // Paris major city and surroundings for pathfinding

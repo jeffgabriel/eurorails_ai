@@ -29,7 +29,7 @@ import {
   TRACK_USAGE_FEE,
   PlayerTrackState,
 } from '../../../shared/types/GameTypes';
-import { loadGridPoints, GridCoord, GridPointData, hexDistance, makeKey } from './MapTopology';
+import { loadGridPoints, GridCoord, GridPointData, hexDistance, makeKey } from '../MapTopology';
 import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { computeBuildSegments } from './computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';

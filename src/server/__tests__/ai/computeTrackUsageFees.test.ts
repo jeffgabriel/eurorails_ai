@@ -10,13 +10,13 @@ import { DemandOption, TerrainType, TrainType, WorldSnapshot } from '../../../sh
 import { TrackSegment } from '../../../shared/types/TrackTypes';
 
 // Mock MapTopology so we can control gridPoints without hitting the filesystem
-jest.mock('../../services/ai/MapTopology', () => ({
-  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
+jest.mock('../../services/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/MapTopology')>('../../services/MapTopology'),
   loadGridPoints: jest.fn(),
   makeKey: (row: number, col: number) => `${row},${col}`,
 }));
 
-import { loadGridPoints } from '../../services/ai/MapTopology';
+import { loadGridPoints } from '../../services/MapTopology';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

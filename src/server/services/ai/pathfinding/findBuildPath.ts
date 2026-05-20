@@ -28,7 +28,7 @@ import {
   GridCoord,
   GridPointData,
   makeKey,
-} from '../MapTopology';
+} from '../../MapTopology';
 import { getMajorCityLookup, getFerryEdges, isIntraCityEdge } from '../../../../shared/services/majorCityGroups';
 import { isNearExistingTrack } from '../computeBuildSegments';
 

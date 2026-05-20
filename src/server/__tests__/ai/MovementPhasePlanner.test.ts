@@ -23,7 +23,7 @@ import type { CompositionTrace } from '../../services/ai/TurnExecutorPlanner';
 
 // ── Mock dependencies ──────────────────────────────────────────────────────
 
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   makeKey: (row: number, col: number) => `${row},${col}`,
   hexDistance: jest.fn(() => 5),
@@ -998,7 +998,7 @@ describe('JIRA-202: arrival on last milepost executes stop action', () => {
     (computeEffectivePathLength as jest.Mock).mockReturnValue(9);
 
     // Patch loadGridPoints (MapTopology) to return a ferry port at destination
-    const MapTopology = jest.requireMock('../../services/ai/MapTopology');
+    const MapTopology = jest.requireMock('../../services/MapTopology');
     const ferryMap = new Map<string, { terrain: TerrainType }>();
     ferryMap.set('10,10', { terrain: TerrainType.FerryPort });
     (MapTopology.loadGridPoints as jest.Mock).mockReturnValue(ferryMap);
@@ -1425,7 +1425,7 @@ describe('JIRA-246 AC8: hasCarriedDeliverableOnNetwork helper (via A3 abandon pa
     // resolveBuildTarget returns a valid target at (20,20)
     mockResolveBuildTarget.mockReturnValue({ targetCity: 'Bern' });
     // loadGridPoints: Bern at (20,20), not on existing segments → reachability check fails
-    const { loadGridPoints } = jest.requireMock('../../services/ai/MapTopology');
+    const { loadGridPoints } = jest.requireMock('../../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['20,20', { row: 20, col: 20, name: 'Bern', terrain: TerrainType.Clear }],
     ]));
@@ -1513,7 +1513,7 @@ describe('JIRA-246 AC2: empty-path abandon when carrying deliverable (R2)', () =
     mockComputeBuildSegments.mockReturnValue([]); // empty path
     mockResolveBuildTarget.mockReturnValue({ targetCity: 'Bern' });
 
-    const { loadGridPoints } = jest.requireMock('../../services/ai/MapTopology');
+    const { loadGridPoints } = jest.requireMock('../../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['20,20', { row: 20, col: 20, name: 'Bern', terrain: TerrainType.Clear }],
     ]));
@@ -1607,7 +1607,7 @@ describe('JIRA-246 AC2 (partial): partial-path abandon when carrying deliverable
     mockIsStopComplete.mockReturnValue(false);
     mockResolveBuildTarget.mockReturnValue({ targetCity: 'Bern' });
 
-    const { loadGridPoints } = jest.requireMock('../../services/ai/MapTopology');
+    const { loadGridPoints } = jest.requireMock('../../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['20,20', { row: 20, col: 20, name: 'Bern', terrain: TerrainType.Clear }],
     ]));
@@ -1703,7 +1703,7 @@ describe('JIRA-247 AC5: origin_is_current_position → a3_build_origin_is_curren
     mockResolveBuildTarget.mockReturnValue({ targetCity: 'Stockholm' });
 
     // Stockholm at (8, 42)
-    const { loadGridPoints } = jest.requireMock('../../services/ai/MapTopology');
+    const { loadGridPoints } = jest.requireMock('../../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['8,42', { row: 8, col: 42, name: 'Stockholm', terrain: TerrainType.Clear }],
     ]));
@@ -1837,7 +1837,7 @@ describe('JIRA-244 AC3: A3 empty-result — a3_target_already_reachable via paid
 
     // A3 target resolution: resolveBuildTarget → Dublin, loadGridPoints → Dublin at (10,24)
     mockResolveBuildTarget.mockReturnValue({ targetCity: 'Dublin' });
-    const { loadGridPoints } = jest.requireMock('../../services/ai/MapTopology');
+    const { loadGridPoints } = jest.requireMock('../../services/MapTopology');
     const dublinGridMap = new Map([
       ['10,24', { row: 10, col: 24, name: 'Dublin', terrain: TerrainType.MajorCity, city: { name: 'Dublin' } }],
       ['13,29', { row: 13, col: 29, name: undefined, terrain: TerrainType.FerryPort, city: undefined }],

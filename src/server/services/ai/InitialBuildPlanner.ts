@@ -18,7 +18,7 @@ import {
   TrainType,
 } from '../../../shared/types/GameTypes';
 import { getMajorCityGroups } from '../../../shared/services/majorCityGroups';
-import { hexDistance, estimatePathCost } from './MapTopology';
+import { hexDistance, estimatePathCost } from '../MapTopology';
 import { LoadService } from '../loadService';
 
 /** Peripheral cities that get a scoring penalty */

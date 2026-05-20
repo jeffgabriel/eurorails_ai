@@ -33,13 +33,13 @@ import {
   TrainType,
   TrackSegment,
 } from '../../../../shared/types/GameTypes';
-import { GridPointData } from '../../../services/ai/MapTopology';
+import { GridPointData } from '../../../services/MapTopology';
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 
 const mockGrid = new Map<string, GridPointData>();
 
-jest.mock('../../../services/ai/MapTopology', () => ({
+jest.mock('../../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => mockGrid),
   getHexNeighbors: jest.fn((row: number, col: number) => {
     const isEvenRow = row % 2 === 0;

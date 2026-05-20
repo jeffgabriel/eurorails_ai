@@ -46,7 +46,7 @@ import { isCoordOnNetwork } from './context/NetworkContext';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { capture } from './WorldSnapshotService';
 import { ContextBuilder } from './ContextBuilder';
-import { loadGridPoints as loadGridPointsMap } from './MapTopology';
+import { loadGridPoints as loadGridPointsMap } from '../MapTopology';
 import type { PhaseAResult } from './schemas';
 import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
 import { computeCandidateDetourCosts, MAX_DETOUR_TURNS } from './RouteDetourEstimator';

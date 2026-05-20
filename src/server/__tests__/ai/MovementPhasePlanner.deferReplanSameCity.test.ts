@@ -35,7 +35,7 @@ import type { CompositionTrace } from '../../services/ai/TurnExecutorPlanner';
 
 // ── Mocks ────────────────────────────────────────────────────────────────
 
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   makeKey: (row: number, col: number) => `${row},${col}`,
   hexDistance: jest.fn(() => 5),

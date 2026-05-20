@@ -22,14 +22,14 @@ import {
   StrategicRoute,
   RouteStop,
 } from '../../../shared/types/GameTypes';
-import { GridPointData } from '../../services/ai/MapTopology';
+import { GridPointData } from '../../services/MapTopology';
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 
 // Mock MapTopology for controlled grid
 const mockGrid = new Map<string, GridPointData>();
 
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => mockGrid),
   getHexNeighbors: jest.fn((row: number, col: number) => {
     // Return deterministic neighbors based on even/odd row (hex offset grid)

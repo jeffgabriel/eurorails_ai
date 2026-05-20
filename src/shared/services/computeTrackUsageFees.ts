@@ -12,7 +12,7 @@
 
 import { DemandOption, TerrainType, TrainType, TRAIN_PROPERTIES, WorldSnapshot } from '../types/GameTypes';
 import { buildUnionTrackGraph } from './trackUsageFees';
-import { loadGridPoints, makeKey } from '../../server/services/ai/MapTopology';
+import { loadGridPoints, makeKey } from '../../server/services/MapTopology';
 
 /** Capacity caps by city type. */
 const SMALL_CITY_CAP = 2;

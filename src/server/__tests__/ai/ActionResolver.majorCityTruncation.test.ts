@@ -33,7 +33,7 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
   computeBuildSegments: jest.fn(() => []),
 }));
 jest.mock('../../../shared/services/trackUsageFees');
-jest.mock('../../services/ai/MapTopology');
+jest.mock('../../services/MapTopology');
 jest.mock('../../../shared/services/majorCityGroups', () => {
   const actual = jest.requireActual('../../../shared/services/majorCityGroups');
   return {
@@ -45,7 +45,7 @@ jest.mock('../../../shared/services/majorCityGroups', () => {
 });
 
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
-import { loadGridPoints } from '../../services/ai/MapTopology';
+import { loadGridPoints } from '../../services/MapTopology';
 import { getMajorCityGroups, getMajorCityLookup, getFerryEdges } from '../../../shared/services/majorCityGroups';
 
 const mockComputeTrackUsageForMove = computeTrackUsageForMove as jest.MockedFunction<typeof computeTrackUsageForMove>;

@@ -27,7 +27,7 @@ jest.mock('../../services/socketService', () => ({
   getSocketIO: jest.fn<() => any>().mockReturnValue(null),
 }));
 
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   getHexNeighbors: jest.fn(() => []),
   getTerrainCost: jest.fn(() => 1),
@@ -235,7 +235,7 @@ import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor
 import { db } from '../../db/index';
 import { emitToGame } from '../../services/socketService';
 import { getMemory, updateMemory } from '../../services/ai/BotMemory';
-import { loadGridPoints } from '../../services/ai/MapTopology';
+import { loadGridPoints } from '../../services/MapTopology';
 import { PlayerService } from '../../services/playerService';
 import { logPhase } from '../../services/ai/DecisionLogger';
 import {
@@ -3166,7 +3166,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockFindDeadLoads.mockReturnValue(deadLoads);
 
       // Mock loadGridPointsMap to return a city at bot's position
-      const { loadGridPoints } = require('../../services/ai/MapTopology');
+      const { loadGridPoints } = require('../../services/MapTopology');
       (loadGridPoints as jest.Mock).mockReturnValue(new Map([
         ['10,10', { name: 'TestCity' }],
       ]));
@@ -3244,7 +3244,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockFindDeadLoads.mockReturnValue(['Hops']);
 
       // loadGridPointsMap returns no city at bot's position
-      const { loadGridPoints } = require('../../services/ai/MapTopology');
+      const { loadGridPoints } = require('../../services/MapTopology');
       (loadGridPoints as jest.Mock).mockReturnValue(new Map());
 
       const route = {

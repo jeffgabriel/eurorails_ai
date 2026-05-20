@@ -6,7 +6,7 @@
 
 import { NetworkBuildAnalyzer } from '../../services/ai/NetworkBuildAnalyzer';
 import { TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
-import { GridPointData } from '../../services/ai/MapTopology';
+import { GridPointData } from '../../services/MapTopology';
 
 // ── Mock MapTopology ────────────────────────────────────────────────────
 // Use even-q offset hex grid neighbors matching the real implementation.
@@ -34,7 +34,7 @@ function evenQHexNeighbors(row: number, col: number): { row: number; col: number
   }
 }
 
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   getHexNeighbors: (row: number, col: number) => evenQHexNeighbors(row, col),
   getTerrainCost: (terrain: number) => {
     switch (terrain) {

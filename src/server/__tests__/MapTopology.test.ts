@@ -14,7 +14,7 @@ import {
   makeKey,
   _resetCache,
   GridPointData,
-} from '../services/ai/MapTopology';
+} from '../services/MapTopology';
 
 describe('MapTopology', () => {
   describe('loadGridPoints', () => {

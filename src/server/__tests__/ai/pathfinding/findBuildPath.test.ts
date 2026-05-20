@@ -15,13 +15,13 @@
 
 import { findBuildPath, FindBuildPathResult } from '../../../services/ai/pathfinding/findBuildPath';
 import { TerrainType, TrackSegment } from '../../../../shared/types/GameTypes';
-import { GridPointData } from '../../../services/ai/MapTopology';
+import { GridPointData } from '../../../services/MapTopology';
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 
 const mockGrid = new Map<string, GridPointData>();
 
-jest.mock('../../../services/ai/MapTopology', () => ({
+jest.mock('../../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => mockGrid),
   getHexNeighbors: jest.fn((row: number, col: number) => {
     // Hex grid neighbor offsets (even-row vs odd-row offset)
@@ -83,7 +83,7 @@ jest.mock('../../../services/ai/computeBuildSegments', () => ({
   }),
 }));
 
-import { getWaterCrossingCost } from '../../../services/ai/MapTopology';
+import { getWaterCrossingCost } from '../../../services/MapTopology';
 import { isIntraCityEdge, getMajorCityLookup } from '../../../../shared/services/majorCityGroups';
 
 const mockGetWaterCrossingCost = getWaterCrossingCost as jest.MockedFunction<typeof getWaterCrossingCost>;

@@ -17,13 +17,13 @@ import {
   TurnPlanBuildTrack,
   GameState,
 } from '../../../shared/types/GameTypes';
-import type { GridPointData } from '../../services/ai/MapTopology';
+import type { GridPointData } from '../../services/MapTopology';
 
 // ─── Mock modules ────────────────────────────────────────────────────────────
 
 jest.mock('../../services/ai/computeBuildSegments');
 jest.mock('../../../shared/services/trackUsageFees');
-jest.mock('../../services/ai/MapTopology');
+jest.mock('../../services/MapTopology');
 jest.mock('../../services/ai/NetworkBuildAnalyzer');
 jest.mock('../../../shared/services/majorCityGroups', () => {
   const actual = jest.requireActual('../../../shared/services/majorCityGroups');
@@ -37,7 +37,7 @@ jest.mock('../../../shared/services/majorCityGroups', () => {
 });
 
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
-import { loadGridPoints, hexDistance, makeKey } from '../../services/ai/MapTopology';
+import { loadGridPoints, hexDistance, makeKey } from '../../services/MapTopology';
 import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { NetworkBuildAnalyzer } from '../../services/ai/NetworkBuildAnalyzer';
 

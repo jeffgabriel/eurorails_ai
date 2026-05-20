@@ -13,8 +13,8 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
   computeEffectivePathLength: jest.fn().mockReturnValue(0),
 }));
 
-jest.mock('../../services/ai/MapTopology', () => ({
-  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
+jest.mock('../../services/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/MapTopology')>('../../services/MapTopology'),
   hexDistance: jest.fn(),
   loadGridPoints: jest.fn().mockReturnValue(new Map()),
   estimateHopDistance: jest.fn().mockReturnValue(0),

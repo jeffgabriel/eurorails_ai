@@ -32,7 +32,7 @@ import {
   computeFerryRouteInfo,
   makeKey,
   loadGridPoints,
-} from '../MapTopology';
+} from '../../MapTopology';
 import { estimateGraphPathCost } from '../PathCostEstimator';
 
 // ── Geographic region constants ─────────────────────────────────────────────

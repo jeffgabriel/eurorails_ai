@@ -17,7 +17,7 @@ import {
   WorldSnapshot,
   VICTORY_CITY_COUNT,
 } from '../../../shared/types/GameTypes';
-import { loadGridPoints, hexDistance } from './MapTopology';
+import { loadGridPoints, hexDistance } from '../MapTopology';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 
 /**

@@ -19,7 +19,7 @@ import { emitToGame, emitStatePatch } from '../socketService';
 import { PlayerService } from '../playerService';
 import { LoadService } from '../loadService';
 import { DemandDeckService } from '../demandDeckService';
-import { gridToPixel, loadGridPoints } from './MapTopology';
+import { gridToPixel, loadGridPoints } from '../MapTopology';
 
 export interface ExecutionResult {
   success: boolean;

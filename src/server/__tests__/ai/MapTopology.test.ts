@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { estimateHopDistance, estimatePathCost, hexDistance, loadGridPoints, _resetCache } from '../../services/ai/MapTopology';
+import { estimateHopDistance, estimatePathCost, hexDistance, loadGridPoints, _resetCache } from '../../services/MapTopology';
 import { getFerryEdges } from '../../../shared/services/majorCityGroups';
 
 describe('estimateHopDistance', () => {

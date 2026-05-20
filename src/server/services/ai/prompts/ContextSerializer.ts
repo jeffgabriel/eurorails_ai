@@ -33,7 +33,7 @@ import {
   TRAIN_PROPERTIES,
   TerrainType,
 } from '../../../../shared/types/GameTypes';
-import { hexDistance } from '../MapTopology';
+import { hexDistance } from '../../MapTopology';
 import { estimateTrackCost } from '../context/DemandEngine';
 import { UPGRADE_DELIVERY_THRESHOLD, UPGRADE_OPERATING_BUFFER } from '../context/UpgradeGatingConstants';
 

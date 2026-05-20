@@ -17,7 +17,7 @@ jest.mock('../../services/ai/ActionResolver', () => ({
   },
 }));
 // PlanExecutor deleted — no longer needed
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   getHexNeighbors: jest.fn(() => []),
   getTerrainCost: jest.fn(() => 1),
@@ -36,7 +36,7 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
 // ─── Imports ───────────────────────────────────────────────────────────────
 
 import { ContextBuilder } from '../../services/ai/ContextBuilder';
-import { loadGridPoints, getFerryPairPort } from '../../services/ai/MapTopology';
+import { loadGridPoints, getFerryPairPort } from '../../services/MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import {
   GridPoint,

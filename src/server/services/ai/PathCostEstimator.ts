@@ -13,7 +13,7 @@
  */
 
 import { estimateRouteSegment } from './RouteDetourEstimator';
-import { loadGridPoints } from './MapTopology';
+import { loadGridPoints } from '../MapTopology';
 import { WorldSnapshot, TrackSegment } from '../../../shared/types/GameTypes';
 
 // ── Public types ───────────────────────────────────────────────────────

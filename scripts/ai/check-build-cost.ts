@@ -1,5 +1,5 @@
 #!/usr/bin/env npx ts-node
-import { estimatePathCost, estimateHopDistance } from '../../src/server/services/ai/MapTopology';
+import { estimatePathCost, estimateHopDistance } from '../../src/server/services/MapTopology';
 import * as fs from 'fs';
 import * as path from 'path';
 

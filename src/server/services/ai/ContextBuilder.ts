@@ -36,7 +36,7 @@ import {
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { getConnectedMajorCities } from './connectedMajorCities';
-import { hexDistance, estimatePathCost, getFerryPairPort } from './MapTopology';
+import { hexDistance, estimatePathCost, getFerryPairPort } from '../MapTopology';
 import { MIN_DELIVERIES_BEFORE_UPGRADE } from './AIStrategyEngine';
 import { NetworkContext } from './context/NetworkContext';
 import { BuildContext } from './context/BuildContext';

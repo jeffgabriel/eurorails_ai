@@ -12,8 +12,8 @@
 
 // ── Mocks (hoisted by Jest) ──────────────────────────────────────────────
 
-jest.mock('../../../services/ai/MapTopology', () => ({
-  ...jest.requireActual<typeof import('../../../services/ai/MapTopology')>('../../../services/ai/MapTopology'),
+jest.mock('../../../services/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../../services/MapTopology')>('../../../services/MapTopology'),
   loadGridPoints: jest.fn(() => new Map()),
 }));
 
@@ -109,7 +109,7 @@ import type {
 
 import { isStopComplete, getNetworkFrontier, resolveBuildTarget } from '../../../services/ai/routeHelpers';
 import { computeBuildSegments } from '../../../services/ai/computeBuildSegments';
-import { loadGridPoints } from '../../../services/ai/MapTopology';
+import { loadGridPoints } from '../../../services/MapTopology';
 import { ActionResolver } from '../../../services/ai/ActionResolver';
 import { TripPlanner } from '../../../services/ai/TripPlanner';
 import { RouteEnrichmentAdvisor } from '../../../services/ai/RouteEnrichmentAdvisor';

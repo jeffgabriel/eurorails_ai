@@ -45,7 +45,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { db } from '../../db/index';
 import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
-import { gridToPixel, loadGridPoints as loadGridPointsMap } from './MapTopology';
+import { gridToPixel, loadGridPoints as loadGridPointsMap } from '../MapTopology';
 import { RouteValidator } from './RouteValidator';
 import { getMemory, updateMemory } from './BotMemory';
 import { initTurnLog, logPhase, flushTurnLog, LLMPhaseFields } from './DecisionLogger';

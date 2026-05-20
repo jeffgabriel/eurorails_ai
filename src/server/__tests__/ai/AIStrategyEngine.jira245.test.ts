@@ -104,7 +104,7 @@ jest.mock('../../services/socketService', () => ({
   getSocketIO: jest.fn<() => any>().mockReturnValue(null),
 }));
 
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   getHexNeighbors: jest.fn(() => []),
   getTerrainCost: jest.fn(() => 1),

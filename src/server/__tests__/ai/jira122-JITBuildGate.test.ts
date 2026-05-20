@@ -14,7 +14,7 @@ import {
   TrainType,
   GameState,
 } from '../../../shared/types/GameTypes';
-import { GridPointData } from '../../services/ai/MapTopology';
+import { GridPointData } from '../../services/MapTopology';
 
 // ── Mock MapTopology ────────────────────────────────────────────────────
 function evenQHexNeighbors(row: number, col: number): { row: number; col: number }[] {
@@ -40,7 +40,7 @@ function evenQHexNeighbors(row: number, col: number): { row: number; col: number
   }
 }
 
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   getHexNeighbors: (row: number, col: number) => evenQHexNeighbors(row, col),
   getTerrainCost: (terrain: number) => {
     switch (terrain) {
@@ -65,7 +65,7 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
 }));
 
 const { getFerryEdges } = require('../../../shared/services/majorCityGroups');
-const { loadGridPoints } = require('../../services/ai/MapTopology');
+const { loadGridPoints } = require('../../services/MapTopology');
 
 // ── Test Grid Setup ─────────────────────────────────────────────────────
 function buildTestGrid(overrides: Map<string, Partial<GridPointData>> = new Map()): Map<string, GridPointData> {
@@ -287,7 +287,7 @@ describe('TurnExecutorPlanner.shouldDeferBuild', () => {
       loadGridPoints.mockReturnValue(gridWithCities);
 
       // Mock hexDistance to return large values for distant cities
-      const { hexDistance: mockHexDistance } = require('../../services/ai/MapTopology');
+      const { hexDistance: mockHexDistance } = require('../../services/MapTopology');
       mockHexDistance.mockImplementation((r1: number, c1: number, r2: number, c2: number) => {
         return Math.abs(r2 - r1) + Math.abs(c2 - c1);
       });
@@ -348,7 +348,7 @@ describe('TurnExecutorPlanner.shouldDeferBuild', () => {
 });
 
 describe('TurnExecutorPlanner.estimateIntermediateStopTurns', () => {
-  const { hexDistance: mockHexDistance } = require('../../services/ai/MapTopology');
+  const { hexDistance: mockHexDistance } = require('../../services/MapTopology');
 
   beforeEach(() => {
     mockHexDistance.mockReset();
@@ -421,7 +421,7 @@ describe('TurnExecutorPlanner.estimateIntermediateStopTurns', () => {
 });
 
 describe('TurnExecutorPlanner.calculateTrackRunway', () => {
-  const { hexDistance: mockHexDistance } = require('../../services/ai/MapTopology');
+  const { hexDistance: mockHexDistance } = require('../../services/MapTopology');
 
   // Real hex distance implementation for directional tests
   function realHexDistance(r1: number, c1: number, r2: number, c2: number): number {

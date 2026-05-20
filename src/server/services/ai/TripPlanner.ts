@@ -22,7 +22,7 @@ import {
   WorldSnapshot,
 } from '../../../shared/types/GameTypes';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
-import { estimateHopDistance, loadGridPoints } from './MapTopology';
+import { estimateHopDistance, loadGridPoints } from '../MapTopology';
 import { computeTrackUsageFees } from '../../../shared/services/computeTrackUsageFees';
 import { RouteValidator } from './RouteValidator';
 import { RouteOptimizer } from './RouteOptimizer';

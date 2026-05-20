@@ -20,7 +20,7 @@ import type { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
 
 // ── Mock dependencies ──────────────────────────────────────────────────────
 
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   makeKey: (row: number, col: number) => `${row},${col}`,
   hexDistance: jest.fn(() => 5),
@@ -187,7 +187,7 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
 
 import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState } from '../../services/ai/routeHelpers';
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
-import { loadGridPoints } from '../../services/ai/MapTopology';
+import { loadGridPoints } from '../../services/MapTopology';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { TripPlanner } from '../../services/ai/TripPlanner';
 import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';

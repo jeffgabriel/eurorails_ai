@@ -31,14 +31,14 @@ import {
   TurnPlanPassTurn,
   GameState,
 } from '../../../shared/types/GameTypes';
-import type { GridPointData, GridCoord } from '../../services/ai/MapTopology';
+import type { GridPointData, GridCoord } from '../../services/MapTopology';
 import type { TrackUsageComputation, PathEdge } from '../../../shared/services/trackUsageFees';
 
 // ─── Mock modules ────────────────────────────────────────────────────────────
 
 jest.mock('../../services/ai/computeBuildSegments');
 jest.mock('../../../shared/services/trackUsageFees');
-jest.mock('../../services/ai/MapTopology');
+jest.mock('../../services/MapTopology');
 jest.mock('../../../shared/services/majorCityGroups', () => {
   const actual = jest.requireActual('../../../shared/services/majorCityGroups');
   return {
@@ -51,7 +51,7 @@ jest.mock('../../../shared/services/majorCityGroups', () => {
 
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
-import { loadGridPoints, hexDistance } from '../../services/ai/MapTopology';
+import { loadGridPoints, hexDistance } from '../../services/MapTopology';
 import { getMajorCityGroups, getMajorCityLookup, getFerryEdges } from '../../../shared/services/majorCityGroups';
 
 const mockComputeBuildSegments = computeBuildSegments as jest.MockedFunction<typeof computeBuildSegments>;

@@ -41,7 +41,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState } from './routeHelpers';
 import { computeBuildSegments } from './computeBuildSegments';
-import { loadGridPoints, makeKey, getHexNeighbors, hexDistance } from './MapTopology';
+import { loadGridPoints, makeKey, getHexNeighbors, hexDistance } from '../MapTopology';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
 import { AdvisorCoordinator } from './AdvisorCoordinator';

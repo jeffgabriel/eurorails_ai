@@ -11,7 +11,7 @@
  */
 
 import { RouteStop } from '../../../shared/types/GameTypes';
-import { estimateHopDistance, GridPointData } from './MapTopology';
+import { estimateHopDistance, GridPointData } from '../MapTopology';
 
 export class RouteOptimizer {
   /**

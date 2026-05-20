@@ -25,7 +25,7 @@ import {
   loadGridPoints,
   GridCoord,
   makeKey,
-} from './MapTopology';
+} from '../MapTopology';
 import { ActionResolver } from './ActionResolver';
 import { findBuildPath } from './pathfinding/findBuildPath';
 

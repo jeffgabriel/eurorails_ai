@@ -25,8 +25,8 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
   computeBuildSegments: jest.fn(),
 }));
 
-jest.mock('../../services/ai/MapTopology', () => ({
-  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
+jest.mock('../../services/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/MapTopology')>('../../services/MapTopology'),
   loadGridPoints: jest.fn(),
   hexDistance: jest.fn((r1: number, c1: number, r2: number, c2: number) =>
     Math.abs(r1 - r2) + Math.abs(c1 - c2),
@@ -42,7 +42,7 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
 }));
 
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
-import { loadGridPoints } from '../../services/ai/MapTopology';
+import { loadGridPoints } from '../../services/MapTopology';
 import { getFerryEdges } from '../../../shared/services/majorCityGroups';
 
 const mockComputeBuildSegments = computeBuildSegments as jest.MockedFunction<typeof computeBuildSegments>;

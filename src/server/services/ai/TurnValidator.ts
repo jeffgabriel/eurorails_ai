@@ -19,7 +19,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
-import { loadGridPoints, getHexNeighbors } from './MapTopology';
+import { loadGridPoints, getHexNeighbors } from '../MapTopology';
 
 export interface HardGateResult {
   gate: string;

@@ -17,8 +17,8 @@
  */
 
 import { simulateTrip } from './RouteDetourEstimator';
-import { hexDistance, loadGridPoints } from './MapTopology';
-import type { GridPointData } from './MapTopology';
+import { hexDistance, loadGridPoints } from '../MapTopology';
+import type { GridPointData } from '../MapTopology';
 import { estimateGraphPathCost } from './PathCostEstimator';
 import { LoadService } from '../loadService';
 import {

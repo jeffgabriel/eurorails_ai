@@ -21,7 +21,7 @@ import {
 import { buildTrackNetwork } from '../../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../../shared/services/majorCityGroups';
 import { getConnectedMajorCities } from '../connectedMajorCities';
-import { hexDistance, estimatePathCost, getFerryPairPort } from '../MapTopology';
+import { hexDistance, estimatePathCost, getFerryPairPort } from '../../MapTopology';
 
 /** Internal result type for NetworkContext.compute() */
 export interface NetworkContextResult {

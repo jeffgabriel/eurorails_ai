@@ -40,7 +40,7 @@ jest.mock('../../../shared/services/computeTrackUsageFees', () => ({
   computeTrackUsageFees: jest.fn(() => 0),
 }));
 
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   makeKey: (row: number, col: number) => `${row},${col}`,
   hexDistance: jest.fn(() => 5),

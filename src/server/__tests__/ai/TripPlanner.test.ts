@@ -8,7 +8,7 @@
 import { TripPlanner, TripPlanResult } from '../../services/ai/TripPlanner';
 import { RouteValidator } from '../../services/ai/RouteValidator';
 import { RouteOptimizer } from '../../services/ai/RouteOptimizer';
-import { estimateHopDistance } from '../../services/ai/MapTopology';
+import { estimateHopDistance } from '../../services/MapTopology';
 import {
   UPGRADE_OPERATING_BUFFER,
   UPGRADE_DELIVERY_THRESHOLD,
@@ -55,8 +55,8 @@ jest.mock('../../services/ai/prompts/systemPrompts', () => ({
     user: 'mock-user-prompt: Plan the best multi-stop trip for this turn. Consider all 3 demand cards simultaneously.',
   })),
 }));
-jest.mock('../../services/ai/MapTopology', () => ({
-  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
+jest.mock('../../services/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/MapTopology')>('../../services/MapTopology'),
   estimateHopDistance: jest.fn(() => 0),
   loadGridPoints: jest.fn(() => new Map()),
 }));

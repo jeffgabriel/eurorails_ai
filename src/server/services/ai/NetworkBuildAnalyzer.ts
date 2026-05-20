@@ -13,7 +13,7 @@ import {
   getHexNeighbors,
   getTerrainCost,
   makeKey,
-} from './MapTopology';
+} from '../MapTopology';
 import { getFerryEdges, type FerryEdge } from '../../../shared/services/majorCityGroups';
 
 /** Result of parallel path detection against existing track */

@@ -7,7 +7,7 @@ import { TrackService } from "./trackService";
 import { DemandCard } from "../../shared/types/DemandCard";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
-import { loadGridPoints } from "./ai/MapTopology";
+import { loadGridPoints } from "./MapTopology";
 import { getFerryEdges } from "../../shared/services/majorCityGroups";
 
 type TurnActionDeliver = {

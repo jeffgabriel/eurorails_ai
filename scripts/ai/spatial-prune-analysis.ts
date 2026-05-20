@@ -17,7 +17,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { simulateTrip } from '../../src/server/services/ai/RouteDetourEstimator';
-import { hexDistance, loadGridPoints, gridToPixel, GridPointData } from '../../src/server/services/ai/MapTopology';
+import { hexDistance, loadGridPoints, gridToPixel, GridPointData } from '../../src/server/services/MapTopology';
 import { TrainType, RouteStop, TrackSegment, TerrainType } from '../../src/shared/types/GameTypes';
 
 // ── Tunables ──────────────────────────────────────────────────────────

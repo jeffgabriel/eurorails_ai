@@ -1,5 +1,5 @@
 import { TurnValidator } from '../../services/ai/TurnValidator';
-import * as MapTopology from '../../services/ai/MapTopology';
+import * as MapTopology from '../../services/MapTopology';
 import {
   AIActionType,
   WorldSnapshot,

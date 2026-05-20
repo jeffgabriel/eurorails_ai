@@ -15,7 +15,7 @@
 
 import { TrackSegment } from '../../../shared/types/GameTypes';
 import { computeBuildSegments } from './computeBuildSegments';
-import { loadGridPoints, GridCoord, hexDistance, makeKey } from './MapTopology';
+import { loadGridPoints, GridCoord, hexDistance, makeKey } from '../MapTopology';
 import { getFerryEdges, type FerryEdge } from '../../../shared/services/majorCityGroups';
 
 // ── Feature flag ─────────────────────────────────────────────────────────────

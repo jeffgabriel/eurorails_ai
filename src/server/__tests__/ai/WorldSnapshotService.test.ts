@@ -13,8 +13,8 @@ jest.mock('../../db/index', () => ({
   db: { query: jest.fn() },
 }));
 
-jest.mock('../../services/ai/MapTopology', () => ({
-  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
+jest.mock('../../services/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/MapTopology')>('../../services/MapTopology'),
   loadGridPoints: jest.fn(() => new Map()),
   gridToPixel: jest.fn(() => ({ x: 0, y: 0 })),
 }));
@@ -49,7 +49,7 @@ jest.mock('../../services/loadService', () => ({
 
 import { capture } from '../../services/ai/WorldSnapshotService';
 import { db } from '../../db/index';
-import { loadGridPoints } from '../../services/ai/MapTopology';
+import { loadGridPoints } from '../../services/MapTopology';
 
 const mockQuery = db.query as jest.Mock;
 const mockLoadGridPoints = loadGridPoints as jest.Mock;

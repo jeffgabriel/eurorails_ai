@@ -35,8 +35,8 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
   getFerryEdges: jest.fn(() => []),
 }));
 
-jest.mock('../../services/ai/MapTopology', () => ({
-  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
+jest.mock('../../services/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/MapTopology')>('../../services/MapTopology'),
   estimatePathCost: jest.fn(() => 10),
   estimateHopDistance: jest.fn(() => 5),
   hexDistance: jest.fn(() => 5),

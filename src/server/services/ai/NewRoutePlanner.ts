@@ -50,7 +50,7 @@ import { ActionResolver } from './ActionResolver';
 import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
 import { appendLLMCall } from './LLMTranscriptLogger';
 import { TripPlanner, TripPlanResult } from './TripPlanner';
-import { loadGridPoints as loadGridPointsMap } from './MapTopology';
+import { loadGridPoints as loadGridPointsMap } from '../MapTopology';
 import type { Stage3Result } from './schemas';
 
 /**

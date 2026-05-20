@@ -25,7 +25,7 @@ import type {
 } from '../../../shared/types/GameTypes';
 
 // Mock MapTopology — pure predicate test, no topology queries needed
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   estimateHopDistance: jest.fn(() => 10),
   getHexNeighbors: jest.fn(() => []),
