@@ -60,6 +60,17 @@ export interface BuildTargetResult {
 }
 
 /**
+ * True when the bot carries a load whose delivery city is on its track network.
+ *
+ * Why: signals that a carry-delivery is available without spending more build
+ * budget. Used by guardrails and A3 build-abandon paths to prefer a fresh
+ * carry-deliver plan over continuing a build route that just failed.
+ */
+export function hasCarriedDeliverableOnNetwork(context: GameContext): boolean {
+  return context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork);
+}
+
+/**
  * JIRA-239: Returns true iff the bot can complete a carry delivery this turn
  * on its existing network, without needing to build new track.
  *

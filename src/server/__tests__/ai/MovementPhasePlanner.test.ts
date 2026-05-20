@@ -52,6 +52,9 @@ jest.mock('../../services/ai/routeHelpers', () => {
     applyStopEffectToLocalState: jest.fn((...args: Parameters<typeof real.applyStopEffectToLocalState>) =>
       real.applyStopEffectToLocalState(...args),
     ),
+    hasCarriedDeliverableOnNetwork: jest.fn((...args: Parameters<typeof real.hasCarriedDeliverableOnNetwork>) =>
+      real.hasCarriedDeliverableOnNetwork(...args),
+    ),
   };
 });
 

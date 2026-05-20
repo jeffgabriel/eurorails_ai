@@ -29,6 +29,7 @@ import {
   isIntraCityEdge,
   getMajorCityLookup,
 } from '../../../shared/services/majorCityGroups';
+import { hasCarriedDeliverableOnNetwork } from './routeHelpers';
 
 export class GuardrailEnforcer {
   /**
@@ -113,7 +114,7 @@ export class GuardrailEnforcer {
       stuckWithCarryTurns < STUCK_WITH_CARRY_BYPASS_THRESHOLD;
     const carriedLoadsHaveMatchingDemand = carryLoadSuppressionActive;
 
-    const hasDeliverableLoad = snapshot.bot.loads.length > 0 && context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork);
+    const hasDeliverableLoad = snapshot.bot.loads.length > 0 && hasCarriedDeliverableOnNetwork(context);
     const hasAffordableConnectableDemand = context.demands.some(
       d => d.isAffordable && (d.isSupplyOnNetwork || d.isLoadOnTrain) && d.isDeliveryOnNetwork,
     );

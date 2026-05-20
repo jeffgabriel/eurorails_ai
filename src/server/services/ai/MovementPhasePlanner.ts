@@ -28,7 +28,12 @@ import {
   TrainType,
   TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
-import { resolveBuildTarget, applyStopEffectToLocalState, isRouteImpossible } from './routeHelpers';
+import {
+  resolveBuildTarget,
+  applyStopEffectToLocalState,
+  isRouteImpossible,
+  hasCarriedDeliverableOnNetwork,
+} from './routeHelpers';
 import { computeBuildSegments } from './computeBuildSegments';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
@@ -47,14 +52,6 @@ import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
 import { computeCandidateDetourCosts, MAX_DETOUR_TURNS } from './RouteDetourEstimator';
 
 // ── MovementPhasePlanner ──────────────────────────────────────────────────
-
-/**
- * JIRA-246: Returns true when any demand has a load on the train AND its
- * delivery city is on the bot's track network.  Used by A3 abandon paths.
- */
-function hasCarriedDeliverableOnNetwork(context: GameContext): boolean {
-  return context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork);
-}
 
 /**
  * MovementPhasePlanner — Phase A orchestrator.
@@ -486,11 +483,11 @@ export class MovementPhasePlanner {
                 trace.a3.terminationReason = 'a3_target_already_reachable';
                 continue;
               }
-              // JIRA-246 R2: No path to build target AND bot is carrying a load it can
-              // deliver on-network right now → abandon this route so the planner can
-              // produce a fresh carry-deliver plan next turn.
+              // No path to build target AND bot is carrying a load it can deliver
+              // on-network right now → abandon this route so the next turn produces
+              // a fresh carry-deliver plan instead of retrying a doomed build.
               if (hasCarriedDeliverableOnNetwork(context)) {
-                console.log(`[JIRA-246] a3_abandon_for_carry_deliver — empty build path, carry-deliverable on-network`);
+                console.warn(`${tag} a3_abandon_for_carry_deliver — empty build path, carry-deliverable on-network`);
                 trace.a3.terminationReason = 'a3_abandon_for_carry_deliver';
                 routeAbandonedByImpossibility = true;
                 break;
@@ -501,15 +498,15 @@ export class MovementPhasePlanner {
               const currentPos = context.position;
               const lastSeg = a3OriginResult[a3OriginResult.length - 1];
 
-              // JIRA-246 R3: computeBuildSegments returned segments but the path does
-              // not reach the build target (partial path) AND bot carries a deliverable
-              // on-network load → abandon so the planner can produce a carry-deliver plan.
+              // computeBuildSegments returned segments but the path does not reach
+              // the build target (partial path) AND bot carries a deliverable
+              // on-network load → abandon so the next turn produces a carry-deliver
+              // plan instead of committing budget to a partial route.
               if (
-                lastSeg &&
                 (lastSeg.to.row !== a3TargetCoord.row || lastSeg.to.col !== a3TargetCoord.col) &&
                 hasCarriedDeliverableOnNetwork(context)
               ) {
-                console.log(`[JIRA-246] a3_abandon_for_carry_deliver_partial — partial build path, carry-deliverable on-network`);
+                console.warn(`${tag} a3_abandon_for_carry_deliver_partial — partial build path, carry-deliverable on-network`);
                 trace.a3.terminationReason = 'a3_abandon_for_carry_deliver_partial';
                 routeAbandonedByImpossibility = true;
                 break;
@@ -520,9 +517,9 @@ export class MovementPhasePlanner {
                 previewBuildOrigin.row === currentPos.row &&
                 previewBuildOrigin.col === currentPos.col
               ) {
-                // JIRA-247 R4: Build origin is the bot's current position — set build
-                // target and continue so Phase B composes a BuildTrack action.
-                console.log(`[JIRA-247] a3_build_origin_is_current_pos — build origin matches current position, continuing to Phase B`);
+                // Build origin is the bot's current position — set build target and
+                // continue so Phase B composes a BuildTrack action (no move needed).
+                console.warn(`${tag} a3_build_origin_is_current_pos — build origin matches current position, continuing to Phase B`);
                 trace.a3.terminationReason = 'a3_build_origin_is_current_pos';
                 trace.build.target = a3BuildTarget.targetCity;
                 continue;
