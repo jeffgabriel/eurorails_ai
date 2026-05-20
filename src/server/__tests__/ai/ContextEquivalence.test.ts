@@ -57,6 +57,7 @@ function loadFixture(name: 'F1' | 'F2' | 'F3'): ContextFixture {
 // MapTopology functions are called internally by ContextBuilder. Mock to
 // avoid loading the full map geometry in unit tests.
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   estimatePathCost: jest.fn(() => 10),
   estimateHopDistance: jest.fn(() => 5),
   hexDistance: jest.fn((r1: number, c1: number, r2: number, c2: number): number => {

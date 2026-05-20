@@ -43,6 +43,7 @@ jest.mock('../../services/ai/prompts/systemPrompts', () => ({
 }));
 
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   estimateHopDistance: jest.fn(() => 0),
   loadGridPoints: jest.fn(() => new Map()),
 }));

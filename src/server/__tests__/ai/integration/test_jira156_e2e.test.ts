@@ -13,6 +13,7 @@
 // ── Mocks (hoisted by Jest) ──────────────────────────────────────────────
 
 jest.mock('../../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../../services/ai/MapTopology')>('../../../services/ai/MapTopology'),
   loadGridPoints: jest.fn(() => new Map()),
 }));
 

@@ -14,6 +14,7 @@ jest.mock('../../db/index', () => ({
 }));
 
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   loadGridPoints: jest.fn(() => new Map()),
   gridToPixel: jest.fn(() => ({ x: 0, y: 0 })),
 }));

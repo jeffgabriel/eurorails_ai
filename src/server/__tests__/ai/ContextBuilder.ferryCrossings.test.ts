@@ -13,6 +13,7 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
 }));
 
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   hexDistance: jest.fn(),
   loadGridPoints: jest.fn().mockReturnValue(new Map()),
   estimateHopDistance: jest.fn().mockReturnValue(0),

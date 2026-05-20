@@ -41,6 +41,7 @@ jest.mock('../../services/ai/PathCostEstimator', () => ({
 const mockGrid = new Map<string, { row: number; col: number; terrain: number; name?: string }>();
 
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   loadGridPoints: jest.fn(() => mockGrid),
   hexDistance: jest.fn((r1: number, c1: number, r2: number, c2: number): number => {
     // Simple Chebyshev-style approximation for test purposes

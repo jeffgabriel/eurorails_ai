@@ -31,6 +31,7 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
 }));
 
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   hexDistance: jest.fn((r1: number, c1: number, r2: number, c2: number): number => {
     const x1 = c1 - Math.floor(r1 / 2);
     const z1 = r1;

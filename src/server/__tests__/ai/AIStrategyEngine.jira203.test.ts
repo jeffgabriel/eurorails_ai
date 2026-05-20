@@ -26,6 +26,7 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
 }));
 
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   loadGridPoints: jest.fn(),
   hexDistance: jest.fn((r1: number, c1: number, r2: number, c2: number) =>
     Math.abs(r1 - r2) + Math.abs(c1 - c2),

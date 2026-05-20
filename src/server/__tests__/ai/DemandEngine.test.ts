@@ -23,6 +23,7 @@ jest.mock('../../services/ai/PathCostEstimator', () => ({
 
 // Mock MapTopology
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   hexDistance: jest.fn((r1: number, c1: number, r2: number, c2: number): number => {
     return Math.max(Math.abs(r2 - r1), Math.abs(c2 - c1));
   }),

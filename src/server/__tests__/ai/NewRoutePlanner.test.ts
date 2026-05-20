@@ -104,6 +104,7 @@ jest.mock('../../services/ai/LLMTranscriptLogger', () => ({
 }));
 
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   loadGridPoints: jest.fn(() => new Map<string, { name?: string }>([
     ['5,5', { name: 'Lyon' }],
   ])),

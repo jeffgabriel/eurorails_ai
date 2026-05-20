@@ -115,6 +115,7 @@ const mockComputeFerryRouteInfo = jest.fn(() => ({
 }));
 
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   estimatePathCost: (r1: number, c1: number, r2: number, c2: number) => mockEstimatePathCost(r1, c1, r2, c2),
   estimateHopDistance: (r1: number, c1: number, r2: number, c2: number) => mockEstimateHopDistance(r1, c1, r2, c2),
   hexDistance: (r1: number, c1: number, r2: number, c2: number) => mockHexDistance(r1, c1, r2, c2),

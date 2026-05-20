@@ -21,6 +21,7 @@ import {
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   estimatePathCost: jest.fn(() => 0),
   estimateHopDistance: jest.fn(() => 0),
   hexDistance: jest.fn(() => 0),

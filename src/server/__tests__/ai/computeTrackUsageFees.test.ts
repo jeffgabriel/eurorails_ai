@@ -11,6 +11,7 @@ import { TrackSegment } from '../../../shared/types/TrackTypes';
 
 // Mock MapTopology so we can control gridPoints without hitting the filesystem
 jest.mock('../../services/ai/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/MapTopology')>('../../services/ai/MapTopology'),
   loadGridPoints: jest.fn(),
   makeKey: (row: number, col: number) => `${row},${col}`,
 }));
