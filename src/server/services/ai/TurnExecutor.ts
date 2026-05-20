@@ -422,8 +422,8 @@ export class TurnExecutor {
       to: { row: destination.row, col: destination.col, x: pixel.x, y: pixel.y },
     });
 
-    const cost = moveResult.feeTotal;
-    const remainingMoney = moveResult.updatedMoney;
+    const cost = moveResult?.feeTotal ?? 0;
+    const remainingMoney = moveResult?.updatedMoney ?? 0;
 
     // Post-commit: audit record (best-effort)
     try {
