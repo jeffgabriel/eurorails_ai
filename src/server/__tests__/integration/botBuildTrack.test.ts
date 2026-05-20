@@ -69,6 +69,7 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
 
 // Mock majorCityGroups — outposts are the buildable entry points around a city center
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityGroups: jest.fn(() => [
     { cityName: 'Paris', center: { row: 29, col: 32 }, outposts: [{ row: 29, col: 31 }, { row: 28, col: 32 }] },
     { cityName: 'Berlin', center: { row: 20, col: 50 }, outposts: [{ row: 20, col: 49 }] },
@@ -87,6 +88,7 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
 
 // Mock connectedMajorCities (used by WorldSnapshotService)
 jest.mock('../../services/ai/connectedMajorCities', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/connectedMajorCities')>('../../services/ai/connectedMajorCities'),
   getConnectedMajorCityCount: jest.fn(() => 0),
 }));
 

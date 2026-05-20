@@ -48,6 +48,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
 }));
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityGroups: jest.fn(() => []),
   getMajorCityLookup: jest.fn(() => new Map()),
   getFerryEdges: jest.fn(() => []),
@@ -68,6 +69,7 @@ jest.mock('../../../shared/services/TrackNetworkService', () => ({
 }));
 
 jest.mock('../../services/ai/connectedMajorCities', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/connectedMajorCities')>('../../services/ai/connectedMajorCities'),
   getConnectedMajorCityCount: jest.fn(() => 0),
 }));
 

@@ -81,6 +81,7 @@ jest.mock('../../../services/ai/MapTopology', () => ({
 }));
 
 jest.mock('../../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../../shared/services/majorCityGroups')>('../../../../shared/services/majorCityGroups'),
   getMajorCityLookup: jest.fn(() => new Map()),
   getMajorCityGroups: jest.fn(() => []),
   isIntraCityEdge: jest.fn(() => false),

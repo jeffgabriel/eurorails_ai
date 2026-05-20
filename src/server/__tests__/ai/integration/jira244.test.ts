@@ -19,6 +19,7 @@
 jest.mock('../../../services/ai/routeHelpers', () => {
   const real = jest.requireActual('../../../services/ai/routeHelpers');
   return {
+    ...real,
     isStopComplete: jest.fn(() => false),
     resolveBuildTarget: jest.fn(() => null),
     getNetworkFrontier: jest.fn(() => []),

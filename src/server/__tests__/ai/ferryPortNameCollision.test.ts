@@ -23,6 +23,7 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
 }));
 // PlanExecutor deleted — no longer needed
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityGroups: jest.fn(() => []),
   getMajorCityLookup: jest.fn(() => new Map()),
   computeEffectivePathLength: jest.fn((path: any[]) => path.length - 1),

@@ -21,6 +21,7 @@ import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService'
 const mockGetFerryEdges = jest.fn(() => [] as ReturnType<typeof import('../../../shared/services/majorCityGroups').getFerryEdges>);
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityGroups: jest.fn(() => [
     { cityName: 'Wien', center: { row: 37, col: 55 }, outposts: [] },
     { cityName: 'Berlin', center: { row: 24, col: 52 }, outposts: [] },
@@ -46,6 +47,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
 }));
 
 jest.mock('../../services/ai/connectedMajorCities', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/connectedMajorCities')>('../../services/ai/connectedMajorCities'),
   getConnectedMajorCities: jest.fn(() => []),
 }));
 

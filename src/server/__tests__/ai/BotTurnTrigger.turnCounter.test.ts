@@ -65,6 +65,7 @@ jest.mock('../../services/trackService', () => ({
 }));
 
 jest.mock('../../services/ai/connectedMajorCities', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/connectedMajorCities')>('../../services/ai/connectedMajorCities'),
   getConnectedMajorCities: jest.fn<() => any[]>(),
 }));
 

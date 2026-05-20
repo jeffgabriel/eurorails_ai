@@ -1578,6 +1578,7 @@ describe('ContextBuilder.computeTrackSummary (JIRA-133)', () => {
 
 // Mock getMajorCityGroups to return controlled test data instead of real board config
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityGroups: jest.fn(() => [
     { cityName: 'Berlin', center: { row: 10, col: 10 }, outposts: [] },
     { cityName: 'Paris', center: { row: 20, col: 20 }, outposts: [] },

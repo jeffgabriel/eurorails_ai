@@ -45,6 +45,7 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
 // ActionResolver and MapTopology (loadGridPoints) are intentionally NOT mocked so
 // the real ferry truncation + arrival guard logic exercises live.
 jest.mock('../../services/ai/routeHelpers', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/routeHelpers')>('../../services/ai/routeHelpers'),
   isStopComplete: jest.fn(() => false),
   resolveBuildTarget: jest.fn(() => null),
   getNetworkFrontier: jest.fn(() => []),

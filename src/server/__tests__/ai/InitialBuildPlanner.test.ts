@@ -93,6 +93,7 @@ jest.mock('../../services/loadService', () => ({
 }));
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityGroups: () => [
     { cityName: 'Paris', center: { row: 20, col: 10 }, outposts: [] },
     { cityName: 'Ruhr', center: { row: 15, col: 12 }, outposts: [] },

@@ -120,6 +120,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
 
 // Mock majorCityGroups with 3 test cities: Wien, Berlin, Paris
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityGroups: jest.fn(() => [
     { cityName: 'Wien', center: { row: 37, col: 55 }, outposts: [] },
     { cityName: 'Berlin', center: { row: 24, col: 52 }, outposts: [] },

@@ -6,6 +6,7 @@ import {
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getFerryEdges: jest.fn(),
   getMajorCityGroups: jest.fn().mockReturnValue([]),
   getMajorCityLookup: jest.fn().mockReturnValue(new Map()),

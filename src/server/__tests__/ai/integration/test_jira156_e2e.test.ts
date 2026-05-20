@@ -18,6 +18,7 @@ jest.mock('../../../services/ai/MapTopology', () => ({
 }));
 
 jest.mock('../../../services/ai/routeHelpers', () => ({
+  ...jest.requireActual<typeof import('../../../services/ai/routeHelpers')>('../../../services/ai/routeHelpers'),
   isStopComplete: jest.fn(),
   resolveBuildTarget: jest.fn(() => null),
   getNetworkFrontier: jest.fn(() => []),
@@ -46,6 +47,7 @@ jest.mock('../../../services/ai/ActionResolver', () => ({
 }));
 
 jest.mock('../../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../../shared/services/majorCityGroups')>('../../../../shared/services/majorCityGroups'),
   getMajorCityLookup: jest.fn(() => new Map()),
   computeEffectivePathLength: jest.fn(() => 3),
 }));

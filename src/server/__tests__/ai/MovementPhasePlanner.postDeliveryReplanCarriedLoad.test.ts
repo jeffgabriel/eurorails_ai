@@ -55,6 +55,7 @@ jest.mock('../../../shared/services/computeTrackUsageFees', () => ({
 jest.mock('../../services/ai/routeHelpers', () => {
   const real = jest.requireActual('../../services/ai/routeHelpers');
   return {
+    ...real,
     isStopComplete: jest.fn(),
     resolveBuildTarget: jest.fn(),
     getNetworkFrontier: jest.fn(() => []),
@@ -77,6 +78,7 @@ jest.mock('../../services/ai/ActionResolver', () => ({
 }));
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityLookup: jest.fn(() => new Map()),
   computeEffectivePathLength: jest.fn(() => 3),
 }));

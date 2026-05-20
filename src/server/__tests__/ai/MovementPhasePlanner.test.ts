@@ -70,6 +70,7 @@ jest.mock('../../services/ai/ActionResolver', () => ({
 }));
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityLookup: jest.fn(() => new Map()),
   computeEffectivePathLength: jest.fn(() => 3),
   getFerryEdges: jest.fn(() => [

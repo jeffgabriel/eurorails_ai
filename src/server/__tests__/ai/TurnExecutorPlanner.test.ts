@@ -44,6 +44,7 @@ jest.mock('../../services/ai/routeHelpers', () => {
   // Import the real module to forward the real implementation of applyStopEffectToLocalState
   const real = jest.requireActual('../../services/ai/routeHelpers');
   return {
+    ...real,
     isStopComplete: jest.fn(),
     resolveBuildTarget: jest.fn(),
     getNetworkFrontier: jest.fn(() => []),
@@ -72,6 +73,7 @@ jest.mock('../../services/ai/ActionResolver', () => ({
 // revalidateRemainingDeliveries is now on TurnExecutorPlanner — spied on in beforeEach
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityLookup: jest.fn(() => new Map()),
   computeEffectivePathLength: jest.fn(() => 3),
 }));

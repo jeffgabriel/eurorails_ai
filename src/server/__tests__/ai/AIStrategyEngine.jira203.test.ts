@@ -35,6 +35,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
 }));
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getFerryEdges: jest.fn(),
   getMajorCityLookup: jest.fn(() => new Map<string, string>()),
   isIntraCityEdge: jest.fn(() => false),

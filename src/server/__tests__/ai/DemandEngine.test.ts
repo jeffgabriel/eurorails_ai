@@ -39,6 +39,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
 
 // Mock majorCityGroups to avoid real city-region lookups
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityGroups: jest.fn().mockReturnValue([]),
   getFerryEdges: jest.fn().mockReturnValue([]),
   getMajorCityLookup: jest.fn().mockReturnValue(new Map()),

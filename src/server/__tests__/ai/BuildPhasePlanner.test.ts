@@ -22,6 +22,7 @@ import type { PhaseAResult } from '../../services/ai/schemas';
 // ── Mock dependencies ──────────────────────────────────────────────────────
 
 jest.mock('../../services/ai/routeHelpers', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/routeHelpers')>('../../services/ai/routeHelpers'),
   resolveBuildTarget: jest.fn(),
   isStopComplete: jest.fn(),
   getNetworkFrontier: jest.fn(() => []),
@@ -51,6 +52,7 @@ jest.mock('../../../shared/constants/gameRules', () => ({
 }));
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityLookup: jest.fn(() => new Map()),
   computeEffectivePathLength: jest.fn(() => 3),
 }));

@@ -32,6 +32,7 @@ import {
 // ── Mocks ────────────────────────────────────────────────────────────
 
 jest.mock('../../services/ai/connectedMajorCities', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/connectedMajorCities')>('../../services/ai/connectedMajorCities'),
   getConnectedMajorCityCount: jest.fn((_segments: unknown[]) => {
     // Return 3 cities connected by default for any non-empty segments
     return (_segments as unknown[]).length > 0 ? 3 : 0;
