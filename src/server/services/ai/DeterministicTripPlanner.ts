@@ -35,6 +35,7 @@ import {
   VICTORY_CITY_COUNT,
 } from '../../../shared/types/GameTypes';
 import { cheapestUnconnectedMajorConnectorCost } from './victoryRules';
+import { updateMemory } from './BotMemory';
 
 // ── Tunables ───────────────────────────────────────────────────────────
 
@@ -1598,6 +1599,26 @@ export function planTripDeterministic(
     hopAvgCostM: options?.hopAvgCostM ?? HOP_AVG_COST_M,
     excludeRouteSignatures: new Set(options?.excludeRouteSignatures ?? []),
   };
+
+  // JIRA-255 Layer A: End-game lock hook.
+  // Once set, endGameLocked is sticky (one-way) — it never reverts even after
+  // temporary cash dips from track building. Whichever condition fires first
+  // sets the lock for the remainder of the game.
+  if (!memory.endGameLocked) {
+    const cmcCount = context.connectedMajorCities?.length ?? 0;
+    const phase = classifyGamePhase(
+      snapshot.turnNumber,
+      memory.deliveryCount,
+      cmcCount,
+    );
+    if (snapshot.bot.money > 200 || phase === 'late') {
+      memory.endGameLocked = true;
+      // Persist asynchronously — in-memory mutation is authoritative for this turn.
+      updateMemory(snapshot.gameId, snapshot.bot.playerId, { endGameLocked: true }).catch(
+        (err: unknown) => console.warn('[planTripDeterministic] Failed to persist endGameLocked:', err),
+      );
+    }
+  }
 
   // Empty hand check (R8)
   if (!context.demands || context.demands.length === 0) {
