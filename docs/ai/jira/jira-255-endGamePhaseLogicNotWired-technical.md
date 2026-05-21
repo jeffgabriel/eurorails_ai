@@ -34,7 +34,20 @@ No notion of "this candidate funds the full win cost."
 
 ## Fix shape
 
-Three layers. All required.
+Four layers. All required.
+
+### Layer 0 — Fix same-city phantom turn in cheapPrune estimator
+
+`PathCostEstimator.ts:188` hardcodes `estimatedTurns: 1` for trivial same-point legs:
+
+```ts
+if (fromCoord.row === toCoord.row && fromCoord.col === toCoord.col) {
+  const trivial: PathCost = { buildCost: 0, pathLength: 1, estimatedTurns: 1, reachable: true, newSegments: [] };
+```
+
+A leg from a city back to itself (e.g. multi-pickup at one city) costs zero turns — game rule: pickups/deliveries do not consume movement. Change to `estimatedTurns: 0`. Triple-Hops-Cardiff's two same-city pickup-to-pickup transitions drop the cheapPrune estimate from 13 turns to 11, surviving the `PRUNE_MAX_TURNS = 12` cut even without Layer A's carve-out. Layer A still required for genuinely long win-completers.
+
+This is the surgical estimator fix; the broader estimator overhaul (per-leg `ceil` inflation, no continuous-movement model) is out of scope and tracked separately.
 
 ### Layer A — End-game state lock
 
@@ -123,12 +136,13 @@ Recommend the first option — phase-and-cash both rotating the lock catches mor
 
 ## Out of scope
 
-- **Turn-count accuracy in the existing estimator.** Triple-Hops-Cardiff is currently estimated at ~14-18 turns; the actual game time is closer to ~9. The estimator inflates because it does not account for parallel movement during builds, may double-count ferry turns, or treats partial-turn movement as full turns. Fix the estimator in a separate ticket — Layer B's carve-out keeps win-completers in scope regardless of the inflation.
+- **Broader turn-estimator overhaul.** Both `cheapPrune` and `simulateTrip` sum per-leg `ceil(mp/speed)` instead of running a continuous-movement simulator. This inflates multi-stop candidates systematically. Layer 0 fixes only the same-city phantom-turn case (the most common over-counter for triple-pickup candidates). The per-leg ceiling drift, no-cross-leg-movement-carry, and partial ferry-rate modeling are tracked in a separate ticket. Layer A's carve-out keeps win-completers in scope regardless of remaining estimator drift.
 - LLM-path scoring. The deterministic planner is the entry here (`[deterministic-top-1]` in the T76 reasoning).
 - Replacing `aggregateScore` outside end-game state. Pre-end-game ranking is unchanged.
 
 ## Acceptance from behavioral
 
+- **AC0** Unit test on `estimateGraphPathCost`: same-coord input (`from === to`) returns `estimatedTurns: 0`. Pre-fix returns `1`.
 - **AC1** Unit test: bot snapshot `cash = 205M`, `endGameLocked = false`. After one replan tick, `memory.endGameLocked === true`. Persist via `updateMemory`.
 - **AC2** Unit test: `endGameLocked = true`, then a build drops `cash` to $180M. Lock remains true; end-game ranking still applies.
 - **AC3** Unit test on the prune pass: `endGameLocked = true`, candidate `{ net: 67, turns: 16 }`, `fullWinCost = $280M`, `cash = $227M`. Assert candidate survives. With `endGameLocked = false`, candidate is discarded by `turns > 12`.
