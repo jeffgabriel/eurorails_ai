@@ -575,6 +575,13 @@ export interface BotMemoryState {
      * never reverts to Mid — even after temporary cash dips from building.
      */
     gameState?: GameState;
+    /**
+     * JIRA-253 Layer B: Recently abandoned route signatures with the turn they were abandoned.
+     * Entries are evicted after 3 turns. Used by TripPlanner to exclude re-selection of
+     * routes that were just abandoned — prevents single-turn livelock re-selection.
+     * Format: Array<{ key: string; abandonedAtTurn: number }>
+     */
+    recentlyAbandonedRouteKeys?: Array<{ key: string; abandonedAtTurn: number }>;
 }
 
 /** Simplified option summary for decision logging */
