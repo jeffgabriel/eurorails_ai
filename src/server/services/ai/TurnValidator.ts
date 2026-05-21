@@ -19,7 +19,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
-import { loadGridPoints, getHexNeighbors } from '../MapTopology';
+import { getHexNeighbors } from '../MapTopology';
 
 export interface HardGateResult {
   gate: string;
@@ -145,16 +145,10 @@ export class TurnValidator {
 
   /**
    * Returns the maximum number of players allowed to build track into the city at (row, col).
-   * Consults the gridpoint's maxConnections override first; falls back to terrain-based default.
    * Returns null for terrain types that have no entry cap (Major City, Clear, Mountain, etc.).
    */
-  private static cityEntryLimit(row: number, col: number, terrain: TerrainType): number | null {
+  private static cityEntryLimit(_row: number, _col: number, terrain: TerrainType): number | null {
     if (terrain !== TerrainType.SmallCity && terrain !== TerrainType.MediumCity) return null;
-
-    const grid = loadGridPoints();
-    const gridPoint = grid?.get(`${row},${col}`);
-    if (gridPoint?.maxConnections !== undefined) return gridPoint.maxConnections;
-
     return terrain === TerrainType.SmallCity ? 2 : 3;
   }
 
@@ -166,8 +160,6 @@ export class TurnValidator {
    * A small city (limit 2) is saturated when OTHER players already have track there —
    * adding the bot would push the total above the limit.
    * A medium city (limit 3) is saturated when ≥2 other players already have track there.
-   * Cities with a per-city maxConnections override of 1 are saturated when ≥1 other player
-   * already has track there.
    *
    * This shared predicate is the single source of truth for saturation detection.
    * Call this from BuildRouteResolver/ActionResolver to pre-filter Dijkstra paths

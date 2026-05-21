@@ -214,13 +214,14 @@ Non-event play is stable. Event-card-active play is broken in the way Phase 4 is
 
 ## What I'd like from you
 
-1. **Verdicts on the overlap checklist.** [`docs/main-merge-overlap-checklist.md`](main-merge-overlap-checklist.md) — 7 rows with "Open question for Jeff" lines. The biggest ones:
-   - Row 1 (Kaliningrad): keep the `MaxConnections` mechanism in code (latent / future-use), or rip it out?
-   - Row 4 (JIRA-196 capacity check): confirm `PlayerService.pickupLoadForPlayer`'s gate has equivalent coverage; otherwise the obsolete `it.skip`'d tests need re-homing.
-   - Row 6 (InitialBuildService race): verify your FOR UPDATE fix is still in the critical path after our `InitialBuildRunner` extract.
-2. **Phase 4 appetite + scoping.** When you're ready to scope it, JIRA-251 is the worked example. The pattern reuses for all other event types.
-3. **JIRA-248/249/250 priority.** These three are pre-existing bot-planner bugs (not merge-induced). Useful to know if you want them fixed inside this PR (small) or as a follow-on.
+Nothing blocking — the overlap-checklist rows that originally asked for your judgment have been resolved on our side:
+
+- **Row 1 (Kaliningrad)** — Decided: ripping out the `MaxConnections` mechanism. Your geometric fix supersedes our policy hack; the mechanism is dead code. Filed as a follow-up cleanup task.
+- **Row 4 (JIRA-196 capacity check)** — Non-issue. `playerService.pickup.test.ts:110` has explicit `FOR UPDATE` + capacity-rejection coverage (Freight 2/2, Heavy 3/3). The `it.skip`'d JIRA-196 cases in `TurnExecutor.test.ts` are now redundant — safe to delete during the post-merge cleanup pass.
+- **Row 6 (InitialBuildService race)** — Non-issue. `InitialBuildService.advanceTurn:72` still holds the `SELECT ... FOR UPDATE` lock, and bots call it directly via `BotTurnTrigger.ts:435`. Our `InitialBuildRunner` is orthogonal — it handles bot *planning* during an initial-build turn, not the turn-state *advancement* your race fix protects.
+
+PR #244 is ready for review whenever you have time.
 
 ---
 
-*Updated 2026-05-21 after the integration merge landed.*
+*Updated 2026-05-21 after the integration merge landed; overlap-checklist verdicts resolved on our side.*

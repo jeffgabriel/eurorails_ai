@@ -19,11 +19,6 @@ export interface GridPointData {
   terrain: TerrainType;
   name?: string;
   ocean?: string;
-  /** Per-city override for the maximum number of players that may build track into this milepost.
-   *  When set, takes precedence over the terrain-based default (SmallCity=2, MediumCity=3).
-   *  Currently only set on geometry-limited cities whose adjacency graph admits fewer players
-   *  than their terrain classification would suggest. */
-  maxConnections?: number;
 }
 
 /** Grid coordinate pair */
@@ -102,7 +97,6 @@ export function loadGridPoints(): Map<string, GridPointData> {
     Type: string;
     Name?: string;
     Ocean?: string;
-    MaxConnections?: unknown;
   }>;
 
   const map = new Map<string, GridPointData>();
@@ -111,24 +105,12 @@ export function loadGridPoints(): Map<string, GridPointData> {
     const row = mp.GridY;
     const col = mp.GridX;
 
-    let maxConnections: number | undefined;
-    if (mp.MaxConnections !== undefined && mp.MaxConnections !== null) {
-      if (typeof mp.MaxConnections === 'number' && Number.isInteger(mp.MaxConnections) && mp.MaxConnections > 0) {
-        maxConnections = mp.MaxConnections;
-      } else {
-        console.warn(
-          `[MapTopology] Invalid MaxConnections value at (${row},${col}): ${JSON.stringify(mp.MaxConnections)} — must be a positive integer. Ignoring override.`,
-        );
-      }
-    }
-
     map.set(makeKey(row, col), {
       row,
       col,
       terrain: mapTypeToTerrain(mp.Type),
       name: mp.Name ?? undefined,
       ocean: mp.Ocean ?? undefined,
-      ...(maxConnections !== undefined ? { maxConnections } : {}),
     });
   }
 
