@@ -68,6 +68,22 @@ Pass an `excludeRouteSignature: string[]` argument to `TripPlanner.planTrip`. Wh
 
 If layer A is in place, layer B is rarely needed (the route stops being abandoned in the first place). But layer B is a defense-in-depth gate against future abandon-loop bugs.
 
+### Layer D — Same-turn pivot to carry-delivery when abandoning
+
+DB verification (2026-05-21) of game `6033c903` T8 confirmed Torino IS on Sonnet's network: the bot's 25 segments include a node at (42, 39) which is a Torino Medium City milepost. So `hasCarriedDeliverableOnNetwork(context)` is returning **true legitimately**. The abandon decision is *semantically* sound — "I have a free carry-delivery to Torino, don't waste budget building to Wroclaw."
+
+The bug is that the abandon doesn't ACT on its own reasoning. It marks the route abandoned, returns PassTurn, and waits for next turn's replan — which then re-picks the same pair-shared candidate (highest net) and abandons again.
+
+The abandon path should, in the same turn:
+1. Mark the current route abandoned (`memory.activeRoute = null`)
+2. Invoke `TripPlanner.planTrip` synchronously
+3. With layers A or B making the partial-path check correct, the planner's top-1 may stay the same. Force it to pick the carry-only floor candidate (which JIRA-248's `enumerateCarriedDeliveryFloor` guarantees exists) by adding the abandoned route signature to the per-turn exclusion set.
+4. Execute the carry-only plan this turn — Phase B doesn't run (carry-deliver requires no building), bot moves toward Torino with full movement budget.
+
+Implementation: extend the A3 abandon block to call back into the trip-planning pipeline rather than returning. Or pass the abandon decision back up to `AIStrategyEngine` which already has the pipeline machinery and can re-route this turn.
+
+Without layer D, even with layers A/B/C, the bot still pivots a turn LATER (next replan picks the carry-only fallback because pair-shared is now excluded). With layer D, the pivot happens within the abandoning turn — no wasted PassTurn.
+
 ### Layer C — Gate `upgradeOnRoute` on route execution
 
 Independent fix: wherever the executor processes `upgradeOnRoute` (search the codebase for the string), gate it on "route was not abandoned this turn." Currently the upgrade fires even when the route is being abandoned (T10 in the game evidence). The bot self-inflicted a $20M loss for an upgrade tied to a route it never executed.
