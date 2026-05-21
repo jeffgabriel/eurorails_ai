@@ -66,6 +66,9 @@ import {
   scoreCandidate,
   pickTop1,
   planTripDeterministic,
+  isCandidateGrammaticallyValid,
+  enumerateCarriedDeliveryFloor,
+  enumerateSameSupplyCorridorCandidates,
 } from '../../services/ai/DeterministicTripPlanner';
 import {
   WorldSnapshot,
@@ -2405,5 +2408,282 @@ describe('JIRA-242 expansion bonus (multi-delivery)', () => {
     });
     applyExpansionBonus(odd);
     expect(odd.aggregateScore).toBe(0.5);
+  });
+});
+
+// ── JIRA-249/250: Grammar validation & carried delivery floor ─────────
+
+type Row = { loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number; isCarry: boolean };
+
+function makeRow(overrides: Partial<Row> = {}): Row {
+  return {
+    loadType: 'Coal',
+    supplyCity: 'Essen',
+    deliveryCity: 'Berlin',
+    payout: 15,
+    cardIndex: 1,
+    isCarry: false,
+    ...overrides,
+  };
+}
+
+function makeCandidate(id: string, stops: RouteStop[], rows: Row[] = []): { id: string; rows: Row[]; stops: RouteStop[]; payout: number } {
+  return { id, rows, stops, payout: rows.reduce((s, r) => s + r.payout, 0) };
+}
+
+describe('isCandidateGrammaticallyValid', () => {
+  /**
+   * UT1 (Grammar - Deliver without Pickup):
+   * Candidate [deliver(Wine@Praha)] with carriedLoads=[] → rejected with deliver_without_pickup.
+   */
+  it('UT1: rejects deliver(Wine@Praha) when carriedLoads=[] with reason=deliver_without_pickup', () => {
+    const candidate = makeCandidate('test:1', [
+      { action: 'deliver', loadType: 'Wine', city: 'Praha', demandCardId: 1, payment: 20 },
+    ], [makeRow({ loadType: 'Wine', deliveryCity: 'Praha', payout: 20 })]);
+
+    const result = isCandidateGrammaticallyValid(candidate, []);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.rejection.reason).toBe('deliver_without_pickup');
+      expect(result.rejection.loadType).toBe('Wine');
+      expect(result.rejection.offendingStopIndex).toBe(0);
+    }
+  });
+
+  /**
+   * UT2 (Grammar - Deliver Exceeds Carried):
+   * Candidate [deliver(Fish@Zurich), deliver(Fish@Milano)] with carriedLoads=['Fish']
+   * → rejected with deliver_exceeds_carried (only one Fish, but two deliveries).
+   */
+  it('UT2: rejects [deliver(Fish@Zurich), deliver(Fish@Milano)] with one carried Fish with reason=deliver_exceeds_carried', () => {
+    const candidate = makeCandidate('test:2', [
+      { action: 'deliver', loadType: 'Fish', city: 'Zurich', demandCardId: 1, payment: 20 },
+      { action: 'deliver', loadType: 'Fish', city: 'Milano', demandCardId: 2, payment: 18 },
+    ], [
+      makeRow({ loadType: 'Fish', deliveryCity: 'Zurich', cardIndex: 1, payout: 20 }),
+      makeRow({ loadType: 'Fish', deliveryCity: 'Milano', cardIndex: 2, payout: 18 }),
+    ]);
+
+    const result = isCandidateGrammaticallyValid(candidate, ['Fish']);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.rejection.reason).toBe('deliver_exceeds_carried');
+      expect(result.rejection.loadType).toBe('Fish');
+      expect(result.rejection.offendingStopIndex).toBe(1); // second deliver fails
+    }
+  });
+
+  it('accepts valid candidate: pickup(Fish) then deliver(Fish)', () => {
+    const candidate = makeCandidate('test:3', [
+      { action: 'pickup', loadType: 'Fish', city: 'Oslo' },
+      { action: 'deliver', loadType: 'Fish', city: 'Zurich', demandCardId: 1, payment: 20 },
+    ]);
+
+    const result = isCandidateGrammaticallyValid(candidate, []);
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts valid candidate: two pickups then two deliveries', () => {
+    const candidate = makeCandidate('test:4', [
+      { action: 'pickup', loadType: 'Fish', city: 'Oslo' },
+      { action: 'pickup', loadType: 'Fish', city: 'Oslo' },
+      { action: 'deliver', loadType: 'Fish', city: 'Zurich', demandCardId: 1, payment: 20 },
+      { action: 'deliver', loadType: 'Fish', city: 'Milano', demandCardId: 2, payment: 18 },
+    ]);
+
+    const result = isCandidateGrammaticallyValid(candidate, []);
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts carry-only candidate: deliver(Labor@Bern) with carriedLoads=[Labor]', () => {
+    const candidate = makeCandidate('test:5', [
+      { action: 'deliver', loadType: 'Labor', city: 'Bern', demandCardId: 1, payment: 12 },
+    ]);
+
+    const result = isCandidateGrammaticallyValid(candidate, ['Labor']);
+    expect(result.ok).toBe(true);
+  });
+
+  it('provides carriedAtStart and pickupsBeforeOffender in rejection context', () => {
+    const candidate = makeCandidate('test:6', [
+      { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+      { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+      // Extra deliver with no Coal left
+      { action: 'deliver', loadType: 'Coal', city: 'Warszawa', demandCardId: 2, payment: 10 },
+    ]);
+
+    const result = isCandidateGrammaticallyValid(candidate, []);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.rejection.context.carriedAtStart).toEqual([]);
+      expect(result.rejection.context.pickupsBeforeOffender).toContain('Coal');
+      expect(result.rejection.reason).toBe('deliver_exceeds_carried');
+    }
+  });
+});
+
+describe('enumerateCarriedDeliveryFloor', () => {
+  /**
+   * UT3 (Carried Delivery Floor):
+   * When bot.loads=['Labor'] and Labor is deliverable to Bern,
+   * enumerateCandidates must include a candidate with deliver(Labor@Bern).
+   */
+  it('UT3: generates a floor candidate with deliver(Labor@Bern) when one Labor carried', () => {
+    const rows: Row[] = [
+      makeRow({ loadType: 'Labor', deliveryCity: 'Bern', cardIndex: 1, payout: 12, isCarry: true, supplyCity: null }),
+    ];
+
+    const floor = enumerateCarriedDeliveryFloor(rows);
+
+    expect(floor).not.toBeNull();
+    expect(floor!.stops).toHaveLength(1);
+    expect(floor!.stops[0]).toMatchObject({ action: 'deliver', loadType: 'Labor', city: 'Bern' });
+    expect(floor!.id).toContain('carry-floor');
+  });
+
+  it('returns null when no carried rows exist', () => {
+    const rows: Row[] = [
+      makeRow({ loadType: 'Coal', deliveryCity: 'Berlin', cardIndex: 1, isCarry: false }),
+    ];
+
+    const floor = enumerateCarriedDeliveryFloor(rows);
+    expect(floor).toBeNull();
+  });
+
+  it('includes all carried rows in the floor candidate', () => {
+    const rows: Row[] = [
+      makeRow({ loadType: 'Fish', deliveryCity: 'Zurich', cardIndex: 1, payout: 20, isCarry: true, supplyCity: null }),
+      makeRow({ loadType: 'Coal', deliveryCity: 'Berlin', cardIndex: 2, payout: 15, isCarry: true, supplyCity: null }),
+      makeRow({ loadType: 'Wine', deliveryCity: 'London', cardIndex: 3, payout: 18, isCarry: false }),
+    ];
+
+    const floor = enumerateCarriedDeliveryFloor(rows);
+
+    expect(floor).not.toBeNull();
+    expect(floor!.stops).toHaveLength(2); // only the 2 carry rows
+    const loadTypes = floor!.stops.map(s => s.loadType);
+    expect(loadTypes).toContain('Fish');
+    expect(loadTypes).toContain('Coal');
+  });
+});
+
+describe('enumerateSameSupplyCorridorCandidates', () => {
+  /**
+   * UT4 (Corridor Enumeration):
+   * T46 scenario: bot at Oslo, two Fish demands (Fish→Zurich, Fish→Milano), capacity=2.
+   * Expected: candidate [pickup(Fish@Oslo), pickup(Fish@Oslo), deliver(Fish@Zurich), deliver(Fish@Milano)].
+   */
+  it('UT4: generates corridor candidate for T46-like scenario [pickup(Fish@Oslo)×2, deliver(Fish@Zurich), deliver(Fish@Milano)]', () => {
+    const rows: Row[] = [
+      makeRow({ loadType: 'Fish', supplyCity: 'Oslo', deliveryCity: 'Zurich', cardIndex: 1, payout: 20, isCarry: false }),
+      makeRow({ loadType: 'Fish', supplyCity: 'Oslo', deliveryCity: 'Milano', cardIndex: 2, payout: 18, isCarry: false }),
+    ];
+    const carriedCount = new Map<string, number>();
+
+    const candidates = enumerateSameSupplyCorridorCandidates(rows, 2, carriedCount);
+
+    expect(candidates.length).toBeGreaterThan(0);
+    // Find a candidate that has two pickups at Oslo and delivers to both cities
+    const corridorCandidate = candidates.find(c =>
+      c.stops.filter(s => s.action === 'pickup' && s.city === 'Oslo').length === 2 &&
+      c.stops.some(s => s.action === 'deliver' && s.city === 'Zurich') &&
+      c.stops.some(s => s.action === 'deliver' && s.city === 'Milano'),
+    );
+    expect(corridorCandidate).toBeDefined();
+    expect(corridorCandidate!.id).toContain('corridor:');
+  });
+
+  it('does not generate corridor candidates when only one demand shares the supply city', () => {
+    const rows: Row[] = [
+      makeRow({ loadType: 'Fish', supplyCity: 'Oslo', deliveryCity: 'Zurich', cardIndex: 1, payout: 20, isCarry: false }),
+      makeRow({ loadType: 'Fish', supplyCity: 'Bergen', deliveryCity: 'Milano', cardIndex: 2, payout: 18, isCarry: false }),
+    ];
+    const carriedCount = new Map<string, number>();
+
+    const candidates = enumerateSameSupplyCorridorCandidates(rows, 2, carriedCount);
+    expect(candidates).toHaveLength(0);
+  });
+
+  it('does not generate corridor candidates when capacity would be exceeded', () => {
+    // Bot already carries 2 Fish, cap=2 → can't pick up 2 more
+    const rows: Row[] = [
+      makeRow({ loadType: 'Fish', supplyCity: 'Oslo', deliveryCity: 'Zurich', cardIndex: 1, payout: 20, isCarry: false }),
+      makeRow({ loadType: 'Fish', supplyCity: 'Oslo', deliveryCity: 'Milano', cardIndex: 2, payout: 18, isCarry: false }),
+    ];
+    const carriedCount = new Map<string, number>([['Fish', 2]]);
+
+    const candidates = enumerateSameSupplyCorridorCandidates(rows, 2, carriedCount);
+    expect(candidates).toHaveLength(0);
+  });
+
+  it('skips carry rows (isCarry=true) for corridor grouping', () => {
+    const rows: Row[] = [
+      makeRow({ loadType: 'Fish', supplyCity: null, deliveryCity: 'Zurich', cardIndex: 1, payout: 20, isCarry: true }),
+      makeRow({ loadType: 'Fish', supplyCity: 'Oslo', deliveryCity: 'Milano', cardIndex: 2, payout: 18, isCarry: false }),
+    ];
+    const carriedCount = new Map<string, number>();
+
+    const candidates = enumerateSameSupplyCorridorCandidates(rows, 2, carriedCount);
+    expect(candidates).toHaveLength(0);
+  });
+});
+
+describe('JIRA-249/250: Rejection logging in planTripDeterministic', () => {
+  /**
+   * UT5 (Rejection Logging): When a survivor candidate is grammatically invalid,
+   * planTripDeterministic should populate candidateRejections with a structured record.
+   *
+   * We cannot easily inject a malformed candidate into the pipeline via normal row
+   * setup (the generators produce valid grammar). Instead we verify the field exists
+   * and is undefined when no rejections occur (the happy path — field absent).
+   * A direct grammar-rejection scenario is tested via isCandidateGrammaticallyValid.
+   */
+  it('UT5: candidateRejections is absent (undefined) when all survivors pass grammar', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 2, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
+    mockEstimateGraphPathCost.mockReturnValue({ reachable: true, buildCost: 5, estimatedTurns: 2, pathLength: 20 });
+
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Coal', deliveryCity: 'Berlin', payout: 15 }),
+    ];
+    const snapshot = makeSnapshot();
+    const context = makeContext(demands);
+    const memory = makeMemory();
+
+    const result = planTripDeterministic(snapshot, context, memory);
+
+    expect(result.outcome).toBe('success');
+    // No malformed candidates in normal flow → rejections absent
+    expect(result.candidateRejections).toBeUndefined();
+  });
+});
+
+describe('JIRA-249/250: enumerateCandidates includes carry floor and corridor candidates', () => {
+  it('UT5: enumerateCandidates includes carry-floor candidate when bot carries Labor', () => {
+    const rows: Row[] = [
+      makeRow({ loadType: 'Labor', deliveryCity: 'Bern', cardIndex: 1, payout: 12, isCarry: true, supplyCity: null }),
+      makeRow({ loadType: 'Coal', deliveryCity: 'Berlin', cardIndex: 2, payout: 15, isCarry: false }),
+    ];
+
+    const candidates = enumerateCandidates(rows, 2);
+
+    // Should have a carry-floor candidate
+    const floorCandidates = candidates.filter(c => c.id.startsWith('carry-floor:'));
+    expect(floorCandidates).toHaveLength(1);
+    expect(floorCandidates[0].stops[0]).toMatchObject({ action: 'deliver', loadType: 'Labor', city: 'Bern' });
+  });
+
+  it('UT5b: enumerateCandidates includes corridor candidates for same-supply, same-load pair', () => {
+    const rows: Row[] = [
+      makeRow({ loadType: 'Fish', supplyCity: 'Oslo', deliveryCity: 'Zurich', cardIndex: 1, payout: 20, isCarry: false }),
+      makeRow({ loadType: 'Fish', supplyCity: 'Oslo', deliveryCity: 'Milano', cardIndex: 2, payout: 18, isCarry: false }),
+    ];
+
+    const candidates = enumerateCandidates(rows, 2);
+
+    const corridorCandidates = candidates.filter(c => c.id.startsWith('corridor:'));
+    expect(corridorCandidates.length).toBeGreaterThan(0);
   });
 });
