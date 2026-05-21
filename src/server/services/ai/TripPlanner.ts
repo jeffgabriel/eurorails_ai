@@ -150,7 +150,15 @@ export class TripPlanner {
       const hasRemainingStops = activeRoute != null && activeRoute.currentStopIndex < activeRoute.stops.length;
       // A carry-load demand is only a "commitment" when an active route is already delivering it.
       // Without a route, the carry-load is an undischarged obligation that needs a fresh plan.
-      const actionableDemands = context.demands.filter(d => d.isAffordable && (!d.isLoadOnTrain || !hasRemainingStops));
+      //
+      // JIRA-248 Layer 2: Carried-load demands (isLoadOnTrain && isDeliveryReachable) require no
+      // track spend — they must bypass the affordability gate to prevent the planner from
+      // short-circuiting to DiscardHand when the bot is one move from delivering a load it carries.
+      const isDeliverableCarriedLoad = (d: typeof context.demands[0]) =>
+        d.isLoadOnTrain && d.isDeliveryReachable && !hasRemainingStops;
+      const actionableDemands = context.demands.filter(
+        d => isDeliverableCarriedLoad(d) || (d.isAffordable && (!d.isLoadOnTrain || !hasRemainingStops)),
+      );
       const hasNewOptions = actionableDemands.length > 0;
       if (!hasNewOptions) {
         const hasCarriedLoads = context.loads.length > 0;
