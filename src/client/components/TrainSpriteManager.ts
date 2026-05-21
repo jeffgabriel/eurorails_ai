@@ -1,6 +1,6 @@
 import "phaser";
 import {
-  GameState,
+  FullGameState,
   Player,
   TRAIN_PROPERTIES,
 } from "../../shared/types/GameTypes";
@@ -23,7 +23,7 @@ export type TrainInteractionCallback = (
  */
 export class TrainSpriteManager {
   private scene: Phaser.Scene;
-  private gameState: GameState;
+  private gameState: FullGameState;
   private trainContainer: Phaser.GameObjects.Container;
   private playerStateService: PlayerStateService;
   private interactionCallback: TrainInteractionCallback | null = null;
@@ -42,7 +42,7 @@ export class TrainSpriteManager {
 
   constructor(
     scene: Phaser.Scene,
-    gameState: GameState,
+    gameState: FullGameState,
     trainContainer: Phaser.GameObjects.Container,
     playerStateService: PlayerStateService
   ) {

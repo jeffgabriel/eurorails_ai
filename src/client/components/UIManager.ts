@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, GridPoint, Player } from "../../shared/types/GameTypes";
+import { FullGameState, GridPoint, Player } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
@@ -16,7 +16,7 @@ import { CameraController } from "./CameraController";
 
 export class UIManager {
   private scene: Phaser.Scene;
-  private gameState: GameState;
+  private gameState: FullGameState;
   private uiContainer: Phaser.GameObjects.Container;
   private playerHandContainer: Phaser.GameObjects.Container;
   private trainContainer: Phaser.GameObjects.Container;
@@ -39,7 +39,7 @@ export class UIManager {
 
   constructor(
     scene: Phaser.Scene,
-    gameState: GameState,
+    gameState: FullGameState,
     toggleDrawingCallback: () => void,
     nextPlayerCallback: () => void,
     openSettingsCallback: () => void,
@@ -71,7 +71,7 @@ export class UIManager {
     this.initializeComponentManagers(nextPlayerCallback);
   }
 
-  public updateGameState(gameState: GameState): void {
+  public updateGameState(gameState: FullGameState): void {
     this.gameState = gameState;
     this.playerStateService.updateLocalPlayer(this.gameState.players);
     // Update component managers that need fresh gameState

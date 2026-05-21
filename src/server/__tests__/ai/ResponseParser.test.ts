@@ -512,25 +512,74 @@ describe('ResponseParser', () => {
     it('should parse a pre-validated route object directly', () => {
       const obj = {
         route: [
-          { action: 'PICKUP', load: 'Coal', city: 'Essen' },
+          { action: 'PICKUP', load: 'Coal', city: 'Ruhr' },
           { action: 'DELIVER', load: 'Coal', city: 'Berlin', demandCardId: 7, payment: 20 },
         ],
-        startingCity: 'Essen',
+        startingCity: 'Ruhr',
         reasoning: 'Quick coal delivery',
       };
 
       const result = ResponseParser.parseStrategicRoute(obj, 10);
 
       expect(result.stops).toHaveLength(2);
-      expect(result.stops[0]).toEqual({ action: 'pickup', loadType: 'Coal', city: 'Essen' });
+      expect(result.stops[0]).toEqual({ action: 'pickup', loadType: 'Coal', city: 'Ruhr' });
       expect(result.stops[1]).toEqual({
         action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 7, payment: 20,
       });
-      expect(result.startingCity).toBe('Essen');
+      expect(result.startingCity).toBe('Ruhr');
       expect(result.reasoning).toBe('Quick coal delivery');
       expect(result.createdAtTurn).toBe(10);
       expect(result.currentStopIndex).toBe(0);
       expect(result.phase).toBe('build');
+    });
+
+    it('should parse upgradeOnRoute when present', () => {
+      const obj = {
+        route: [
+          { action: 'PICKUP', load: 'Coal', city: 'Ruhr' },
+          { action: 'DELIVER', load: 'Coal', city: 'Berlin' },
+        ],
+        startingCity: 'Ruhr',
+        upgradeOnRoute: 'FastFreight',
+        reasoning: 'Upgrade then deliver coal',
+      };
+
+      const result = ResponseParser.parseStrategicRoute(obj, 5);
+
+      expect(result.upgradeOnRoute).toBe('fast_freight');
+      expect(result.stops).toHaveLength(2);
+      expect(result.reasoning).toBe('Upgrade then deliver coal');
+    });
+
+    it('should set upgradeOnRoute to undefined when absent', () => {
+      const obj = {
+        route: [
+          { action: 'PICKUP', load: 'Coal', city: 'Ruhr' },
+          { action: 'DELIVER', load: 'Coal', city: 'Berlin' },
+        ],
+        startingCity: 'Ruhr',
+        reasoning: 'No upgrade',
+      };
+
+      const result = ResponseParser.parseStrategicRoute(obj, 5);
+
+      expect(result.upgradeOnRoute).toBeUndefined();
+    });
+
+    it('should pass through arbitrary upgradeOnRoute values without validation', () => {
+      const obj = {
+        route: [
+          { action: 'PICKUP', load: 'Coal', city: 'Ruhr' },
+          { action: 'DELIVER', load: 'Coal', city: 'Berlin' },
+        ],
+        startingCity: 'Ruhr',
+        upgradeOnRoute: 'InvalidTrain',
+        reasoning: 'Bad upgrade value',
+      };
+
+      const result = ResponseParser.parseStrategicRoute(obj, 5);
+
+      expect(result.upgradeOnRoute).toBe('InvalidTrain');
     });
 
     it('should throw ParseError for empty route array in object input', () => {
@@ -557,7 +606,7 @@ describe('ResponseParser', () => {
 
   describe('parseStrategicRoute — truncated JSON recovery', () => {
     it('should recover truncated JSON missing closing }', () => {
-      const truncated = '{"route": [{"action": "PICKUP", "load": "Coal", "city": "Essen"}, {"action": "DELIVER", "load": "Coal", "city": "Berlin"}], "reasoning": "test"';
+      const truncated = '{"route": [{"action": "PICKUP", "load": "Coal", "city": "Ruhr"}, {"action": "DELIVER", "load": "Coal", "city": "Berlin"}], "reasoning": "test"';
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
 
       const result = ResponseParser.parseStrategicRoute(truncated, 5);
@@ -581,10 +630,64 @@ describe('ResponseParser', () => {
       warnSpy.mockRestore();
     });
 
-    it('should throw ParseError for severely truncated JSON (cut mid-string)', () => {
+    it('should throw ParseError when mid-string truncation has no prior complete value', () => {
+      // Input: truncated inside the very first object — no complete value before it.
+      // Pass-2 walk-back finds no value boundary, so recovery returns null and parseStrategicRoute
+      // throws (empty route array check fires after recoverTruncatedJson returns null).
       const truncated = '{"route": [{"action": "PICK';
 
       expect(() => ResponseParser.parseStrategicRoute(truncated, 1)).toThrow(ParseError);
+    });
+
+    it('should return null from recoverTruncatedJson when no prior complete value exists (AC2)', () => {
+      // Direct unit test of the helper: mid-string truncation at the very first object
+      // has no prior value boundary to walk back to — must return null (R2c).
+      const result = ResponseParser.recoverTruncatedJson('{"route": [{"action": "PICK');
+      expect(result).toBeNull();
+    });
+
+    it('should recover mid-string truncation with prior complete stops — Flash turn 6 attempt #1 fixture (AC1)', () => {
+      // Production fixture: 3 complete stops, 4th stop truncated mid-string at "load": "S
+      // Pass-2 walks back to after the 3rd stop's closing }, drops the partial 4th stop,
+      // closes remaining structures, and returns candidates[0].stops.length === 3.
+      const truncated =
+        '{"candidates":[{"stops":[' +
+        '{"action":"PICKUP","load":"Steel","supplyCity":"Luxembourg"},' +
+        '{"action":"PICKUP","load":"Wine","supplyCity":"Frankfurt"},' +
+        '{"action":"DELIVER","load":"Wine","deliveryCity":"Paris","demandCardId":14,"payment":11},' +
+        '{"action":"DELIVER","load":"S';
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = ResponseParser.recoverTruncatedJson(truncated);
+
+      expect(result).not.toBeNull();
+      // Recovered candidates[0].stops has 3 complete stops; partial 4th is dropped
+      const candidates = (result as Record<string, unknown>).candidates as Array<{ stops: unknown[] }>;
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0].stops).toHaveLength(3);
+      warnSpy.mockRestore();
+    });
+
+    it('should recover mid-key truncation with prior complete candidate — Flash turn 6 attempt #2 fixture (AC3)', () => {
+      // Production fixture: 1 complete candidate, 2nd candidate truncated mid-key at {"
+      // Pass-2 walks back to after the 1st candidate's closing }, recovers candidates.length === 1.
+      const candidate1 = JSON.stringify({
+        stops: [
+          { action: 'PICKUP', load: 'Steel', supplyCity: 'Luxembourg' },
+          { action: 'DELIVER', load: 'Steel', deliveryCity: 'Venezia', demandCardId: 14, payment: 19 },
+        ],
+        reasoning: 'Direct steel delivery',
+      });
+      const truncated = `{"candidates":[${candidate1},{"`;
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = ResponseParser.recoverTruncatedJson(truncated);
+
+      expect(result).not.toBeNull();
+      const candidates = (result as Record<string, unknown>).candidates as Array<{ stops: unknown[] }>;
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0].stops).toHaveLength(2);
+      warnSpy.mockRestore();
     });
 
     it('should recover markdown-fenced truncated JSON', () => {

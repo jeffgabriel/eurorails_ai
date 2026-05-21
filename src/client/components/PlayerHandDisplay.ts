@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState } from "../../shared/types/GameTypes";
+import { FullGameState } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainInteractionManager } from "./TrainInteractionManager";
@@ -10,7 +10,7 @@ import { CameraController } from "./CameraController";
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
   private container: Phaser.GameObjects.Container;
-  private gameState: GameState;
+  private gameState: FullGameState;
   private toggleDrawingCallback: () => void;
   private onUndo: () => void;
   private canUndo: () => boolean;
@@ -32,7 +32,7 @@ export class PlayerHandDisplay {
 
   constructor(
     scene: Phaser.Scene,
-    gameState: GameState,
+    gameState: FullGameState,
     toggleDrawingCallback: () => void,
     onUndo: () => void,
     canUndo: () => boolean,
@@ -55,7 +55,7 @@ export class PlayerHandDisplay {
     this.container = this.scene.add.container(0, 0);
   }
 
-  public updateGameState(gameState: GameState): void {
+  public updateGameState(gameState: FullGameState): void {
     this.gameState = gameState;
     // Update scene if it's running
     const playerHandScene = this.scene.scene.get("PlayerHandScene");
@@ -146,7 +146,7 @@ export class PlayerHandDisplay {
   }
 
   public async updateSceneData(
-    gameState: GameState,
+    gameState: FullGameState,
     isDrawingMode: boolean,
     currentTrackCost: number
   ): Promise<void> {

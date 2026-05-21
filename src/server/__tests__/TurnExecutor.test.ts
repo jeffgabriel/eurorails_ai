@@ -623,6 +623,12 @@ describe('TurnExecutor — handlePickupLoad', () => {
     expect(result.action).toBe(AIActionType.PickupLoad);
   });
 
+  // JIRA-196 capacity/FOR-UPDATE coverage moved with the inline DB block into
+  // PlayerService.pickupLoadForPlayer; see playerService.pickup.test.ts:110 for
+  // the FOR UPDATE row-locking test and lines 196/215 for the 2/2 + 3/3
+  // capacity-rejection tests. Two TurnExecutor-side cases that exercised the
+  // (now-deleted) inline path were removed during the post-merge cleanup.
+
   it('should insert pickup action into turn_actions table', async () => {
     const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([

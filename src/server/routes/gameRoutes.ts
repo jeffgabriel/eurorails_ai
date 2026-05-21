@@ -277,4 +277,54 @@ router.get('/:gameId/victory-state', authenticateToken, async (req, res) => {
     }
 });
 
-export default router; 
+// Get map data for completed/abandoned games (no auth required)
+router.get('/:gameId/map-data', async (req, res) => {
+    try {
+        const { gameId } = req.params;
+
+        if (!gameId) {
+            return res.status(400).json({
+                error: 'VALIDATION_ERROR',
+                details: 'Game ID is required'
+            });
+        }
+
+        const gameResult = await db.query(
+            'SELECT status FROM games WHERE id = $1',
+            [gameId]
+        );
+
+        if (gameResult.rows.length === 0) {
+            return res.status(404).json({
+                error: 'GAME_NOT_FOUND',
+                details: 'Game not found'
+            });
+        }
+
+        const gameStatus: string = gameResult.rows[0].status;
+        if (gameStatus !== 'completed' && gameStatus !== 'abandoned') {
+            return res.status(403).json({
+                error: 'GAME_NOT_AVAILABLE',
+                details: 'Map view is only available for completed games'
+            });
+        }
+
+        const playersResult = await db.query(
+            'SELECT id, name, color FROM players WHERE game_id = $1 AND is_deleted = false',
+            [gameId]
+        );
+
+        return res.status(200).json({
+            players: playersResult.rows,
+            status: gameStatus
+        });
+    } catch (error: any) {
+        console.error('Error in /:gameId/map-data route:', error);
+        return res.status(500).json({
+            error: 'SERVER_ERROR',
+            details: 'An unexpected error occurred'
+        });
+    }
+});
+
+export default router;

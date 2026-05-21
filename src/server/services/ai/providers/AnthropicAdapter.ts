@@ -1,13 +1,14 @@
 import { ProviderResponse } from '../../../../shared/types/GameTypes';
 import { ProviderAdapter, ThinkingConfig } from './ProviderAdapter';
 import { ProviderTimeoutError, ProviderAPIError, ProviderAuthError } from './errors';
+import { stripCodeFences } from './jsonExtraction';
 
 export class AnthropicAdapter implements ProviderAdapter {
-  private readonly apiKey: string;
+  private readonly credential: string;
   private readonly timeoutMs: number;
 
-  constructor(apiKey: string, timeoutMs: number = 15000) {
-    this.apiKey = apiKey;
+  constructor(credential: string, timeoutMs: number = 15000) {
+    this.credential = credential;
     this.timeoutMs = timeoutMs;
   }
 
@@ -27,8 +28,11 @@ export class AnthropicAdapter implements ProviderAdapter {
     const timer = setTimeout(() => controller.abort(), effectiveTimeout);
 
     try {
+      const isHaiku = request.model.startsWith('claude-haiku-');
+
       // When adaptive thinking is enabled, Anthropic requires temperature=1
-      const effectiveTemperature = request.thinking ? 1 : request.temperature;
+      // (Haiku does not support thinking, so skip the override for Haiku)
+      const effectiveTemperature = !isHaiku && request.thinking ? 1 : request.temperature;
 
       // Build the base request body
       const body: Record<string, unknown> = {
@@ -43,27 +47,30 @@ export class AnthropicAdapter implements ProviderAdapter {
         messages: [{ role: 'user', content: request.userPrompt }],
       };
 
-      // Build output_config from schema and/or effort
-      const outputConfig: Record<string, unknown> = {};
-      if (request.outputSchema) {
-        outputConfig.format = {
-          type: 'json_schema',
-          schema: request.outputSchema,
-        };
-      }
-      if (request.effort) {
-        outputConfig.effort = request.effort;
-      }
-      if (Object.keys(outputConfig).length > 0) {
-        body.output_config = outputConfig;
+      // Haiku models do not support output_config or thinking — omit both
+      if (!isHaiku) {
+        // Build output_config from schema and/or effort
+        const outputConfig: Record<string, unknown> = {};
+        if (request.outputSchema) {
+          outputConfig.format = {
+            type: 'json_schema',
+            schema: request.outputSchema,
+          };
+        }
+        if (request.effort) {
+          outputConfig.effort = request.effort;
+        }
+        if (Object.keys(outputConfig).length > 0) {
+          body.output_config = outputConfig;
+        }
+
+        // Conditionally add thinking config
+        if (request.thinking) {
+          body.thinking = request.thinking;
+        }
       }
 
-      // Conditionally add thinking config
-      if (request.thinking) {
-        body.thinking = request.thinking;
-      }
-
-      const result = await this.executeRequest(body, controller.signal);
+      const result = await this.executeRequest(body, controller.signal, isHaiku);
 
       // On schema rejection (400), retry without the json_schema format
       if (result.error && result.error.status === 400 && request.outputSchema) {
@@ -80,7 +87,7 @@ export class AnthropicAdapter implements ProviderAdapter {
               delete body.output_config;
             }
           }
-          const retryResult = await this.executeRequest(body, controller.signal);
+          const retryResult = await this.executeRequest(body, controller.signal, isHaiku);
           if (retryResult.error) {
             this.throwApiError(retryResult.error.status, retryResult.error.body);
           }
@@ -106,14 +113,23 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
   }
 
+  /**
+   * Strip markdown code fences from a string.
+   * Delegates to the shared jsonExtraction helper.
+   */
+  static stripCodeFences(text: string): string {
+    return stripCodeFences(text);
+  }
+
   private async executeRequest(
     body: Record<string, unknown>,
     signal: AbortSignal,
+    isHaiku: boolean = false,
   ): Promise<{ response?: ProviderResponse; error?: { status: number; body: string } }> {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'x-api-key': this.apiKey,
+        'x-api-key': this.credential,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },
@@ -137,7 +153,13 @@ export class AnthropicAdapter implements ProviderAdapter {
     const textBlock = Array.isArray(data.content)
       ? data.content.find((block: { type: string }) => block.type === 'text')
       : undefined;
-    const text = textBlock?.text ?? '';
+    let text = textBlock?.text ?? '';
+
+    // Haiku models wrap JSON in markdown code fences — strip them at the adapter
+    // boundary so all downstream callers receive raw JSON on the first attempt.
+    if (isHaiku) {
+      text = AnthropicAdapter.stripCodeFences(text);
+    }
 
     return {
       response: {

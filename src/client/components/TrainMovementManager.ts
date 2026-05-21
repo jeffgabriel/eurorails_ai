@@ -1,6 +1,6 @@
 import "phaser";
 import {
-  GameState,
+  FullGameState,
   GridPoint,
   Point,
   TerrainType,
@@ -12,11 +12,11 @@ import { mapConfig } from "../config/mapConfig";
 import { config } from "../config/apiConfig";
 
 export class TrainMovementManager {
-  private gameState: GameState;
+  private gameState: FullGameState;
   private playerTracks: Map<string, PlayerTrackState> = new Map();
   private movementCalculator: MovementCostCalculator;
 
-  constructor(gameState: GameState) {
+  constructor(gameState: FullGameState) {
     this.gameState = gameState;
     this.movementCalculator = new MovementCostCalculator();
   }

@@ -1,7 +1,7 @@
 // services/socketService.ts
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import type { Server as HTTPServer } from 'http';
-import type { GameState } from '../../shared/types/GameTypes';
+import type { FullGameState, GameState } from '../../shared/types/GameTypes';
 import type { ActiveEffect, EventCard, PerPlayerEffect } from '../../shared/types/EventCard';
 import { AuthService } from './authService';
 import { db } from '../db';
@@ -10,7 +10,9 @@ import { ChatService } from './chatService';
 import { rateLimitService } from './rateLimitService';
 import { gameChatLimitService } from './gameChatLimitService';
 import { moderationService } from './moderationService';
-import { onTurnChange as triggerBotTurn, onHumanReconnect } from './ai/BotTurnTrigger';
+import { onTurnChange as triggerBotTurn, onHumanReconnect, advanceTurnAfterBot } from './ai/BotTurnTrigger';
+import { WhisperService } from './ai/WhisperService';
+import type { WhisperSubmitPayload } from '../../shared/types/WhisperTypes';
 import { ActiveEffectManager } from './ActiveEffectManager';
 
 const activeEffectManagerInstance = new ActiveEffectManager();
@@ -20,6 +22,35 @@ let presenceSweepInterval: NodeJS.Timeout | null = null;
 
 const PRESENCE_HEARTBEAT_MS = 60_000;
 const PRESENCE_STALE_INTERVAL = '5 minutes';
+const AUTO_RUN_DELAY_MS = 2000;
+
+// ====== AUTO-RUN STATE ======
+// In-memory map: gameId → set of playerIds with auto-run enabled
+const autoRunPlayers: Map<string, Set<string>> = new Map();
+
+export function isAutoRunEnabled(gameId: string, playerId: string): boolean {
+  return autoRunPlayers.get(gameId)?.has(playerId) ?? false;
+}
+
+export function toggleAutoRun(gameId: string, playerId: string): boolean {
+  let players = autoRunPlayers.get(gameId);
+  if (!players) {
+    players = new Set();
+    autoRunPlayers.set(gameId, players);
+  }
+  if (players.has(playerId)) {
+    players.delete(playerId);
+    if (players.size === 0) autoRunPlayers.delete(gameId);
+    return false;
+  } else {
+    players.add(playerId);
+    return true;
+  }
+}
+
+export function clearAutoRun(gameId: string): void {
+  autoRunPlayers.delete(gameId);
+}
 
 /**
  * Create deterministic DM room ID (both users join same room)
@@ -161,6 +192,30 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
     // Handle disconnection
     socket.on('disconnect', () => {
       clearInterval(heartbeatInterval);
+
+      // Clean up auto-run state for this user across all joined games
+      if (userId) {
+        for (const gameId of joinedGameIds) {
+          // Look up playerId and remove from auto-run
+          db.query(
+            'SELECT id FROM players WHERE game_id = $1 AND user_id = $2',
+            [gameId, userId],
+          )
+            .then(result => {
+              const playerId = result.rows[0]?.id;
+              if (playerId) {
+                const players = autoRunPlayers.get(gameId);
+                if (players) {
+                  players.delete(playerId);
+                  if (players.size === 0) autoRunPlayers.delete(gameId);
+                }
+              }
+            })
+            .catch(err => {
+              console.error('[socketService] Auto-run cleanup on disconnect failed:', err);
+            });
+        }
+      }
     });
 
     // Handle join lobby event
@@ -537,6 +592,116 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         });
       }
     });
+
+    /**
+     * Submit whisper advice about a bot's turn
+     */
+    socket.on('whisper:submit', async (data: WhisperSubmitPayload) => {
+      if (!data || !data.gameId || !data.botPlayerId || !data.advice) {
+        socket.emit('whisper:error', {
+          code: 'VALIDATION_ERROR',
+          message: 'Missing required fields: gameId, botPlayerId, advice',
+        });
+        return;
+      }
+
+      if (!userId) {
+        socket.emit('whisper:error', {
+          code: 'NOT_AUTHENTICATED',
+          message: 'Authentication required',
+        });
+        return;
+      }
+
+      const { gameId, botPlayerId, advice } = data;
+
+      try {
+        // Validate advice is non-empty
+        const trimmedAdvice = advice.trim();
+        if (trimmedAdvice.length === 0) {
+          socket.emit('whisper:error', {
+            code: 'VALIDATION_ERROR',
+            message: 'Advice cannot be empty',
+          });
+          return;
+        }
+
+        // Verify human is in the game
+        const humanInGame = await db.query(
+          'SELECT id FROM players WHERE game_id = $1 AND user_id = $2 AND is_deleted = false',
+          [gameId, userId],
+        );
+        if (humanInGame.rows.length === 0) {
+          socket.emit('whisper:error', {
+            code: 'NOT_IN_GAME',
+            message: 'You are not in this game',
+          });
+          return;
+        }
+
+        // Verify target is a bot player in the same game
+        const botPlayer = await db.query(
+          'SELECT id FROM players WHERE game_id = $1 AND id = $2 AND is_bot = true AND is_deleted = false',
+          [gameId, botPlayerId],
+        );
+        if (botPlayer.rows.length === 0) {
+          socket.emit('whisper:error', {
+            code: 'INVALID_BOT',
+            message: 'Target player is not a bot in this game',
+          });
+          return;
+        }
+
+        // Record the whisper
+        const record = await WhisperService.recordWhisper(
+          { ...data, advice: trimmedAdvice },
+          userId,
+        );
+
+        socket.emit('whisper:recorded', {
+          whisperId: record.id,
+          turnNumber: record.turnNumber,
+          timestamp: record.createdAt,
+        });
+      } catch (error) {
+        console.error('[Whisper] Error recording whisper:', error);
+        socket.emit('whisper:error', {
+          code: 'PERSISTENCE_ERROR',
+          message: 'Failed to record whisper. Please try again.',
+        });
+      }
+    });
+
+    // ====== AUTO-RUN EVENTS ======
+
+    socket.on('autorun:toggle', async (data: { gameId: string }) => {
+      if (!data || !data.gameId || typeof data.gameId !== 'string' || data.gameId.trim() === '') {
+        console.warn(`Invalid gameId from client ${socket.id} for autorun:toggle`);
+        return;
+      }
+      if (!userId) {
+        socket.emit('error', { code: 'UNAUTHORIZED', message: 'Authentication required' });
+        return;
+      }
+
+      const { gameId } = data;
+      try {
+        const playerResult = await db.query(
+          'SELECT id FROM players WHERE game_id = $1 AND user_id = $2',
+          [gameId, userId],
+        );
+        if (playerResult.rows.length === 0) {
+          socket.emit('error', { code: 'NOT_IN_GAME', message: 'You are not a player in this game' });
+          return;
+        }
+        const playerId: string = playerResult.rows[0].id;
+        const enabled = toggleAutoRun(gameId, playerId);
+        socket.emit('autorun:status', { enabled });
+      } catch (err) {
+        console.error('[socketService] autorun:toggle error:', err);
+        socket.emit('error', { code: 'AUTORUN_ERROR', message: 'Failed to toggle auto-run' });
+      }
+    });
   });
 
   return io;
@@ -600,6 +765,38 @@ export function emitTurnChange(gameId: string, currentPlayerIndex: number, curre
     triggerBotTurn(gameId, currentPlayerIndex, currentPlayerId).catch(err => {
       console.error(`[socketService] BotTurnTrigger error for game ${gameId}:`, err);
     });
+
+    // Auto-run: if the current player is a non-bot human with auto-run, advance after delay
+    if (isAutoRunEnabled(gameId, currentPlayerId)) {
+      const scheduledPlayerId = currentPlayerId;
+      const scheduledIndex = currentPlayerIndex;
+      db.query('SELECT is_bot FROM players WHERE id = $1', [scheduledPlayerId])
+        .then(result => {
+          if (!result.rows[0]?.is_bot && isAutoRunEnabled(gameId, scheduledPlayerId)) {
+            setTimeout(async () => {
+              try {
+                // Re-validate before advancing: the turn may have moved on (manual
+                // end-turn, another auto-run timer, bot pipeline in progress).
+                // Without this check the timer can advance current_player_index off
+                // a bot mid-pipeline, surfacing as "Not your turn" errors.
+                if (!isAutoRunEnabled(gameId, scheduledPlayerId)) return;
+                const check = await db.query(
+                  'SELECT current_player_index FROM games WHERE id = $1',
+                  [gameId],
+                );
+                const currentIndex = Number(check.rows[0]?.current_player_index ?? -1);
+                if (currentIndex !== scheduledIndex) return;
+                await advanceTurnAfterBot(gameId);
+              } catch (err) {
+                console.error(`[socketService] Auto-run advance error for game ${gameId}:`, err);
+              }
+            }, AUTO_RUN_DELAY_MS);
+          }
+        })
+        .catch(err => {
+          console.error(`[socketService] Auto-run is_bot check error for game ${gameId}:`, err);
+        });
+    }
   }
 }
 
@@ -619,11 +816,11 @@ export function emitToGame(gameId: string, event: string, data: unknown): void {
 
 /**
  * Emit a state patch to all clients in a game room
- * Uses standardized format: { patch: Partial<GameState>, serverSeq: number }
+ * Uses standardized format: { patch: Partial<FullGameState>, serverSeq: number }
  * @param gameId - The game ID
  * @param patch - The state patch (only changed data, not full state)
  */
-export async function emitStatePatch(gameId: string, patch: Partial<GameState>): Promise<void> {
+export async function emitStatePatch(gameId: string, patch: Partial<FullGameState>): Promise<void> {
   if (!io) {
     console.warn('Socket.IO not initialized, cannot emit state patch');
     return;
@@ -677,6 +874,8 @@ export function emitGameOver(
     winnerName,
     timestamp: Date.now(),
   });
+  // Clean up auto-run state for completed game
+  clearAutoRun(gameId);
 }
 
 /**

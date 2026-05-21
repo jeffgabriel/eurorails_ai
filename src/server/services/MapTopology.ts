@@ -104,6 +104,7 @@ export function loadGridPoints(): Map<string, GridPointData> {
     if (typeof mp.GridX !== 'number' || typeof mp.GridY !== 'number') continue;
     const row = mp.GridY;
     const col = mp.GridX;
+
     map.set(makeKey(row, col), {
       row,
       col,

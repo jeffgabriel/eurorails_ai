@@ -1,5 +1,5 @@
 import 'phaser';
-import { GameState, CameraState } from '../../shared/types/GameTypes';
+import { FullGameState, CameraState } from '../../shared/types/GameTypes';
 import { config } from '../config/apiConfig';
 import { isWheelBlocked } from '../utils/wheelBlocker';
 
@@ -12,13 +12,13 @@ export class CameraController {
     private lastDragTime: number = 0;
     private lastPointerPosition: { x: number, y: number } = { x: 0, y: 0 };
     private isMouseDown: boolean = false;
-    private gameState: GameState;
+    private gameState: FullGameState;
     private pendingRender: boolean = false;
     private localPlayerId: string | null = null;
     private readonly ZOOM_STEP: number = 0.05;
     private mapContainer: Phaser.GameObjects.Container | null = null;
     
-    constructor(scene: Phaser.Scene, mapWidth: number, mapHeight: number, gameState: GameState) {
+    constructor(scene: Phaser.Scene, mapWidth: number, mapHeight: number, gameState: FullGameState) {
         this.scene = scene;
         this.camera = scene.cameras.main;
         this.mapWidth = mapWidth;
@@ -75,19 +75,14 @@ export class CameraController {
             this.camera.scrollX = this.gameState.cameraState.scrollX;
             this.camera.scrollY = this.gameState.cameraState.scrollY;
         } else {
-            // Use predefined initial camera settings for better default view
-            const initialSettings = {
-                zoom: 1.0561194029850745,
-                scrollX: 779.2424871482747,
-                scrollY: 584.8135343081639
-            };
-            
-            this.camera.setZoom(initialSettings.zoom);
-            this.camera.scrollX = initialSettings.scrollX;
-            this.camera.scrollY = initialSettings.scrollY;
-
-            // Save initial camera state
-            this.saveCameraState();
+            // Zoom to show major cities (London, Madrid, Kaliningrad, Sarajevo) — fit-to-map + 2 wheel steps in, then 30% closer
+            const fitZoom = (Math.min(
+                this.camera.width / mapWidth,
+                (this.camera.height - 200) / mapHeight
+            ) + 2 * this.ZOOM_STEP) * 1.3;
+            this.camera.setZoom(fitZoom);
+            this.camera.scrollX = (mapWidth - this.camera.width / fitZoom) / 2;
+            this.camera.scrollY = (mapHeight - (this.camera.height - 200) / fitZoom) / 2;
         }
 
         this.setupInputHandlers();

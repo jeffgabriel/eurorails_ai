@@ -124,4 +124,90 @@ describe('GoogleAdapter', () => {
     const url = (global.fetch as jest.Mock).mock.calls[0][0] as string;
     expect(url).toContain('gemini-2.0-flash');
   });
+
+  describe('Gemini 3 thinking token reserve (GEMINI3_THINKING_RESERVE)', () => {
+    function mockGemini3Success(text: string) {
+      (global.fetch as jest.Mock).mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text }] } }],
+          usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 30 },
+        }),
+      });
+    }
+
+    it('gemini-3-flash-preview + thinking medium → maxOutputTokens = request.maxTokens + 4096', async () => {
+      mockGemini3Success('ok');
+
+      await adapter.chat({
+        model: 'gemini-3-flash-preview',
+        maxTokens: 1000,
+        temperature: 0.5,
+        systemPrompt: 'sys',
+        userPrompt: 'usr',
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+      });
+
+      const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+      expect(callBody.generationConfig.maxOutputTokens).toBe(1000 + 4096);
+    });
+
+    it('gemini-3-flash-preview + thinking low → maxOutputTokens = request.maxTokens + 2048', async () => {
+      mockGemini3Success('ok');
+
+      await adapter.chat({
+        model: 'gemini-3-flash-preview',
+        maxTokens: 1000,
+        temperature: 0.5,
+        systemPrompt: 'sys',
+        userPrompt: 'usr',
+        thinking: { type: 'adaptive' },
+        effort: 'low',
+      });
+
+      const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+      expect(callBody.generationConfig.maxOutputTokens).toBe(1000 + 2048);
+    });
+
+    it('gemini-3-flash-preview WITHOUT thinking → maxOutputTokens = request.maxTokens (no reserve)', async () => {
+      mockGemini3Success('ok');
+
+      await adapter.chat({
+        model: 'gemini-3-flash-preview',
+        maxTokens: 1000,
+        temperature: 0.5,
+        systemPrompt: 'sys',
+        userPrompt: 'usr',
+      });
+
+      const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+      expect(callBody.generationConfig.maxOutputTokens).toBe(1000);
+    });
+
+    it('gemini-2.5-flash + thinking → maxOutputTokens = request.maxTokens (Gemini 2.5 branch unchanged)', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text: 'ok' }] } }],
+          usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 30 },
+        }),
+      });
+
+      await adapter.chat({
+        model: 'gemini-2.5-flash',
+        maxTokens: 1000,
+        temperature: 0.5,
+        systemPrompt: 'sys',
+        userPrompt: 'usr',
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+      });
+
+      const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+      expect(callBody.generationConfig.maxOutputTokens).toBe(1000);
+    });
+  });
 });

@@ -12,18 +12,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { useLobbyStore } from '../../store/lobby.store';
 import { api } from '../../shared/api';
 import type { JoinGameForm } from '../../shared/types';
-
-const getColorName = (colorValue: string): string => {
-  const colorMap: Record<string, string> = {
-    '#ff0000': 'Red',
-    '#0000ff': 'Blue',
-    '#008000': 'Green',
-    '#ffd700': 'Yellow',
-    '#000000': 'Black',
-    '#8b4513': 'Brown',
-  };
-  return colorMap[colorValue] || 'Unknown';
-};
+import { getColorName } from '../../shared/colorDisplay';
 
 const joinGameSchema = z.object({
   joinCode: z.string()

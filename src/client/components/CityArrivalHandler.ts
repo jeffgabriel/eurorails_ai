@@ -1,6 +1,6 @@
 import "phaser";
 import {
-  GameState,
+  FullGameState,
   GridPoint,
   Player,
   Point,
@@ -24,7 +24,7 @@ import { TurnActionManager } from "./TurnActionManager";
  */
 export class CityArrivalHandler {
   private scene: Phaser.Scene;
-  private gameState: GameState;
+  private gameState: FullGameState;
   private playerStateService: PlayerStateService;
   private playerHandDisplay: PlayerHandDisplay | null = null;
   private handContainer: Phaser.GameObjects.Container | null = null;
@@ -33,7 +33,7 @@ export class CityArrivalHandler {
 
   constructor(
     scene: Phaser.Scene,
-    gameState: GameState,
+    gameState: FullGameState,
     playerStateService: PlayerStateService
   ) {
     this.scene = scene;

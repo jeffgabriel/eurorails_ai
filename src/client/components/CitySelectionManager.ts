@@ -1,10 +1,10 @@
 import "phaser";
-import { GameState, TerrainType } from "../../shared/types/GameTypes";
+import { FullGameState, TerrainType } from "../../shared/types/GameTypes";
 import { MapRenderer } from "./MapRenderer";
 import SimpleDropDownList from "phaser3-rex-plugins/templates/ui/simpledropdownlist/SimpleDropDownList";
 export class CitySelectionManager extends SimpleDropDownList {
   public scene: Phaser.Scene;
-  private gameState: GameState;
+  private gameState: FullGameState;
   private mapRenderer: MapRenderer;
   private onCitySelected: (
     playerId: string,
@@ -65,7 +65,7 @@ export class CitySelectionManager extends SimpleDropDownList {
 
   constructor(
     scene: Phaser.Scene,
-    gameState: GameState,
+    gameState: FullGameState,
     mapRenderer: MapRenderer,
     onCitySelected: (
       playerId: string,

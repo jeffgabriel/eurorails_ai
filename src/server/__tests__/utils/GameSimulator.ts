@@ -24,7 +24,6 @@ export interface SimulationMetrics {
   totalEarnings: number;
   lastAction: AIActionType | null;
   currentBuildTarget: string | null;
-  noProgressTurns: number;
   totalSegmentsBuilt: number;
   totalTrackCost: number;
   turnCount: number;
@@ -226,12 +225,6 @@ export class GameSimulator {
     this.metrics.lastAction = result.action;
     this.metrics.actionHistory.push(result.action);
 
-    if (result.action === AIActionType.PassTurn) {
-      this.metrics.noProgressTurns++;
-    } else {
-      this.metrics.noProgressTurns = 0;
-    }
-
     if (result.buildTargetCity) {
       this.metrics.currentBuildTarget = result.buildTargetCity;
     }
@@ -254,7 +247,6 @@ export class GameSimulator {
       totalEarnings: 0,
       lastAction: null,
       currentBuildTarget: null,
-      noProgressTurns: 0,
       totalSegmentsBuilt: 0,
       totalTrackCost: 0,
       turnCount: 0,

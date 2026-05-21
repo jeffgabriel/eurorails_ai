@@ -1,0 +1,41 @@
+  ● AIStrategyEngine.takeTurn (Integration) › JIRA-156 P2: RouteEnrichmentAdvisor enrich() called after new route creation › should call RouteEnrichmentAdvisor.enrich() after TripPlanner creates a new route when hexGrid is populated
+  ● AIStrategyEngine.takeTurn (Integration) › JIRA-156 P2: RouteEnrichmentAdvisor enrich() called after new route creation › should use the enriched route (from enrich() return value) for execution
+  ● AIStrategyEngine.takeTurn (Integration) › LLM failure → heuristic fallback (BE-004) › should PassTurn when both LLM and heuristicFallback fail
+  ● AIStrategyEngine.takeTurn (Integration) › LLM failure → heuristic fallback (BE-004) › should PassTurn when heuristicFallback returns PassTurn plan
+  ● AIStrategyEngine.takeTurn (Integration) › LLM failure → heuristic fallback (BE-004) › should use heuristicFallback BUILD when LLM planRoute returns null
+  ● AIStrategyEngine.takeTurn (Integration) › decision gate — active route auto-execution › should try heuristicFallback when route planning fails, PassTurn only if both fail
+  ● AIStrategyEngine.takeTurn (Integration) › initial build uses LLM route planning › should use InitialBuildPlanner (not LLM) during initialBuild
+  ● AIStrategyEngine.takeTurn (Integration) › initial build uses LLM route planning › should use InitialBuildPlanner during initialBuild regardless of LLM key
+  ● AIStrategyEngine.takeTurn (Integration) › initial build — LLM route planning › should use InitialBuildPlanner (not LLM planRoute) during initialBuild gameStatus
+  ● AIStrategyEngine.takeTurn (Integration) › successful turn — PassTurn (no API key) › should pass turn directly when no LLM API key is available
+  ● ActionResolver › resolveMultiAction › edge cases › should handle two PASS actions in a MultiAction
+  ● ActionResolver › resolveMultiAction › invalid action in sequence › should fail on second invalid action (step 2) after first succeeds
+  ● ActionResolver › resolveMultiAction › invalid action in sequence › should fail on third action in a three-step sequence
+  ● ActionResolver › resolveMultiAction › invalid action in sequence › should fail when unknown action type is in the sequence
+  ● ActionResolver › resolveMultiAction › valid multi-action sequences › should resolve PASS + BUILD as MultiAction
+  ● ActionResolver › resolveMultiAction › valid multi-action sequences › should resolve a single action passed as multi-action (degenerates to single)
+  ● ActionResolver › resolvePass › should accept "PASS" string as action alias
+  ● Bot Build Track Flow (Integration) › initial build phase › should build track during initial phase when bot has existing segments
+  ● Bot Build Track Flow (Integration) › initial build phase › should build track during initialBuild using active route
+  ● BotTurnTrigger › onHumanReconnect › should do nothing when no queued turn exists
+  ● ContextBuilder ferry-aware estimateTrackCost › cross-water city with no ferry access: returns overland + ferry + far-side cost
+  ● ContextBuilder ferry-aware estimateTrackCost › ferry-paid estimate should be less than no-ferry-access estimate
+  ● ContextBuilder.build — demand context computation › should estimate track cost > 0 for off-network cities
+  ● ContextBuilder.build — demand context computation › should mark supply as reachable when supply city is within speed
+  ● ContextBuilder.build — on-train travel distance in estimatedTurns › on-train load to off-network city should include build turns AND travel turns
+  ● ContextBuilder.serializePrompt › should have PLAN PERSISTENCE in system prompt
+  ● JIRA-127: Build Cost Estimator Accuracy › cross-water and cold-start with budget penalty › should apply budget penalty to cross-water ferry cost estimates
+  ● JIRA-127: Build Cost Estimator Accuracy › increased fallback terrain multiplier (4.0) › should use 4.0 multiplier in same-landmass fallback when Dijkstra returns 0
+  ● JIRA-127: Build Cost Estimator Accuracy › multi-source frontier estimation (same-landmass) › should apply budget penalty when same-landmass estimate exceeds 20M
+  ● JIRA-127: Build Cost Estimator Accuracy › multi-source frontier estimation (same-landmass) › should use minimum cost from top 5 frontier nodes, not single closest by hexDistance
+  ● JIRA-156 mid-turn replan: delivery triggers TripPlanner + RouteEnrichmentAdvisor stub › triggers TripPlanner.planTrip() and RouteEnrichmentAdvisor.enrich() after delivery
+  ● JIRA-161: MIN_DELIVERIES_BEFORE_UPGRADE constant › is exported and equals 1
+  ● LLMStrategyBrain › evaluateUpgradeBeforeDrop › should treat upgrade without targetTrain as skip
+  ● LLMStrategyBrain › planRoute — budgetHint parameter (JIRA-103) › should NOT modify user prompt when budgetHint is undefined
+  ● LLMStrategyBrain › planRoute — budgetHint parameter (JIRA-103) › should prepend budgetHint to user prompt when provided
+  ● LLMStrategyBrain › planRoute — serializeRoutePlanningPrompt integration (JIRA-5) › should call serializeRoutePlanningPrompt (not serializePrompt) during planRoute
+  ● LLMStrategyBrain › planRoute — serializeRoutePlanningPrompt integration (JIRA-5) › should pass context and skillLevel to serializeRoutePlanningPrompt
+  ● LLMStrategyBrain › planRoute — serializeRoutePlanningPrompt integration (JIRA-5) › should pass gridPoints to serializeRoutePlanningPrompt
+  ● LLMStrategyBrain › planRoute — serializeRoutePlanningPrompt integration (JIRA-5) › should use route-planning-prompt text from serializeRoutePlanningPrompt in LLM call
+  ● TurnExecutorPlanner.execute — move toward stop city › A3: skips move when previewed build origin matches current bot position (origin_is_current_position)
+  ● TurnExecutorPlanner.execute — post-delivery replan › calls TripPlanner.planTrip() and RouteEnrichmentAdvisor.enrich() after delivery when brain is provided

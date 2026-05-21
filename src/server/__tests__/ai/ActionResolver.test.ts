@@ -29,6 +29,7 @@ import {
   TurnPlanUpgradeTrain,
   TurnPlanDiscardHand,
   TurnPlanPassTurn,
+  GameState,
 } from '../../../shared/types/GameTypes';
 import type { GridPointData, GridCoord } from '../../services/MapTopology';
 import type { TrackUsageComputation, PathEdge } from '../../../shared/services/trackUsageFees';
@@ -51,13 +52,14 @@ jest.mock('../../../shared/services/majorCityGroups', () => {
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
 import { loadGridPoints, hexDistance } from '../../services/MapTopology';
-import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { getMajorCityGroups, getMajorCityLookup, getFerryEdges } from '../../../shared/services/majorCityGroups';
 
 const mockComputeBuildSegments = computeBuildSegments as jest.MockedFunction<typeof computeBuildSegments>;
 const mockComputeTrackUsageForMove = computeTrackUsageForMove as jest.MockedFunction<typeof computeTrackUsageForMove>;
 const mockLoadGridPoints = loadGridPoints as jest.MockedFunction<typeof loadGridPoints>;
 const mockGetMajorCityGroups = getMajorCityGroups as jest.MockedFunction<typeof getMajorCityGroups>;
 const mockGetMajorCityLookup = getMajorCityLookup as jest.MockedFunction<typeof getMajorCityLookup>;
+const mockGetFerryEdges = getFerryEdges as jest.MockedFunction<typeof getFerryEdges>;
 const mockHexDistance = hexDistance as jest.MockedFunction<typeof hexDistance>;
 
 // ─── Factory helpers ─────────────────────────────────────────────────────────
@@ -130,6 +132,7 @@ function makeGameContext(overrides: Partial<GameContext> = {}): GameContext {
     opponents: [],
     phase: 'operate',
     turnNumber: 5,
+    gameState: GameState.Mid,
     ...overrides,
   };
 }
@@ -1435,7 +1438,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDeliverIntent('Steel', 'Berlin'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Steel'] }),
       );
 
       expect(result.success).toBe(true);
@@ -1489,7 +1492,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDeliverIntent('Oil', 'Berlin'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Oil'] }),
       );
 
       expect(result.success).toBe(false);
@@ -1512,7 +1515,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDeliverIntent('Steel', 'Berlin'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Steel'] }),
       );
 
       expect(result.success).toBe(true);
@@ -1528,7 +1531,7 @@ describe('ActionResolver', () => {
         reasoning: 'Deliver',
         planHorizon: 'short',
       };
-      const result = await ActionResolver.resolve(intent, snapshotWithDemand(), makeGameContext());
+      const result = await ActionResolver.resolve(intent, snapshotWithDemand(), makeGameContext({ loads: ['Steel'] }));
       expect(result.success).toBe(true);
     });
 
@@ -1539,7 +1542,7 @@ describe('ActionResolver', () => {
         reasoning: 'Deliver',
         planHorizon: 'short',
       };
-      expect((await ActionResolver.resolve(intent1, snapshotWithDemand(), makeGameContext())).success).toBe(true);
+      expect((await ActionResolver.resolve(intent1, snapshotWithDemand(), makeGameContext({ loads: ['Steel'] }))).success).toBe(true);
 
       const intent2: LLMActionIntent = {
         action: AIActionType.DeliverLoad,
@@ -1547,7 +1550,7 @@ describe('ActionResolver', () => {
         reasoning: 'Deliver',
         planHorizon: 'short',
       };
-      expect((await ActionResolver.resolve(intent2, snapshotWithDemand(), makeGameContext())).success).toBe(true);
+      expect((await ActionResolver.resolve(intent2, snapshotWithDemand(), makeGameContext({ loads: ['Steel'] }))).success).toBe(true);
     });
   });
 
@@ -1635,7 +1638,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makePickupIntent('Steel', 'Ruhr'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal', 'Wine'] }),
       );
 
       expect(result.success).toBe(false);
@@ -1655,7 +1658,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makePickupIntent('Steel', 'Ruhr'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal', 'Wine'] }),
       );
 
       expect(result.success).toBe(true);
@@ -1981,7 +1984,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDropIntent('Coal', 'Ruhr'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal'] }),
       );
 
       expect(result.success).toBe(true);
@@ -1999,7 +2002,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDropIntent('Coal'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal'] }),
       );
 
       expect(result.success).toBe(true);
@@ -2034,7 +2037,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDropIntent('Coal', 'Berlin'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal'] }),
       );
 
       expect(result.success).toBe(false);
@@ -2069,11 +2072,222 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDropIntent('Coal'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal'] }),
       );
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('not at a named city');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // JIRA-197: context.loads contract tests (AC1–AC4)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe('JIRA-197: context.loads contract', () => {
+    beforeEach(() => {
+      setupGridPoints([
+        { row: 10, col: 10, name: 'Praha', terrain: TerrainType.MajorCity },
+        { row: 20, col: 20, name: 'Wien', terrain: TerrainType.MajorCity },
+        { row: 5, col: 5, name: 'Bordeaux', terrain: TerrainType.MajorCity },
+      ]);
+      setupMajorCityGroups([
+        { cityName: 'Praha', center: { row: 10, col: 10 } },
+        { cityName: 'Wien', center: { row: 20, col: 20 } },
+        { cityName: 'Bordeaux', center: { row: 5, col: 5 } },
+      ]);
+    });
+
+    // AC1: resolveDeliver reads context.loads — delivers a load that was just picked up
+    // (snapshot.bot.loads is empty as it would be at turn start, context.loads has the in-turn pickup)
+    it('AC1: resolveDeliver succeeds when load is in context.loads but not snapshot.bot.loads', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 10, col: 10 }, // at Praha
+          loads: [], // snapshot (DB-committed) is empty — bot picked up Wine this turn
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Praha', loadType: 'Wine', payment: 25 }] },
+          ],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        loads: ['Wine'], // planner's in-turn working state has the just-picked-up Wine
+      });
+
+      const result = await ActionResolver.resolve(
+        { action: AIActionType.DeliverLoad, details: { load: 'Wine', at: 'Praha' }, reasoning: 'Deliver Wine', planHorizon: 'short' },
+        snapshot,
+        context,
+      );
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanDeliverLoad;
+      expect(plan.type).toBe(AIActionType.DeliverLoad);
+      expect(plan.load).toBe('Wine');
+      expect(plan.city).toBe('Praha');
+      expect(plan.payout).toBe(25);
+    });
+
+    // AC2: resolvePickup reads context.loads for capacity — rejects when context shows train full
+    // (snapshot.bot.loads is empty, but context.loads has 2 in-turn pickups already)
+    it('AC2: resolvePickup rejects when context.loads is at capacity even if snapshot.bot.loads is empty', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 }, // at Bordeaux
+          loads: [], // DB-committed empty
+          trainType: TrainType.Freight, // capacity = 2
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Praha', loadType: 'Wine', payment: 25 }] },
+          ],
+        } as any,
+        loadAvailability: { Bordeaux: ['Wine'] },
+      });
+
+      const context = makeGameContext({
+        loads: ['Wine', 'Wine'], // 2 in-turn pickups already — train is full per planner state
+        capacity: 2,
+        demands: [{
+          cardIndex: 0,
+          loadType: 'Wine',
+          supplyCity: 'Bordeaux',
+          deliveryCity: 'Praha',
+          payout: 25,
+          isSupplyReachable: true,
+          isDeliveryOnNetwork: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          isLoadOnTrain: false,
+          isLoadAvailable: true,
+          ferryRequired: false,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as DemandContext[],
+      });
+
+      const result = await ActionResolver.resolve(
+        { action: AIActionType.PickupLoad, details: { load: 'Wine', at: 'Bordeaux' }, reasoning: 'Pickup Wine', planHorizon: 'short' },
+        snapshot,
+        context,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('full');
+      expect(result.error).toContain('2/2');
+    });
+
+    // AC3: resolveDropLoad reads context.loads — drops a load that was just picked up
+    // (snapshot.bot.loads is empty, context.loads has the in-turn pickup)
+    it('AC3: resolveDropLoad succeeds when load is in context.loads but not snapshot.bot.loads', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 10, col: 10 }, // at Praha
+          loads: [], // DB-committed empty
+        } as any,
+      });
+
+      const context = makeGameContext({
+        loads: ['Wine'], // planner's in-turn working state has just-picked-up Wine
+      });
+
+      const result = await ActionResolver.resolve(
+        { action: AIActionType.DropLoad, details: { load: 'Wine', at: 'Praha' }, reasoning: 'Drop Wine', planHorizon: 'short' },
+        snapshot,
+        context,
+      );
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanDropLoad;
+      expect(plan.type).toBe(AIActionType.DropLoad);
+      expect(plan.load).toBe('Wine');
+    });
+
+    // AC4: Integration — pickup Wine@Wien then deliver Wine@Praha in same multi-action turn
+    // Bot starts at Wien with empty DB loads; context picks up Wine; then moves and delivers.
+    // This is the JIRA-197 regression test: pre-fix this would fail at deliver because
+    // resolveDeliver read snapshot.bot.loads (empty) instead of context.loads (has Wine).
+    it('AC4: multi-action pickup-then-deliver succeeds in same turn (JIRA-197 regression)', async () => {
+      // Setup: Wien (20,20) produces Wine; Praha (10,10) demands Wine
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          playerId: 'bot-1',
+          userId: 'user-bot',
+          money: 100,
+          position: { row: 20, col: 20 }, // at Wien
+          existingSegments: [makeSegment(20, 20, 10, 10)],
+          demandCards: [1],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Praha', loadType: 'Wine', payment: 25 }] },
+          ] as ResolvedDemand[],
+          trainType: TrainType.Freight,
+          loads: [], // DB-committed empty at turn start
+          botConfig: null,
+          ferryHalfSpeed: false,
+          connectedMajorCityCount: 0,
+        } as WorldSnapshot['bot'],
+        loadAvailability: { Wien: ['Wine'] },
+      });
+
+      // Mock move path from Wien to Praha
+      mockComputeTrackUsageForMove.mockReturnValue({
+        isValid: true,
+        path: [
+          { from: { row: 20, col: 20 }, to: { row: 15, col: 15 } },
+          { from: { row: 15, col: 15 }, to: { row: 10, col: 10 } },
+        ] as PathEdge[],
+        ownersUsed: new Set<string>(),
+        ownersPaid: [],
+        feeTotal: 0,
+      } as unknown as TrackUsageComputation);
+
+      const context = makeGameContext({
+        loads: [], // turn starts empty (same as snapshot)
+        capacity: 2,
+        speed: 9,
+        demands: [{
+          cardIndex: 0,
+          loadType: 'Wine',
+          supplyCity: 'Wien',
+          deliveryCity: 'Praha',
+          payout: 25,
+          isSupplyReachable: true,
+          isDeliveryOnNetwork: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          isLoadOnTrain: false,
+          isLoadAvailable: true,
+          ferryRequired: false,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as DemandContext[],
+      });
+
+      const intent: LLMActionIntent = {
+        actions: [
+          { action: AIActionType.PickupLoad, details: { load: 'Wine', at: 'Wien' } },
+          { action: AIActionType.MoveTrain, details: { to: 'Praha' } },
+          { action: AIActionType.DeliverLoad, details: { load: 'Wine', at: 'Praha' } },
+        ],
+        reasoning: 'Pickup Wine at Wien, move to Praha, deliver',
+        planHorizon: 'short',
+      };
+
+      const result = await ActionResolver.resolve(intent, snapshot, context);
+
+      // Pre-fix: DeliverLoad step fails ("Bot is not carrying Wine") → result.success = false
+      // Post-fix: pickup updates context.loads, deliver reads context.loads → success
+      expect(result.success).toBe(true);
+      expect(result.plan!.type).toBe('MultiAction');
+      if (result.plan!.type === 'MultiAction') {
+        expect(result.plan!.steps).toHaveLength(3);
+        expect(result.plan!.steps[0].type).toBe(AIActionType.PickupLoad);
+        expect(result.plan!.steps[1].type).toBe(AIActionType.MoveTrain);
+        expect(result.plan!.steps[2].type).toBe(AIActionType.DeliverLoad);
+      }
     });
   });
 
@@ -2352,6 +2566,7 @@ describe('ActionResolver', () => {
       });
 
       const context = makeGameContext({
+        loads: ['Steel'],
         canDeliver: [
           { loadType: 'Steel', deliveryCity: 'Berlin', payout: 15, cardIndex: 0 },
         ],
@@ -2381,6 +2596,7 @@ describe('ActionResolver', () => {
       });
 
       const context = makeGameContext({
+        loads: ['Steel', 'Wine'],
         canDeliver: [
           { loadType: 'Steel', deliveryCity: 'Berlin', payout: 10, cardIndex: 0 },
           { loadType: 'Wine', deliveryCity: 'Berlin', payout: 20, cardIndex: 0 },
@@ -2712,9 +2928,10 @@ describe('ActionResolver', () => {
       expect(result.plan!.type).toBe(AIActionType.BuildTrack);
     });
 
-    it('should discard hand when load on train but delivery not on network and unaffordable (JIRA-54)', async () => {
+    it('should drop load when load on train but delivery not on network (JIRA-54)', async () => {
       setupGridPoints([{ row: 5, col: 5, name: 'Berlin' }]);
       const context = makeGameContext({
+        loads: ['Wine'],
         canDeliver: [],
         canPickup: [],
         canBuild: false,
@@ -2736,14 +2953,11 @@ describe('ActionResolver', () => {
       const snapshot = makeWorldSnapshot({
         bot: { position: { row: 5, col: 5 }, loads: ['Wine'], money: 1 } as any,
       });
-      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
       const result = await ActionResolver.heuristicFallback(context, snapshot);
 
       expect(result.success).toBe(true);
-      // JIRA-71: Broke bot (money=1, no affordable demands) → discard immediately
-      // instead of dropping load and wasting turns
-      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
-      warnSpy.mockRestore();
+      // JIRA-164: Broke-bot cash gate removed — bot drops dead-weight load (BE-004) rather than discarding hand
+      expect(result.plan!.type).toBe(AIActionType.DropLoad);
     });
 
     // ── BE-004: DROP dead-weight loads before PASS ──────────────────────────
@@ -2759,6 +2973,7 @@ describe('ActionResolver', () => {
       });
 
       const context = makeGameContext({
+        loads: ['Wine', 'Coal'],
         canDeliver: [],
         canPickup: [],
         canBuild: false,
@@ -2857,6 +3072,7 @@ describe('ActionResolver', () => {
       });
 
       const context = makeGameContext({
+        loads: ['Steel', 'Wine'],
         canDeliver: [
           { loadType: 'Steel', deliveryCity: 'Berlin', payout: 15, cardIndex: 0 },
         ],
@@ -2884,7 +3100,8 @@ describe('ActionResolver', () => {
       expect(result.plan!.type).toBe(AIActionType.DeliverLoad);
     });
 
-    it('JIRA-71: should discard when broke (cash=0) even with load on train and delivery on network', async () => {
+    it('JIRA-164: should NOT discard when broke (cash=0) with load on train and delivery on network', async () => {
+      // JIRA-164: Broke-bot cash gate removed — bot keeps load and tries to move/deliver
       setupGridPoints([{ row: 5, col: 5, name: 'HomeCity' }]);
       const snapshot = makeWorldSnapshot({
         bot: {
@@ -2916,22 +3133,16 @@ describe('ActionResolver', () => {
         ],
       });
 
-      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
       const result = await ActionResolver.heuristicFallback(context, snapshot);
 
       expect(result.success).toBe(true);
-      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('JIRA-71: Broke bot detected'),
-      );
-      warnSpy.mockRestore();
+      // Bot should NOT discard — it's carrying a deliverable load
+      expect(result.plan!.type).not.toBe(AIActionType.DiscardHand);
     });
 
-    it('JIRA-94: should skip pickup and discard when broke with no affordable demands', async () => {
-      // Bot is at a city with available loads and has a matching demand card,
-      // but is broke ($0M) with no affordable demands. Should skip pickup (step 1b)
-      // and fall through to broke-discard (step 1c) instead of picking up a load
-      // it can never deliver.
+    it('JIRA-164: should pick up load even when broke with no affordable demands', async () => {
+      // JIRA-164: Broke-bot cash gate removed — pickups are free, bot should pick up load
+      // even at $0 cash. Movement on own track is also free.
       setupGridPoints([{ row: 5, col: 5, name: 'Warszawa' }]);
       const snapshot = makeWorldSnapshot({
         bot: {
@@ -2942,6 +3153,8 @@ describe('ActionResolver', () => {
             { cardId: 1, demands: [{ city: 'Berlin', loadType: 'Ham', payment: 20 }] },
           ],
         } as any,
+        // Ham is available at Warszawa in the load availability map
+        loadAvailability: { Warszawa: ['Ham'] },
       });
 
       const context = makeGameContext({
@@ -2957,8 +3170,8 @@ describe('ActionResolver', () => {
             cardIndex: 0, loadType: 'Ham', supplyCity: 'Warszawa',
             deliveryCity: 'Berlin', payout: 20,
             isSupplyReachable: true, isDeliveryReachable: false,
-            isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
-            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 15,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
             demandScore: 3, efficiencyPerTurn: 1, networkCitiesUnlocked: 0,
@@ -2967,16 +3180,11 @@ describe('ActionResolver', () => {
         ],
       });
 
-      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
       const result = await ActionResolver.heuristicFallback(context, snapshot);
 
-      // Should discard (step 1c), NOT pickup (step 1b)
+      // Should pick up (step 1b), NOT discard — cash gates are removed
       expect(result.success).toBe(true);
-      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('JIRA-71: Broke bot detected'),
-      );
-      warnSpy.mockRestore();
+      expect(result.plan!.type).toBe(AIActionType.PickupLoad);
     });
 
     it('JIRA-71: should NOT discard when cash >= 5 and some demand is affordable', async () => {
@@ -2996,6 +3204,7 @@ describe('ActionResolver', () => {
 
       const context = makeGameContext({
         money: 10,
+        loads: ['Coal'],
         canDeliver: [
           { loadType: 'Coal', deliveryCity: 'Berlin', payout: 15, cardIndex: 0 },
         ],
@@ -3018,6 +3227,129 @@ describe('ActionResolver', () => {
 
       // Should DELIVER, not discard — broke-bot gate doesn't fire (cash >= 5 and demand affordable)
       expect(result.plan!.type).toBe(AIActionType.DeliverLoad);
+    });
+
+    it('JIRA-120: should force discard immediately when LLM fails (even with delivery and pickup available)', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          money: 30,
+          loads: ['Coal'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 15 }] },
+          ],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        money: 30,
+        canDeliver: [{ loadType: 'Coal', deliveryCity: 'TestCity', payout: 50 }] as any,
+        canPickup: [{ loadType: 'Wine', supplyCity: 'TestCity', bestPayout: 20 }] as any,
+        isInitialBuild: false,
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen',
+            deliveryCity: 'Berlin', payout: 15,
+            isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 1, estimatedTurns: 3,
+            demandScore: 5, efficiencyPerTurn: 5, networkCitiesUnlocked: 0,
+            victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 45,
+          } as any,
+        ],
+      });
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const result = await ActionResolver.heuristicFallback(context, snapshot, { llmFailed: true });
+
+      // Discard fires immediately — overrides available delivery (50M payout) and pickup
+      expect(result.success).toBe(true);
+      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('JIRA-120'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('JIRA-120: should force discard even with no delivery/pickup available', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          money: 30,
+          loads: [],
+          resolvedDemands: [],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        money: 30,
+        canDeliver: [],
+        canPickup: [],
+        isInitialBuild: false,
+        demands: [],
+      });
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const result = await ActionResolver.heuristicFallback(context, snapshot, { llmFailed: true });
+
+      // LLM failed — discard immediately
+      expect(result.success).toBe(true);
+      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
+      warnSpy.mockRestore();
+    });
+
+    it('JIRA-120: should NOT discard during initial build even when LLM failed', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          money: 30,
+          loads: [],
+          resolvedDemands: [],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        money: 30,
+        canDeliver: [],
+        canPickup: [],
+        isInitialBuild: true,
+        demands: [],
+      });
+
+      const result = await ActionResolver.heuristicFallback(context, snapshot, { llmFailed: true });
+
+      // Initial build — discard gate skipped, fall through to other heuristics
+      expect(result.plan!.type).not.toBe(AIActionType.DiscardHand);
+    });
+
+    it('JIRA-120: should NOT discard when called for continuation (llmFailed=false)', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          money: 30,
+          loads: [],
+          resolvedDemands: [],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        money: 30,
+        canDeliver: [],
+        canPickup: [],
+        isInitialBuild: false,
+        demands: [],
+      });
+
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      // No llmFailed flag — this is a continuation call, should not force discard
+      expect(result.plan!.type).not.toBe(AIActionType.DiscardHand);
     });
   });
 
@@ -3148,7 +3480,7 @@ describe('ActionResolver', () => {
           { action: 'DELIVER', details: { load: 'Coal', at: 'Vienna' } },
         );
 
-        const result = await ActionResolver.resolve(intent, snapshot, makeGameContext());
+        const result = await ActionResolver.resolve(intent, snapshot, makeGameContext({ loads: ['Coal'] }));
 
         // Cumulative state simulation: MOVE updates bot position to Vienna,
         // then DELIVER succeeds because bot is now at Vienna
@@ -3288,7 +3620,7 @@ describe('ActionResolver', () => {
           { action: 'DELIVER', details: { load: 'Wine', at: 'Vienna' } },
         );
 
-        const result = await ActionResolver.resolve(intent, snapshot, makeGameContext());
+        const result = await ActionResolver.resolve(intent, snapshot, makeGameContext({ loads: ['Wine'] }));
 
         expect(result.success).toBe(true);
         if (result.plan!.type === 'MultiAction') {
@@ -3434,43 +3766,7 @@ describe('ActionResolver', () => {
       });
     });
 
-    describe('forbidden combination: UPGRADE + BUILD', () => {
-      it('should reject UPGRADE + BUILD combination', async () => {
-        const intent = makeMultiIntent(
-          { action: 'UPGRADE', details: { to: 'fast_freight' } },
-          { action: 'BUILD', details: { toward: 'Berlin' } },
-        );
-
-        const result = await ActionResolver.resolve(intent, makeWorldSnapshot(), makeGameContext());
-
-        expect(result.success).toBe(false);
-        expect(result.error).toContain('Cannot upgrade and build track in the same turn');
-      });
-
-      it('should reject BUILD + UPGRADE combination (order reversed)', async () => {
-        const intent = makeMultiIntent(
-          { action: 'BUILD', details: { toward: 'Berlin' } },
-          { action: 'UPGRADE', details: { to: 'fast_freight' } },
-        );
-
-        const result = await ActionResolver.resolve(intent, makeWorldSnapshot(), makeGameContext());
-
-        expect(result.success).toBe(false);
-        expect(result.error).toContain('Cannot upgrade and build track in the same turn');
-      });
-
-      it('should reject using AIActionType enum values for UPGRADE + BUILD', async () => {
-        const intent = makeMultiIntent(
-          { action: AIActionType.UpgradeTrain, details: { to: 'fast_freight' } },
-          { action: AIActionType.BuildTrack, details: { toward: 'Berlin' } },
-        );
-
-        const result = await ActionResolver.resolve(intent, makeWorldSnapshot(), makeGameContext());
-
-        expect(result.success).toBe(false);
-        expect(result.error).toContain('Cannot upgrade and build track in the same turn');
-      });
-    });
+    // BUILD+UPGRADE exclusion tests removed — now validated by TurnValidator (JIRA-126)
 
     describe('forbidden combination: DISCARD_HAND exclusivity', () => {
       it('should reject DISCARD_HAND + MOVE', async () => {
@@ -3700,35 +3996,6 @@ describe('ActionResolver', () => {
         }
       });
 
-      it('should reject UPGRADE + BUILD even with crossgrade cost of 5M', async () => {
-        // Even a 5M crossgrade + BUILD is forbidden per game rules
-        const intent = makeMultiIntent(
-          { action: 'UPGRADE', details: { to: 'heavy_freight' } },
-          { action: 'BUILD', details: { toward: 'Berlin' } },
-        );
-
-        const snapshot = makeWorldSnapshot({
-          bot: {
-            playerId: 'bot-1',
-            userId: 'user-bot',
-            money: 50,
-            position: { row: 5, col: 5 },
-            existingSegments: [makeSegment(5, 5, 5, 6)],
-            demandCards: [],
-            resolvedDemands: [],
-            trainType: TrainType.FastFreight,
-            loads: [],
-            botConfig: null,
-            ferryHalfSpeed: false,
-            connectedMajorCityCount: 0,
-          } as WorldSnapshot['bot'],
-        });
-
-        const result = await ActionResolver.resolve(intent, snapshot, makeGameContext());
-
-        expect(result.success).toBe(false);
-        expect(result.error).toContain('Cannot upgrade and build track in the same turn');
-      });
     });
 
     describe('cumulative movement budget', () => {
@@ -3813,7 +4080,7 @@ describe('ActionResolver', () => {
           } as WorldSnapshot['bot'],
         });
 
-        const context = makeGameContext({ speed: 9 });
+        const context = makeGameContext({ speed: 9, loads: ['Coal'] });
 
         const intent = makeMultiIntent(
           { action: 'MOVE', details: { to: 'CityB' } },
@@ -3958,7 +4225,7 @@ describe('ActionResolver', () => {
           } as WorldSnapshot['bot'],
         });
 
-        const context = makeGameContext({ speed: 9 });
+        const context = makeGameContext({ speed: 9, loads: ['Coal'] });
 
         const intent = makeMultiIntent(
           { action: 'MOVE', details: { to: 'CityB' } },
@@ -4067,7 +4334,7 @@ describe('ActionResolver', () => {
           } as WorldSnapshot['bot'],
         });
 
-        const context = makeGameContext({ speed: 9 });
+        const context = makeGameContext({ speed: 9, loads: ['Coal'] });
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
 
         const intent = makeMultiIntent(
@@ -4085,6 +4352,423 @@ describe('ActionResolver', () => {
 
         warnSpy.mockRestore();
       });
+    });
+  });
+
+  describe('filterConnectedSegments', () => {
+    beforeEach(() => {
+      mockGetMajorCityLookup.mockReturnValue(new Map());
+      mockGetMajorCityGroups.mockReturnValue([]);
+    });
+
+    it('returns all segments when all are in one connected cluster', () => {
+      const segments = [
+        makeSegment(10, 10, 10, 11),
+        makeSegment(10, 11, 10, 12),
+        makeSegment(10, 12, 11, 12),
+      ];
+      const result = ActionResolver.filterConnectedSegments(segments, { row: 10, col: 10 });
+      expect(result).toHaveLength(3);
+    });
+
+    it('filters out disconnected cluster when bot is in first cluster', () => {
+      // Cluster 1: bot is here
+      const cluster1 = [
+        makeSegment(10, 10, 10, 11),
+        makeSegment(10, 11, 10, 12),
+      ];
+      // Cluster 2: disconnected
+      const cluster2 = [
+        makeSegment(30, 30, 30, 31),
+        makeSegment(30, 31, 30, 32),
+      ];
+      const allSegments = [...cluster1, ...cluster2];
+
+      const result = ActionResolver.filterConnectedSegments(allSegments, { row: 10, col: 10 });
+      expect(result).toHaveLength(2);
+      expect(result).toEqual(cluster1);
+    });
+
+    it('returns empty array for empty segments', () => {
+      const result = ActionResolver.filterConnectedSegments([], { row: 10, col: 10 });
+      expect(result).toHaveLength(0);
+    });
+
+    it('connects clusters via major city red area', () => {
+      // Cluster 1 touches Berlin outpost at (20,20)
+      const cluster1 = [
+        makeSegment(10, 10, 10, 11),
+        makeSegment(10, 11, 20, 20),
+      ];
+      // Cluster 2 touches Berlin outpost at (20,22)
+      const cluster2 = [
+        makeSegment(20, 22, 30, 30),
+      ];
+
+      // Berlin major city group: center (20,21), outposts (20,20) and (20,22)
+      mockGetMajorCityLookup.mockReturnValue(new Map([
+        ['20,20', 'Berlin'],
+        ['20,21', 'Berlin'],
+        ['20,22', 'Berlin'],
+      ]));
+      mockGetMajorCityGroups.mockReturnValue([{
+        cityName: 'Berlin',
+        center: { row: 20, col: 21 },
+        outposts: [{ row: 20, col: 20 }, { row: 20, col: 22 }],
+      }]);
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...cluster1, ...cluster2],
+        { row: 10, col: 10 },
+      );
+      // Both clusters should be connected via Berlin red area
+      expect(result).toHaveLength(3);
+    });
+
+    it('returns only bot cluster when bot position is not on any segment endpoint', () => {
+      // Bot at (5,5) which is not on any segment — should find nothing connected
+      const segments = [
+        makeSegment(10, 10, 10, 11),
+        makeSegment(10, 11, 10, 12),
+      ];
+      const result = ActionResolver.filterConnectedSegments(segments, { row: 5, col: 5 });
+      expect(result).toHaveLength(0);
+    });
+
+    it('connects bot at major city center to segments on city outposts', () => {
+      // Bot at Berlin center (20,21), segment on Berlin outpost (20,20)
+      const segments = [
+        makeSegment(20, 20, 10, 10),
+        makeSegment(10, 10, 10, 11),
+      ];
+
+      mockGetMajorCityLookup.mockReturnValue(new Map([
+        ['20,20', 'Berlin'],
+        ['20,21', 'Berlin'],
+        ['20,22', 'Berlin'],
+      ]));
+      mockGetMajorCityGroups.mockReturnValue([{
+        cityName: 'Berlin',
+        center: { row: 20, col: 21 },
+        outposts: [{ row: 20, col: 20 }, { row: 20, col: 22 }],
+      }]);
+
+      const result = ActionResolver.filterConnectedSegments(segments, { row: 20, col: 21 });
+      expect(result).toHaveLength(2);
+    });
+
+    // ─── JIRA-182: Ferry-aware adjacency ────────────────────────────────────
+
+    it('AC1: connects UK and mainland clusters when bot has track on both sides of a ferry', () => {
+      // English Channel ferry: pointA=(17,29) UK side, pointB=(21,29) France side
+      const channelFerry = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([channelFerry]);
+
+      // UK cluster: bot at Cardiff (17,26), track reaching UK ferry port (17,29)
+      const ukCluster = [
+        makeSegment(17, 26, 17, 27),
+        makeSegment(17, 27, 17, 28),
+        makeSegment(17, 28, 17, 29),
+      ];
+      // Mainland cluster: track from France ferry port (21,29) heading south
+      const mainlandCluster = [
+        makeSegment(21, 29, 22, 29),
+        makeSegment(22, 29, 23, 30),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...ukCluster, ...mainlandCluster],
+        { row: 17, col: 26 },
+      );
+      // Both clusters should be reachable via the ferry edge
+      expect(result).toHaveLength(ukCluster.length + mainlandCluster.length);
+    });
+
+    it('AC2: does NOT connect mainland when bot only has track on UK side of ferry', () => {
+      const channelFerry = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([channelFerry]);
+
+      // UK cluster only — no mainland track at ferry pointB
+      const ukCluster = [
+        makeSegment(17, 26, 17, 27),
+        makeSegment(17, 27, 17, 29),
+      ];
+      // Mainland cluster disconnected (no track touching ferry pointB)
+      const mainlandCluster = [
+        makeSegment(23, 30, 24, 31),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...ukCluster, ...mainlandCluster],
+        { row: 17, col: 26 },
+      );
+      // Only UK cluster returned — mainland not reachable
+      expect(result).toHaveLength(ukCluster.length);
+    });
+
+    it('AC3: reverse symmetry — mainland bot with both-side track sees UK cluster', () => {
+      const channelFerry = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([channelFerry]);
+
+      // UK cluster: track from UK ferry port (17,29)
+      const ukCluster = [
+        makeSegment(17, 29, 17, 28),
+        makeSegment(17, 28, 16, 27),
+      ];
+      // Mainland cluster: bot at Paris (28,32), track reaching France ferry port (21,29)
+      const mainlandCluster = [
+        makeSegment(28, 32, 25, 31),
+        makeSegment(25, 31, 21, 29),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...ukCluster, ...mainlandCluster],
+        { row: 28, col: 32 },
+      );
+      // Both clusters should be connected via the ferry (reverse direction works too)
+      expect(result).toHaveLength(ukCluster.length + mainlandCluster.length);
+    });
+
+    it('AC4: multi-hop ferry chain — Ireland→UK→mainland all connected', () => {
+      const irishSeaFerry = {
+        name: 'Irish Sea',
+        pointA: { row: 14, col: 22 },  // Dublin side
+        pointB: { row: 14, col: 26 },  // Wales side
+        cost: 4,
+      };
+      const channelFerry = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([irishSeaFerry, channelFerry]);
+
+      // Ireland cluster: bot in Ireland, track reaching Dublin ferry port
+      const irelandCluster = [
+        makeSegment(12, 20, 13, 21),
+        makeSegment(13, 21, 14, 22),
+      ];
+      // UK cluster: track connecting Irish Sea ferry (Wales side) to Channel ferry (UK side)
+      const ukCluster = [
+        makeSegment(14, 26, 15, 27),
+        makeSegment(15, 27, 17, 29),
+      ];
+      // Mainland cluster: track from France ferry port heading south
+      const mainlandCluster = [
+        makeSegment(21, 29, 23, 30),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...irelandCluster, ...ukCluster, ...mainlandCluster],
+        { row: 12, col: 20 },
+      );
+      // All three clusters connected via two ferries
+      expect(result).toHaveLength(irelandCluster.length + ukCluster.length + mainlandCluster.length);
+    });
+
+    it('AC5: Scandinavian ferry — Kobenhavn↔Malmo connects Danish and Swedish clusters', () => {
+      const scandFerry = {
+        name: 'Kobenhavn-Malmo',
+        pointA: { row: 7, col: 44 },  // Kobenhavn side
+        pointB: { row: 8, col: 45 },  // Malmo side
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([scandFerry]);
+
+      // Danish cluster: bot at Kobenhavn, track reaching ferry port
+      const danishCluster = [
+        makeSegment(6, 43, 7, 44),
+      ];
+      // Swedish cluster: track from Malmo ferry port heading north
+      const swedishCluster = [
+        makeSegment(8, 45, 9, 46),
+        makeSegment(9, 46, 10, 47),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...danishCluster, ...swedishCluster],
+        { row: 6, col: 43 },
+      );
+      // Both clusters connected via Scandinavian ferry
+      expect(result).toHaveLength(danishCluster.length + swedishCluster.length);
+    });
+
+    it('AC6: regression guard — no ferry edges stubbed → same result as pre-change BFS', () => {
+      // Empty ferry list = pre-change behavior
+      mockGetFerryEdges.mockReturnValue([]);
+
+      const ukCluster = [
+        makeSegment(17, 26, 17, 27),
+        makeSegment(17, 27, 17, 29),
+      ];
+      const mainlandCluster = [
+        makeSegment(21, 29, 22, 30),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...ukCluster, ...mainlandCluster],
+        { row: 17, col: 26 },
+      );
+      // Without ferry edges, only UK cluster returned — same as old behavior
+      expect(result).toHaveLength(ukCluster.length);
+    });
+
+    it('returns ferryCrossingsIncluded count via filterConnectedSegmentsWithStats', () => {
+      const ferry1 = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      const ferry2 = {
+        name: 'Irish Sea',
+        pointA: { row: 14, col: 22 },
+        pointB: { row: 14, col: 26 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([ferry1, ferry2]);
+
+      // Track touching both sides of English Channel only
+      const segments = [
+        makeSegment(17, 26, 17, 29),   // UK side (touches ferry1.pointA)
+        makeSegment(21, 29, 22, 30),   // France side (touches ferry1.pointB)
+        // No track at ferry2 ports
+      ];
+
+      const result = ActionResolver.filterConnectedSegmentsWithStats(segments, { row: 17, col: 26 });
+      expect(result.ferryCrossingsIncluded).toBe(1);
+      expect(result.segments).toHaveLength(segments.length);
+    });
+
+    it('ferryCrossingsIncluded is zero when no ferry has both-side track', () => {
+      const ferry = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([ferry]);
+
+      // Only UK side track — no mainland track
+      const segments = [
+        makeSegment(17, 26, 17, 29),
+      ];
+
+      const result = ActionResolver.filterConnectedSegmentsWithStats(segments, { row: 17, col: 26 });
+      expect(result.ferryCrossingsIncluded).toBe(0);
+    });
+  });
+
+  // ─── JIRA-129: Waypoint-chained building ──────────────────────────────────
+
+  describe('resolveBuild with waypoints (JIRA-129)', () => {
+    beforeEach(() => {
+      setupMajorCityGroups([
+        { cityName: 'Berlin', center: { row: 10, col: 10 }, outposts: [{ row: 10, col: 11 }] },
+        { cityName: 'Paris', center: { row: 20, col: 20 }, outposts: [{ row: 20, col: 21 }] },
+      ]);
+      setupGridPoints([
+        { row: 10, col: 10, name: 'Berlin' },
+        { row: 10, col: 11, name: 'Berlin' },
+        { row: 20, col: 20, name: 'Paris' },
+        { row: 20, col: 21, name: 'Paris' },
+        { row: 15, col: 15, name: 'Waypoint1', terrain: TerrainType.Clear },
+      ]);
+      mockHexDistance.mockReturnValue(5);
+    });
+
+    it('should chain computeBuildSegments through waypoints in sequence', async () => {
+      const snapshot = makeWorldSnapshot();
+      const context = makeGameContext();
+
+      // First leg: start -> waypoint
+      const leg1Seg = makeSegment(5, 6, 15, 15, 5);
+      // Second leg: waypoint -> target
+      const leg2Seg = makeSegment(15, 15, 20, 20, 8);
+
+      mockComputeBuildSegments
+        .mockReturnValueOnce([leg1Seg])
+        .mockReturnValueOnce([leg2Seg]);
+
+      const intent: LLMActionIntent = {
+        action: AIActionType.BuildTrack,
+        details: { toward: 'Paris', waypoints: [[15, 15]] } as any,
+        reasoning: 'Build through waypoint',
+        planHorizon: 'short',
+      };
+
+      const result = await ActionResolver.resolve(intent, snapshot, context);
+
+      expect(result.success).toBe(true);
+      expect(mockComputeBuildSegments).toHaveBeenCalledTimes(2);
+
+      // First call targets waypoint
+      const firstCallTargets = mockComputeBuildSegments.mock.calls[0][5];
+      expect(firstCallTargets).toEqual([{ row: 15, col: 15 }]);
+
+      // Second call targets Paris
+      const secondCallTargets = mockComputeBuildSegments.mock.calls[1][5];
+      expect(secondCallTargets).toEqual(expect.arrayContaining([
+        expect.objectContaining({ row: 20 }),
+      ]));
+
+      const plan = result.plan as TurnPlanBuildTrack;
+      expect(plan.segments).toHaveLength(2);
+      expect(plan.segments).toEqual([leg1Seg, leg2Seg]);
+    });
+
+    it('should stop chaining when budget is exhausted', async () => {
+      const snapshot = makeWorldSnapshot({ bot: { money: 15 } as WorldSnapshot['bot'] });
+      const context = makeGameContext({ money: 15, turnBuildCost: 0 });
+
+      // First leg costs entire budget
+      const leg1Seg = makeSegment(5, 6, 15, 15, 15);
+      mockComputeBuildSegments.mockReturnValueOnce([leg1Seg]);
+
+      const intent: LLMActionIntent = {
+        action: AIActionType.BuildTrack,
+        details: { toward: 'Paris', waypoints: [[15, 15]] } as any,
+        reasoning: 'Build through waypoint',
+        planHorizon: 'short',
+      };
+
+      const result = await ActionResolver.resolve(intent, snapshot, context);
+
+      expect(result.success).toBe(true);
+      // Only 1 call — budget exhausted after first leg
+      expect(mockComputeBuildSegments).toHaveBeenCalledTimes(1);
+      const plan = result.plan as TurnPlanBuildTrack;
+      expect(plan.segments).toHaveLength(1);
+    });
+
+    it('should fall back to standard build when no waypoints provided', async () => {
+      const snapshot = makeWorldSnapshot();
+      const context = makeGameContext();
+
+      const seg = makeSegment(5, 6, 20, 20, 10);
+      mockComputeBuildSegments.mockReturnValue([seg]);
+
+      const intent = makeBuildIntent('Paris');
+      const result = await ActionResolver.resolve(intent, snapshot, context);
+
+      expect(result.success).toBe(true);
+      expect(mockComputeBuildSegments).toHaveBeenCalledTimes(1);
     });
   });
 

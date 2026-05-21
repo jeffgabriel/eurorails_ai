@@ -3,7 +3,12 @@
  *
  * `checkPlan()` enforces hard rules on TurnPlan (checked in priority order):
  *   G1. Force DELIVER when canDeliver has opportunities (highest priority)
- *   Stuck. Force DiscardHand when noProgressTurns >= 3 AND no loads carried
+ *   Unaffordable-and-stuck (JIRA-68, JIRA-183, JIRA-199): Force DiscardHand when no active
+ *       route, no deliverable load, and no demand is both affordable AND connectable on the
+ *       existing network. Covers both "no track yet" and "cash but unplayable hand" failure
+ *       modes. An affordable connectable demand means the bot has a viable plan — don't discard.
+ *   Broke-and-stuck. Force DiscardHand when bot is broke, has active route, and
+ *       no demand is achievable on existing network (JIRA-177)
  *   G3. Block UPGRADE during initialBuild phase
  *   G8. Movement budget enforcement (silent truncation)
  *
@@ -19,6 +24,12 @@ import {
   GameContext,
   AIActionType,
 } from '../../../shared/types/GameTypes';
+import {
+  computeEffectivePathLength,
+  isIntraCityEdge,
+  getMajorCityLookup,
+} from '../../../shared/services/majorCityGroups';
+import { hasCarriedDeliverableOnNetwork } from './routeHelpers';
 
 export class GuardrailEnforcer {
   /**
@@ -29,7 +40,10 @@ export class GuardrailEnforcer {
    *
    * Guardrails (checked in priority order):
    *   G1: Force DELIVER when bot can deliver but LLM chose something else (highest priority)
-   *   Stuck: Force DiscardHand when noProgressTurns >= 3 AND no loads carried AND no active route (JIRA-68)
+   *   Unaffordable-and-stuck: Force DiscardHand when no active route, no deliverable load,
+   *       and no demand is affordable+connectable on existing network (JIRA-68, JIRA-183, JIRA-199)
+   *   Broke-and-stuck: Force DiscardHand when broke, active route exists, and no demand is
+   *       achievable on existing network (JIRA-177, JIRA-183)
    *   G3: Block UPGRADE during initialBuild phase
    *   G8: Movement budget enforcement (silent truncation)
    */
@@ -37,8 +51,8 @@ export class GuardrailEnforcer {
     plan: TurnPlan,
     context: GameContext,
     snapshot: WorldSnapshot,
-    noProgressTurns: number = 0,
     hasActiveRoute: boolean = false,
+    stuckWithCarryTurns: number = 0,
   ): Promise<GuardrailPlanResult> {
     const planType = plan.type === 'MultiAction' ? GuardrailEnforcer.primaryActionType(plan) : plan.type;
 
@@ -60,15 +74,90 @@ export class GuardrailEnforcer {
       };
     }
 
-    // Progress-based stuck detection: force DiscardHand after 3+ turns with zero progress
-    // JIRA-47: Skip when bot is carrying loads — traveling with cargo is not "stuck"
-    // JIRA-68: Skip when bot has an active route — traveling toward a pickup is progress
-    if (noProgressTurns >= 3 && planType !== AIActionType.DiscardHand && snapshot.bot.loads.length === 0 && !hasActiveRoute) {
-      console.warn(`[Guardrail Stuck] ${noProgressTurns} no-progress turns — forcing DiscardHand`);
+    // Stuck / Unaffordable-and-stuck guardrail: force DiscardHand when the bot has no active
+    // route, no deliverable load on-train, and no demand card is both affordable AND connectable
+    // on the existing network. This unified rule handles two overlapping failure modes:
+    //
+    //  • Classic stuck (JIRA-68, JIRA-183): demands is empty / all demands have no network
+    //    connectivity, so nothing productive can ever happen without new cards.
+    //  • Unaffordable-and-stuck (JIRA-199): bot has cash but every card requires a build it
+    //    can't complete from current position — e.g. game c4b4c111 Nano at turn 19 (40M cash,
+    //    3 unaffordable cards, looped on PassTurn for 14 turns).
+    //
+    // When an affordable+connectable demand exists the bot should NOT discard — it has a viable
+    // plan and just needs to execute it. JIRA-68, JIRA-183: no noProgressTurns gate needed.
+    // Carried-loads-with-matching-demand suppress: NEVER force DiscardHand when
+    // the bot has loads on its train AND those loads have matching demand cards
+    // in hand. Discarding would replace the matching cards, orphaning the loads.
+    // The bot invested turns to pick those loads up; that investment must not
+    // be thrown away by a guardrail just because the delivery city isn't yet
+    // reachable on the existing network — the bot can build toward it later.
+    //
+    // See game b1dd75b7: Sonnet at Oslo carrying 2 Fish for delivery to
+    // Bern/Zurich (neither yet on network) hit the broke-stuck guardrail and
+    // discarded mid-trip, losing both Fish demands.
+    //
+    // True orphan loads (loads on train with NO matching demand in hand —
+    // typically the result of a Derailment event or a prior bug) are still
+    // discardable; the discard suppression hinges on whether ANY demand has
+    // isLoadOnTrain=true (set by DemandEngine when bot.loads includes the
+    // demand's loadType).
+    // JIRA-234 Defect A3: after N turns of being stuck-with-carry (cannot reach
+    // any matching delivery on network within available cash), bypass the
+    // carry-load suppression so the bot can DiscardHand and break out of the
+    // death loop. Without this bypass, a bot carrying a load whose delivery is
+    // currently unreachable would PassTurn forever.
+    const STUCK_WITH_CARRY_BYPASS_THRESHOLD = 5;
+    const carryLoadSuppressionActive =
+      snapshot.bot.loads.length > 0 &&
+      context.demands.some(d => d.isLoadOnTrain) &&
+      stuckWithCarryTurns < STUCK_WITH_CARRY_BYPASS_THRESHOLD;
+    const carriedLoadsHaveMatchingDemand = carryLoadSuppressionActive;
+
+    const hasDeliverableLoad = snapshot.bot.loads.length > 0 && hasCarriedDeliverableOnNetwork(context);
+    const hasAffordableConnectableDemand = context.demands.some(
+      d => d.isAffordable && (d.isSupplyOnNetwork || d.isLoadOnTrain) && d.isDeliveryOnNetwork,
+    );
+    if (!hasActiveRoute && !hasDeliverableLoad && !hasAffordableConnectableDemand && !carriedLoadsHaveMatchingDemand && planType !== AIActionType.DiscardHand) {
+      console.warn(
+        `[Guardrail Unaffordable-Stuck] Bot has $${snapshot.bot.money}M cash but no active route,` +
+        ` no deliverable load, and no affordable+connectable demand — forcing DiscardHand`,
+      );
       return {
         plan: { type: AIActionType.DiscardHand },
         overridden: true,
-        reason: `Progress-based stuck detection: ${noProgressTurns} turns with no deliveries, cash increase, or new cities — forcing DiscardHand`,
+        reason: `Unaffordable-Stuck: no active route, no deliverable load, and no affordable+connectable demand — forcing DiscardHand`,
+      };
+    }
+
+    // Broke-and-stuck guardrail: force DiscardHand when bot is broke, has a stale active route
+    // blocking the stuck detector, and no demand is achievable on the existing track network.
+    // JIRA-177, JIRA-183: fires immediately on raw state — no noProgressTurns gate, no cap on
+    // consecutive discards. A broke bot with unachievable demands gains nothing from waiting.
+    //
+    // Carrying-loads guard: do NOT discard if the bot has any loads on its train, even when
+    // the delivery cities aren't yet on network. The matching demand cards are needed to
+    // realize value from those loads once track is built (or once cash returns from elsewhere
+    // — opponent track-use fees, mercy borrow, etc.). Discarding orphans the loads.
+    const botIsBroke = snapshot.bot.money < 5;
+    const hasAchievableDemand = context.demands.some(
+      d => (d.isSupplyOnNetwork || d.isLoadOnTrain) && d.isDeliveryOnNetwork,
+    );
+    if (
+      botIsBroke &&
+      hasActiveRoute &&
+      !hasAchievableDemand &&
+      !carriedLoadsHaveMatchingDemand &&
+      planType !== AIActionType.DiscardHand
+    ) {
+      console.warn(
+        `[Guardrail Broke-Stuck] Broke ($${snapshot.bot.money}M) with active route and no achievable demand on network` +
+        ` — forcing DiscardHand`,
+      );
+      return {
+        plan: { type: AIActionType.DiscardHand },
+        overridden: true,
+        reason: `Broke-and-stuck: no achievable demand on existing network — forcing DiscardHand to draw playable cards`,
       };
     }
 
@@ -84,14 +173,19 @@ export class GuardrailEnforcer {
 
     // Guardrail 8: Movement budget enforcement (defense-in-depth)
     // For MultiAction plans, ensure total movement doesn't exceed speed limit.
+    // Uses effective mileposts — intra-city edges are free per game rules.
     // This is a silent truncation — returns overridden: false.
     if (plan.type === 'MultiAction') {
+      const majorCityLookup = getMajorCityLookup();
       const moveIndices: number[] = [];
       let totalMovement = 0;
       for (let i = 0; i < plan.steps.length; i++) {
         if (plan.steps[i].type === AIActionType.MoveTrain) {
           moveIndices.push(i);
-          totalMovement += (plan.steps[i] as TurnPlanMoveTrain).path.length - 1;
+          totalMovement += computeEffectivePathLength(
+            (plan.steps[i] as TurnPlanMoveTrain).path,
+            majorCityLookup,
+          );
         }
       }
 
@@ -101,19 +195,29 @@ export class GuardrailEnforcer {
           `[Guardrail 8] Movement budget exceeded: ${totalMovement}mp > ${context.speed}mp limit. Truncating.`,
         );
         const newSteps = [...plan.steps];
-        // Truncate from last MOVE backward
+        // Truncate from last MOVE backward, skipping intra-city edges (they are free)
         for (let i = moveIndices.length - 1; i >= 0 && excess > 0; i--) {
           const idx = moveIndices[i];
           const movePlan = newSteps[idx] as TurnPlanMoveTrain;
-          const currentMp = movePlan.path.length - 1;
-          const reduction = Math.min(excess, currentMp);
-          const newPathLength = movePlan.path.length - reduction;
+          const path = movePlan.path;
+          // Walk the path backwards to find how many raw edges to remove for `excess` effective mp
+          let rawRemove = 0;
+          let effectiveRemoved = 0;
+          for (let j = path.length - 1; j >= 1 && effectiveRemoved < excess; j--) {
+            const fromKey = `${path[j - 1].row},${path[j - 1].col}`;
+            const toKey = `${path[j].row},${path[j].col}`;
+            rawRemove++;
+            if (!isIntraCityEdge(fromKey, toKey, majorCityLookup)) {
+              effectiveRemoved++;
+            }
+          }
+          const newPathLength = path.length - rawRemove;
           if (newPathLength > 1) {
-            newSteps[idx] = { ...movePlan, path: movePlan.path.slice(0, newPathLength) };
+            newSteps[idx] = { ...movePlan, path: path.slice(0, newPathLength) };
           } else {
             newSteps.splice(idx, 1);
           }
-          excess -= reduction;
+          excess -= effectiveRemoved;
         }
         return {
           plan: { ...plan, steps: newSteps },

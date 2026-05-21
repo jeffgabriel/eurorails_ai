@@ -1,5 +1,5 @@
 import { db } from '../db';
-import { GameState, CameraState, VictoryState, VICTORY_INITIAL_THRESHOLD } from '../../shared/types/GameTypes';
+import { FullGameState, CameraState, VictoryState, VICTORY_INITIAL_THRESHOLD } from '../../shared/types/GameTypes';
 import { PlayerService } from './playerService';
 
 export class GameService {
@@ -34,14 +34,14 @@ export class GameService {
     /**
      * @deprecated Use updatePlayerCameraState instead. This method is kept for backwards compatibility.
      */
-    static async updateCameraState(gameId: string, cameraState: GameState['cameraState']): Promise<void> {
+    static async updateCameraState(gameId: string, cameraState: FullGameState['cameraState']): Promise<void> {
         await db.query(
             'UPDATE games SET camera_state = $1 WHERE id = $2',
             [JSON.stringify(cameraState), gameId]
         );
     }
 
-    static async getGame(gameId: string, userId: string): Promise<GameState | null> {
+    static async getGame(gameId: string, userId: string): Promise<FullGameState | null> {
         const result = await db.query(
             'SELECT * FROM games WHERE id = $1',
             [gameId]

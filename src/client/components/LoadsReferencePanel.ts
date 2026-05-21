@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { UI_FONT_FAMILY } from "../config/uiFont";
-import { GameState } from "../../shared/types/GameTypes";
+import { FullGameState } from "../../shared/types/GameTypes";
 import {
   transformToCityData,
   ResourceTableEntry,
@@ -19,7 +19,7 @@ type LoadsReferencePage = {
 export class LoadsReferencePanel {
   private readonly scene: Phaser.Scene;
   private readonly pages: LoadsReferencePage[];
-  private gameState: GameState | null = null;
+  private gameState: FullGameState | null = null;
   private cameraController?: CameraController;
 
   private root!: Phaser.GameObjects.Container;
@@ -78,7 +78,7 @@ export class LoadsReferencePanel {
   private dragStartY: number = 0;
   private dragStartOffset: number = 0;
 
-  constructor(scene: Phaser.Scene, pages: LoadsReferencePage[], gameState?: GameState, cameraController?: CameraController) {
+  constructor(scene: Phaser.Scene, pages: LoadsReferencePage[], gameState?: FullGameState, cameraController?: CameraController) {
     this.scene = scene;
     this.pages = pages;
     this.gameState = gameState || null;
@@ -92,7 +92,7 @@ export class LoadsReferencePanel {
   /**
    * Update game state for dynamic content (e.g., Cards tab)
    */
-  setGameState(gameState: GameState): void {
+  setGameState(gameState: FullGameState): void {
     this.gameState = gameState;
     // If we're currently on the Cards tab, re-render it
     const activePage = this.pages[this.activePageIndex];

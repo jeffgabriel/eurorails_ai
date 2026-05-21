@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, Player, TrainType, TRAIN_PROPERTIES, VICTORY_INITIAL_THRESHOLD } from "../../shared/types/GameTypes";
+import { FullGameState, Player, TrainType, TRAIN_PROPERTIES, VICTORY_INITIAL_THRESHOLD } from "../../shared/types/GameTypes";
 import { MapRenderer } from "../components/MapRenderer";
 import { CameraController } from "../components/CameraController";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
@@ -13,8 +13,11 @@ import { LoadService } from "../services/LoadService";
 import { config } from "../config/apiConfig";
 import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
 import { DebugOverlay } from "../components/DebugOverlay";
+import { LLMTranscriptOverlay } from "../components/LLMTranscriptOverlay";
 import { BotTrainAnimator } from "../components/BotTrainAnimator";
 import { GameToastManager } from "../components/GameToastManager";
+import { WhisperPanel, WhisperTurnEntry } from "../components/WhisperPanel";
+import { AutoRunBadge } from "../components/AutoRunBadge";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/mapConfig";
 
@@ -51,12 +54,18 @@ export class GameScene extends Phaser.Scene {
   private debugOverlay?: DebugOverlay;
   private botTrainAnimator?: BotTrainAnimator;
   private gameToastManager?: GameToastManager;
+  private whisperPanel?: WhisperPanel;
   private socketUnsubBotTurnComplete?: () => void;
   private socketUnsubBotToast?: () => void;
   private socketUnsubDebugAny?: () => void;
+  private socketUnsubWhisperTurnHistory?: () => void;
+  private autoRunBadge?: AutoRunBadge;
+  private socketUnsubAutoRunStatus?: () => void;
+  private llmTranscriptOverlay?: LLMTranscriptOverlay;
+  private socketUnsubLLMTranscript?: () => void;
 
   // Game state
-  public gameState: GameState; // Keep public for compatibility with SettingsScene
+  public gameState: FullGameState; // Keep public for compatibility with SettingsScene
 
   constructor() {
     super({ key: "GameScene" });
@@ -146,7 +155,7 @@ export class GameScene extends Phaser.Scene {
     return true;
   }
 
-  init(data: { gameState?: GameState }) {
+  init(data: { gameState?: FullGameState }) {
     // If we get a gameState, always use it
     if (data.gameState) {
       this.gameState = {
@@ -628,11 +637,23 @@ export class GameScene extends Phaser.Scene {
     // Debug overlay (toggled with backtick key)
     this.debugOverlay = new DebugOverlay(this, this.gameStateService);
 
+    // LLM transcript overlay (toggled with spacebar)
+    this.llmTranscriptOverlay = new LLMTranscriptOverlay();
+
     // JIRA-36: Bot train animation system
     this.botTrainAnimator = new BotTrainAnimator(this);
 
     // Game event toast notifications
     this.gameToastManager = new GameToastManager(this);
+
+    // Whisper advice panel — only instantiate when bots are present
+    const hasBots = this.gameState.players.some(p => p.isBot);
+    if (hasBots) {
+      this.whisperPanel = new WhisperPanel(this, this.gameState.id, this.gameToastManager);
+    }
+
+    // Auto-run badge (hidden by default)
+    this.autoRunBadge = new AutoRunBadge(this);
 
     try {
       const { socketService: svc } = await import('../lobby/shared/socket');
@@ -642,11 +663,33 @@ export class GameScene extends Phaser.Scene {
         this.socketUnsubDebugAny?.();
         this.socketUnsubBotToast?.();
         this.socketUnsubBotTurnComplete?.();
+        this.socketUnsubWhisperTurnHistory?.();
+        this.socketUnsubAutoRunStatus?.();
+
+        // F9 key listener — toggle auto-run
+        this.input.keyboard?.on('keydown-F9', () => {
+          svc.emitAutoRunToggle(this.gameState.id);
+        });
+
+        // Listen for auto-run status response
+        const badge = this.autoRunBadge;
+        this.socketUnsubAutoRunStatus = svc.onAutoRunStatus((data) => {
+          badge.setVisible(data.enabled);
+        });
 
         const overlay = this.debugOverlay;
         this.socketUnsubDebugAny = svc.onAnyEvent((eventName: string, ...args: any[]) => {
           overlay.logSocketEvent(eventName, args.length === 1 ? args[0] : args);
         });
+
+        // LLM transcript overlay: ingest bot:turn-complete payloads
+        const transcriptOverlay = this.llmTranscriptOverlay;
+        if (transcriptOverlay) {
+          this.socketUnsubLLMTranscript = svc.onAnyEvent((eventName: string, ...args: any[]) => {
+            if (eventName !== 'bot:turn-complete') return;
+            transcriptOverlay.ingestBotTurnComplete(args[0]);
+          });
+        }
 
         // Game event toast notifications from bot:turn-complete
         this.socketUnsubBotToast = svc.onAnyEvent((eventName: string, ...args: any[]) => {
@@ -677,8 +720,13 @@ export class GameScene extends Phaser.Scene {
           if (data.actionTimeline?.length > 0) return;
 
           // Delivery announcements — with payment flourish
+          // Deduplicate by {loadType, city} to prevent toast spam from duplicate delivery entries
           if (data.loadsDelivered?.length > 0) {
+            const seenDeliveries = new Set<string>();
             for (const d of data.loadsDelivered) {
+              const key = `${d.loadType}:${d.city}`;
+              if (seenDeliveries.has(key)) continue;
+              seenDeliveries.add(key);
               toast.show(
                 `💰 ${botName} delivered ${d.loadType} to ${d.city} — earned ${d.payment}M ECU!`,
                 { color: botColor, flourish: true },
@@ -812,6 +860,33 @@ export class GameScene extends Phaser.Scene {
             }
           }).catch(() => {});
         });
+
+        // Whisper: accumulate bot turn history for WhisperPanel
+        const whisperPanel = this.whisperPanel;
+        if (whisperPanel) {
+          this.socketUnsubWhisperTurnHistory = svc.onAnyEvent((eventName: string, ...args: any[]) => {
+            if (eventName !== 'bot:turn-complete') return;
+            const data = args[0];
+            if (!data?.botPlayerId) return;
+
+            const botPlayer = this.gameState.players.find(p => p.id === data.botPlayerId);
+            const entry: WhisperTurnEntry = {
+              turnNumber: data.turnNumber ?? 0,
+              botPlayerId: data.botPlayerId,
+              botName: botPlayer?.name ?? 'Unknown Bot',
+              action: data.action ?? 'Unknown',
+              reasoning: data.reasoning ?? '',
+              cost: data.cost ?? 0,
+              segmentsBuilt: data.segmentsBuilt ?? 0,
+              loadsPickedUp: data.loadsPickedUp,
+              loadsDelivered: data.loadsDelivered,
+              milepostsMoved: data.movementData?.mileposts,
+              compositionTrace: data.compositionTrace,
+              demandRanking: data.demandRanking,
+            };
+            whisperPanel.addBotTurn(entry);
+          });
+        }
       }
     } catch { /* socket not available */ }
 
@@ -1402,6 +1477,15 @@ export class GameScene extends Phaser.Scene {
     this.socketUnsubDebugAny?.();
     this.socketUnsubDebugAny = undefined;
     this.debugOverlay?.destroy();
+    this.socketUnsubLLMTranscript?.();
+    this.socketUnsubLLMTranscript = undefined;
+    this.llmTranscriptOverlay?.destroy();
+    this.socketUnsubWhisperTurnHistory?.();
+    this.socketUnsubWhisperTurnHistory = undefined;
+    this.whisperPanel?.destroy();
+    this.socketUnsubAutoRunStatus?.();
+    this.socketUnsubAutoRunStatus = undefined;
+    this.autoRunBadge?.destroy();
   }
 
   /**

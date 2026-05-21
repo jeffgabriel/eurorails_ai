@@ -40,18 +40,41 @@ export function makeDemandContext(overrides: Partial<DemandContext> = {}): Deman
 
 // ── scoreDemand replica ─────────────────────────────────────────────────────
 // Replicates ContextBuilder.scoreDemand (private static) for test verification.
+// Synced with production formula: routes with build cost > 50M are exponentially
+// penalized. JIRA-174: corridor multiplier removed. JIRA-175: income velocity
+// separated from cost burden so short affordable routes rank above expensive ones.
 
 export function scoreDemand(
   payout: number,
   totalTrackCost: number,
-  networkCities: number,
-  victoryMajorCities: number,
   estimatedTurns: number,
+  isAffordable: boolean = true,
+  projectedFunds: number = Infinity,
 ): number {
-  const baseROI = (payout - totalTrackCost) / estimatedTurns;
-  const corridorMultiplier = Math.min(networkCities * 0.05, 0.5);
-  const victoryBonus = victoryMajorCities * Math.max(payout * 0.15, 5);
-  return baseROI + (corridorMultiplier * baseROI) + victoryBonus;
+  const COST_WEIGHT = 0.1;
+  const incomeVelocity = payout / estimatedTurns;
+  const costBurden = totalTrackCost * COST_WEIGHT;
+  const rawScore = incomeVelocity - costBurden;
+
+  // Build cost ceiling: exponential penalty for routes > 50M
+  // Bug #5 fix: divide negative scores by penalty (makes MORE negative = worse rank)
+  const costPenaltyFactor = totalTrackCost > 50
+    ? Math.exp(-(totalTrackCost - 50) / 30)
+    : 1;
+  const penalizedScore = rawScore >= 0
+    ? rawScore * costPenaltyFactor
+    : rawScore / Math.max(costPenaltyFactor, 0.01);
+
+  if (!isAffordable && totalTrackCost > 0) {
+    const shortfall = totalTrackCost - Math.max(projectedFunds, 0);
+    const shortfallRatio = Math.min(shortfall / totalTrackCost, 1);
+    const affordPenalty = Math.max(0.05, 0.3 * (1 - shortfallRatio));
+    return penalizedScore >= 0
+      ? penalizedScore * affordPenalty
+      : penalizedScore / Math.max(affordPenalty, 0.01);
+  }
+
+  return penalizedScore;
 }
 
 // ── computeHandQuality replica ──────────────────────────────────────────────
@@ -101,7 +124,7 @@ export function computeSupplyRarity(
   const supplyCityCounts = new Map<string, Set<string>>();
   for (const d of demands) {
     if (!supplyCityCounts.has(d.loadType)) supplyCityCounts.set(d.loadType, new Set());
-    supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
+    if (d.supplyCity !== null) supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
   }
 
   const rarity = new Map<string, string>();
@@ -128,17 +151,18 @@ export function buildDemandRanking(demands: DemandContext[]): Array<{
   const supplyCityCounts = new Map<string, Set<string>>();
   for (const d of demands) {
     if (!supplyCityCounts.has(d.loadType)) supplyCityCounts.set(d.loadType, new Set());
-    supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
+    if (d.supplyCity !== null) supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
   }
 
   return [...demands]
+    .filter(d => d.supplyCity !== null)
     .sort((a, b) => b.demandScore - a.demandScore)
     .map((d, i) => {
       const cityCount = supplyCityCounts.get(d.loadType)?.size ?? 1;
       const supplyRarity = cityCount <= 1 ? 'UNIQUE' : cityCount === 2 ? 'LIMITED' : 'COMMON';
       return {
         loadType: d.loadType,
-        supplyCity: d.supplyCity,
+        supplyCity: d.supplyCity as string,
         deliveryCity: d.deliveryCity,
         payout: d.payout,
         score: d.demandScore,
