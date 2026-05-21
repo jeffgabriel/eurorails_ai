@@ -55,6 +55,11 @@ jest.mock('../../services/ai/routeHelpers', () => {
     hasCarriedDeliverableOnNetwork: jest.fn((...args: Parameters<typeof real.hasCarriedDeliverableOnNetwork>) =>
       real.hasCarriedDeliverableOnNetwork(...args),
     ),
+    // JIRA-253: exposed as a mockable jest.fn() so R3 tests can control structural reachability
+    isStructurallyReachable: jest.fn(),
+    isRouteImpossible: jest.fn((...args: Parameters<typeof real.isRouteImpossible>) =>
+      real.isRouteImpossible(...args),
+    ),
   };
 });
 
@@ -176,7 +181,7 @@ jest.mock('../../services/ai/RouteDetourEstimator', () => ({
   OPPORTUNITY_COST_PER_TURN_M: 5,
 }));
 
-import { isStopComplete, resolveBuildTarget } from '../../services/ai/routeHelpers';
+import { isStopComplete, resolveBuildTarget, isStructurallyReachable } from '../../services/ai/routeHelpers';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PostDeliveryReplanner } from '../../services/ai/PostDeliveryReplanner';
 import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
@@ -186,6 +191,7 @@ import type { DemandContext } from '../../../shared/types/GameTypes';
 
 const mockIsStopComplete = isStopComplete as jest.Mock;
 const mockResolveBuildTarget = resolveBuildTarget as jest.Mock;
+const mockIsStructurallyReachable = isStructurallyReachable as jest.Mock;
 const mockResolve = ActionResolver.resolve as jest.Mock;
 const mockResolveMove = ActionResolver.resolveMove as jest.Mock;
 const mockPostDeliveryReplan = PostDeliveryReplanner.replan as jest.Mock;
@@ -289,6 +295,11 @@ beforeEach(() => {
 
   mockExecuteStopAction = jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
     .mockResolvedValue({ success: false, error: 'default mock — override in test' });
+
+  // JIRA-253: Default — isStructurallyReachable returns false (structurally blocked)
+  // so existing R3 tests that expect abandon-on-partial-path continue to work.
+  // Tests that need the "budget-limited, not blocked" path override to return true.
+  mockIsStructurallyReachable.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -1683,6 +1694,139 @@ describe('JIRA-246 AC2 (partial): partial-path abandon when carrying deliverable
     // R3 did NOT fire — path reached target
     expect(trace.a3.terminationReason).not.toBe('a3_abandon_for_carry_deliver_partial');
     expect(result.routeAbandoned).toBe(false);
+  });
+});
+
+// ── JIRA-253 Layer A: isStructurallyReachable gate on partial-path abandon ────
+
+describe('JIRA-253 Layer A: partial-path abandon uses isStructurallyReachable gate', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(TurnExecutorPlanner, 'revalidateRemainingDeliveries')
+      .mockImplementation((r: StrategicRoute) => r);
+    jest.spyOn(TurnExecutorPlanner, 'skipCompletedStops')
+      .mockImplementation((r: StrategicRoute) => r);
+    jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
+      .mockResolvedValue({ success: false, error: 'default' });
+
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue({ targetCity: 'Bern' });
+
+    const { loadGridPoints } = jest.requireMock('../../services/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['20,20', { row: 20, col: 20, name: 'Bern', terrain: TerrainType.Clear }],
+    ]));
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    mockComputeBuildSegments.mockReturnValue([]);
+  });
+
+  it('AC1: budget-limited partial (isStructurallyReachable=true) → does NOT abandon, A3 proceeds', async () => {
+    // Simulate: computeBuildSegments returns partial path (doesn't reach target)
+    // but isStructurallyReachable returns true (target IS reachable with more budget)
+    mockComputeBuildSegments.mockReturnValue([
+      { from: { row: 5, col: 5 }, to: { row: 10, col: 10 }, cost: 5 },
+    ]);
+    // isStructurallyReachable returns true = budget-limited, not structurally blocked
+    mockIsStructurallyReachable.mockReturnValue(true);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Bern')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      position: { row: 1, col: 1 },
+      demands: [
+        { ...makeDemand('Wheat', 'SomeCity', 'Berlin', 15), isLoadOnTrain: true, isDeliveryOnNetwork: true },
+      ],
+    });
+    // resolveMove succeeds to validate that execution proceeds
+    mockResolveMove.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.MoveTrain, path: [{ row: 5, col: 5, x: 0, y: 0, terrain: TerrainType.Clear }], cost: 1 },
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    // AC1: A3 should NOT set a3_abandon_for_carry_deliver_partial
+    expect(trace.a3.terminationReason).not.toBe('a3_abandon_for_carry_deliver_partial');
+    expect(result.routeAbandoned).toBe(false);
+    // Structured trace should record the non-abandon decision
+    const budgetLimitedRecord = trace.abandonReasons?.find(
+      r => r.reason === 'partial_budget_limited_carry_deliver_not_blocked',
+    );
+    expect(budgetLimitedRecord).toBeDefined();
+    expect(budgetLimitedRecord?.structurallyReachableUnbounded).toBe(true);
+  });
+
+  it('AC2: structurally blocked partial (isStructurallyReachable=false) → DOES abandon', async () => {
+    // Simulate: computeBuildSegments returns partial path AND isStructurallyReachable=false
+    mockComputeBuildSegments.mockReturnValue([
+      { from: { row: 5, col: 5 }, to: { row: 10, col: 10 }, cost: 5 },
+    ]);
+    // isStructurallyReachable returns false = genuinely blocked
+    mockIsStructurallyReachable.mockReturnValue(false);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Bern')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      position: { row: 1, col: 1 },
+      demands: [
+        { ...makeDemand('Wheat', 'SomeCity', 'Berlin', 15), isLoadOnTrain: true, isDeliveryOnNetwork: true },
+      ],
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    expect(trace.a3.terminationReason).toBe('a3_abandon_for_carry_deliver_partial');
+    expect(result.routeAbandoned).toBe(true);
+    // Structured trace should record the structurally-blocked abandon
+    const blockedRecord = trace.abandonReasons?.find(
+      r => r.reason === 'partial_structurally_blocked_carry_deliver_on_network',
+    );
+    expect(blockedRecord).toBeDefined();
+    expect(blockedRecord?.structurallyReachableUnbounded).toBe(false);
+  });
+
+  it('AC1+: budget-limited partial with NO carry-deliverable → no reachability check, falls through normally', async () => {
+    // When bot doesn't carry a deliverable, the isStructurallyReachable check should not run
+    mockComputeBuildSegments.mockReturnValue([
+      { from: { row: 5, col: 5 }, to: { row: 10, col: 10 }, cost: 5 },
+    ]);
+    mockIsStructurallyReachable.mockReturnValue(true); // should NOT be called
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Bern')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      position: { row: 1, col: 1 },
+      demands: [
+        // NOT isLoadOnTrain — bot doesn't carry deliverable
+        { ...makeDemand('Coal', 'SomeCity', 'Berlin', 15), isLoadOnTrain: false, isDeliveryOnNetwork: false },
+      ],
+    });
+    mockResolveMove.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.MoveTrain, path: [{ row: 5, col: 5, x: 0, y: 0, terrain: TerrainType.Clear }], cost: 1 },
+    });
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    // No abandon
+    expect(result.routeAbandoned).toBe(false);
+    // isStructurallyReachable should NOT have been called (no carry deliverable)
+    expect(mockIsStructurallyReachable).not.toHaveBeenCalled();
   });
 });
 
