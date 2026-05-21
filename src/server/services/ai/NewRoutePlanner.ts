@@ -413,6 +413,14 @@ export class NewRoutePlanner {
         routeWasCompleted = true;
       } else if (execResult.routeAbandoned) {
         routeWasAbandoned = true;
+        // JIRA-253 Layer C: suppress any upgrade that was consumed at D4 for a route
+        // that was immediately abandoned this turn — the bot should not pay for an
+        // upgrade tied to a route it never executed.
+        if (pendingUpgradeAction !== null) {
+          console.warn(`${tag} JIRA-253: clearing pendingUpgradeAction — route_abandoned_this_turn (upgradeSuppressionReason overridden)`);
+          pendingUpgradeAction = null;
+          upgradeSuppressionReason = 'route_abandoned_this_turn';
+        }
       } else {
         activeRoute = execResult.updatedRoute;
       }
@@ -481,13 +489,24 @@ export class NewRoutePlanner {
    * subject to the JIRA-119 delivery-count gate, the upgrade-path table, and the
    * solvency check. Mirrors AIStrategyEngine.tryConsumeUpgrade verbatim — moved here
    * because this is the only caller after the JIRA-195b sub-slice D extraction.
+   *
+   * JIRA-253 Layer C: When `routeAbandonedThisTurn` is true, returns null immediately
+   * with reason 'route_abandoned_this_turn' — the upgrade is not consumed so the bot
+   * doesn't pay $20M for an upgrade tied to a route it never executed.
    */
   static tryConsumeUpgrade(
     route: StrategicRoute,
     snapshot: WorldSnapshot,
     tag: string,
     deliveryCount: number,
+    routeAbandonedThisTurn: boolean = false,
   ): { action: TurnPlanUpgradeTrain | null; reason?: string } {
+    // JIRA-253 Layer C: Suppress upgrade when route was abandoned this turn
+    if (routeAbandonedThisTurn) {
+      console.warn(`${tag} JIRA-253: upgradeOnRoute suppressed — route_abandoned_this_turn`);
+      return { action: null, reason: 'Upgrade suppressed: route_abandoned_this_turn' };
+    }
+
     const targetTrain = route.upgradeOnRoute!;
     route.upgradeOnRoute = undefined; // one-time consumption
 
