@@ -136,6 +136,8 @@ export class TripPlanner {
     gridPoints: GridPoint[],
     memory: BotMemoryState,
     userPromptOverride?: string,
+    /** JIRA-253 Layer B: Route signatures to exclude from deterministic planner consideration. */
+    excludeRouteSignatures?: string[],
   ): Promise<TripPlanResult> {
     const config = this.brain.strategyConfig;
     const adapter = this.brain.providerAdapter;
@@ -215,7 +217,12 @@ export class TripPlanner {
     // For Medium skill, invoke the spatial-prune top-1 deterministic algorithm
     // instead of the LLM. Easy and Hard continue to use the LLM path below.
     if (skillLevel === BotSkillLevel.Medium) {
-      const detResult = planTripDeterministic(snapshot, context, memory);
+      const detResult = planTripDeterministic(
+        snapshot, context, memory,
+        excludeRouteSignatures && excludeRouteSignatures.length > 0
+          ? { excludeRouteSignatures }
+          : undefined,
+      );
 
       if (detResult.outcome === 'success' && detResult.route !== null) {
         const latencyMs = detResult.synthesizedAttempt.latencyMs;
