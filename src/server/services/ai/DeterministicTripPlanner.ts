@@ -37,6 +37,7 @@ import {
 import { cheapestUnconnectedMajorConnectorCost } from './victoryRules';
 import { getCityMilepointKey, isPickupDeliveryBlocked } from '../restrictionPredicates';
 import { updateMemory } from './BotMemory';
+import { isWinCompleting } from './winCompletion';
 
 // ── Tunables ───────────────────────────────────────────────────────────
 
@@ -80,6 +81,15 @@ export function classifyGamePhase(
 export const PRUNE_MAX_TURNS = 12;
 export const PRUNE_MAX_BUILD_M = 130;
 export const HOP_AVG_COST_M = 1.3;
+
+/**
+ * JIRA-255 Layer B: Hard ceiling on turn count for win-completing candidates
+ * exempted from the standard PRUNE_MAX_TURNS gate when endGameLocked is true.
+ * Guards against pathological estimates (e.g., 50-turn candidates that the
+ * estimator overestimates due to ferry half-rate or alpine rerouting).
+ * Value 25: covers realistic 14-18 turn win-completers with headroom.
+ */
+export const WIN_COMPLETING_MAX_TURNS = 25;
 
 /**
  * Cap on chained-follow-up search per c1 in computeAggregateScore.
@@ -944,6 +954,11 @@ export function enumerateCandidates(
  * Graph-aware spatial prune: compute turn + build estimates using PathCostEstimator.
  * Returns keep=false if either threshold is exceeded or any leg is unreachable.
  * JIRA-230 BE-003: replaced hex-distance sum with iterated estimateGraphPathCost calls.
+ *
+ * JIRA-255 Layer B: When memory.endGameLocked is true, candidates that exceed
+ * pruneMaxTurns are NOT discarded if they are win-completing and their estimated
+ * turns are within WIN_COMPLETING_MAX_TURNS. This allows the bot to consider
+ * longer routes when a single delivery would lock in a win.
  */
 export function cheapPrune(
   candidate: Candidate,
@@ -951,6 +966,8 @@ export function cheapPrune(
   speed: number,
   opts: ResolvedOptions,
   snapshot: WorldSnapshot,
+  memory?: Pick<BotMemoryState, 'endGameLocked'>,
+  context?: Pick<GameContext, 'unconnectedMajorCities' | 'connectedMajorCities'>,
 ): { keep: boolean; estTurns: number; estBuild: number } {
   let totalBuild = 0;
   let totalTurns = 0;
@@ -975,8 +992,27 @@ export function cheapPrune(
   }
   const estTurns = Math.max(1, totalTurns);
   const estBuild = totalBuild;
-  const keep = estTurns <= opts.pruneMaxTurns && estBuild <= opts.pruneMaxBuildM;
-  return { keep, estTurns, estBuild };
+
+  // Standard gate: drop anything exceeding turn or build threshold.
+  if (estTurns <= opts.pruneMaxTurns && estBuild <= opts.pruneMaxBuildM) {
+    return { keep: true, estTurns, estBuild };
+  }
+
+  // JIRA-255 Layer B: end-game carve-out for win-completing candidates.
+  // Only active when endGameLocked=true and the turn count is under the hard ceiling.
+  if (
+    memory?.endGameLocked &&
+    estTurns <= WIN_COMPLETING_MAX_TURNS
+  ) {
+    const unconnectedMajors = context?.unconnectedMajorCities ?? [];
+    const cmcCount = context?.connectedMajorCities?.length ?? 0;
+    const candidateNet = candidate.payout - estBuild;
+    if (isWinCompleting(snapshot.bot.money, candidateNet, unconnectedMajors, cmcCount)) {
+      return { keep: true, estTurns, estBuild };
+    }
+  }
+
+  return { keep: false, estTurns, estBuild };
 }
 
 // ── Simulation scoring (R6, R7) ────────────────────────────────────────
@@ -1691,7 +1727,7 @@ export function planTripDeterministic(
         }
       }
     }
-    const { keep, estTurns, estBuild } = cheapPrune(cand, startPos, speed, opts, snapshot);
+    const { keep, estTurns, estBuild } = cheapPrune(cand, startPos, speed, opts, snapshot, memory, context);
     if (keep) {
       survivors.push(cand);
     } else {
@@ -1832,12 +1868,46 @@ export function planTripDeterministic(
     }
   }
 
-  // Sort by aggregate score (rank key per JIRA-229) and pick top-1
-  const sorted = [...feasible].sort((a, b) => {
-    if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
-    if (b.net !== a.net) return b.net - a.net;
-    return a.id.localeCompare(b.id);
-  });
+  // JIRA-255 Layer C: end-game two-tier ranking override.
+  // When endGameLocked=true, sort win-completing candidates first (by fewest turns),
+  // then non-completers (by velocity). If no completers exist, fall back to the
+  // standard aggregateScore ranking for all candidates.
+  let sorted: ScoredCandidate[];
+  if (memory.endGameLocked) {
+    const unconnectedMajors = context.unconnectedMajorCities ?? [];
+    const cmcCount = context.connectedMajorCities?.length ?? 0;
+    const completers = feasible.filter(
+      (c) => isWinCompleting(snapshot.bot.money, c.net, unconnectedMajors, cmcCount),
+    );
+    const nonCompleters = feasible.filter(
+      (c) => !isWinCompleting(snapshot.bot.money, c.net, unconnectedMajors, cmcCount),
+    );
+    if (completers.length > 0) {
+      // Among win-completers: fewest turns first (game-winning objective).
+      completers.sort((a, b) => a.turns !== b.turns ? a.turns - b.turns : a.id.localeCompare(b.id));
+      // Non-completers follow, ranked by velocity (existing rule).
+      nonCompleters.sort((a, b) => {
+        if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
+        if (b.net !== a.net) return b.net - a.net;
+        return a.id.localeCompare(b.id);
+      });
+      sorted = [...completers, ...nonCompleters];
+    } else {
+      // No win-completers in this candidate set — fall back to velocity ranking.
+      sorted = [...feasible].sort((a, b) => {
+        if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
+        if (b.net !== a.net) return b.net - a.net;
+        return a.id.localeCompare(b.id);
+      });
+    }
+  } else {
+    // Standard sort by aggregate score (rank key per JIRA-229)
+    sorted = [...feasible].sort((a, b) => {
+      if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
+      if (b.net !== a.net) return b.net - a.net;
+      return a.id.localeCompare(b.id);
+    });
+  }
   const top1 = pickTop1(sorted)!;
 
   // JIRA-232 Defect B: emit predicted build cost for post-game diff against actual.
