@@ -2,7 +2,7 @@
   "mcpServers": {
     "compounds-dev": {
       "type": "http",
-      "url": "https://mcp.compounds.dev/mcp"
+      "url": "https://mcp.dev.compounds.dev/mcp"
     }
   }
 }

@@ -1,6 +1,7 @@
 import { mapConfig } from "../../../client/config/mapConfig";
 import { TerrainType, type GridPoint, WaterCrossingType } from "../../types/GameTypes";
 import { getWaterCrossingExtraCost } from "../waterCrossings";
+import { TERRAIN_BUILD_COSTS } from "../terrainCosts";
 import crossings from "../../../../configuration/waterCrossings.json";
 
 type WaterCrossingsJson = {
@@ -9,17 +10,6 @@ type WaterCrossingsJson = {
 };
 
 const json = crossings as unknown as WaterCrossingsJson;
-
-const TERRAIN_COSTS: Record<TerrainType, number> = {
-  [TerrainType.Clear]: 1,
-  [TerrainType.Mountain]: 2,
-  [TerrainType.Alpine]: 5,
-  [TerrainType.SmallCity]: 3,
-  [TerrainType.MediumCity]: 3,
-  [TerrainType.MajorCity]: 5,
-  [TerrainType.Water]: 0,
-  [TerrainType.FerryPort]: 0,
-};
 
 function parseEdgeKey(key: string): { a: { row: number; col: number }; b: { row: number; col: number } } {
   const [a, b] = key.split("|");
@@ -57,7 +47,7 @@ function findEdge(
 }
 
 function segmentTotalCost(from: GridPoint, to: GridPoint): number {
-  return TERRAIN_COSTS[to.terrain] + getWaterCrossingExtraCost(from, to);
+  return TERRAIN_BUILD_COSTS[to.terrain] + getWaterCrossingExtraCost(from, to);
 }
 
 describe("water crossing costs (from generated configuration)", () => {
@@ -66,7 +56,7 @@ describe("water crossing costs (from generated configuration)", () => {
 
     const extra = getWaterCrossingExtraCost(edge.from, edge.to);
     expect(extra).toBe(WaterCrossingType.River);
-    expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_COSTS[TerrainType.Clear] + 2);
+    expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_BUILD_COSTS[TerrainType.Clear] + 2);
   });
 
   it("crossing a river into a (small/medium) city adds +2 on top of city cost", () => {
@@ -77,7 +67,7 @@ describe("water crossing costs (from generated configuration)", () => {
 
     const extra = getWaterCrossingExtraCost(edge.from, edge.to);
     expect(extra).toBe(WaterCrossingType.River);
-    expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_COSTS[edge.to.terrain] + 2);
+    expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_BUILD_COSTS[edge.to.terrain] + 2);
   });
 
   it("crossing a non-river body of water adds +3 on clear terrain", () => {
@@ -85,7 +75,7 @@ describe("water crossing costs (from generated configuration)", () => {
 
     const extra = getWaterCrossingExtraCost(edge.from, edge.to);
     expect(extra).toBe(WaterCrossingType.Lake);
-    expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_COSTS[TerrainType.Clear] + 3);
+    expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_BUILD_COSTS[TerrainType.Clear] + 3);
   });
 
   it("crossing a river to connect to a mountain adds +2 on top of mountain cost", () => {
@@ -93,7 +83,7 @@ describe("water crossing costs (from generated configuration)", () => {
 
     const extra = getWaterCrossingExtraCost(edge.from, edge.to);
     expect(extra).toBe(WaterCrossingType.River);
-    expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_COSTS[TerrainType.Mountain] + 2);
+    expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_BUILD_COSTS[TerrainType.Mountain] + 2);
   });
 });
 

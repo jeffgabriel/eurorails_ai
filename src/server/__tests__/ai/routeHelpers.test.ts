@@ -180,7 +180,8 @@ describe('isStopComplete — delivery stops', () => {
           efficiencyPerTurn: 10,
           networkCitiesUnlocked: 1,
           victoryMajorCitiesEnRoute: 0,
-          canAffordToBuild: true,
+          isAffordable: true,
+          projectedFundsAfterDelivery: 100,
         },
       ],
     });
@@ -218,7 +219,8 @@ describe('isStopComplete — delivery stops', () => {
           efficiencyPerTurn: 8,
           networkCitiesUnlocked: 1,
           victoryMajorCitiesEnRoute: 0,
-          canAffordToBuild: true,
+          isAffordable: true,
+          projectedFundsAfterDelivery: 100,
         },
       ],
     });
@@ -264,7 +266,8 @@ describe('isStopComplete — delivery stops', () => {
           efficiencyPerTurn: 5,
           networkCitiesUnlocked: 0,
           victoryMajorCitiesEnRoute: 0,
-          canAffordToBuild: true,
+          isAffordable: true,
+          projectedFundsAfterDelivery: 100,
         },
       ],
     });
@@ -350,7 +353,8 @@ describe('isDeliveryComplete — nullish demandCardId (AC3)', () => {
           efficiencyPerTurn: 10,
           networkCitiesUnlocked: 1,
           victoryMajorCitiesEnRoute: 0,
-          canAffordToBuild: true,
+          isAffordable: true,
+          projectedFundsAfterDelivery: 100,
         },
       ],
     });
@@ -859,6 +863,8 @@ function makeDemandContext(overrides: Partial<{
     efficiencyPerTurn: 8,
     networkCitiesUnlocked: 1,
     victoryMajorCitiesEnRoute: 0,
+          isAffordable: true,
+          projectedFundsAfterDelivery: 100,
   } as any;
 }
 
@@ -1488,6 +1494,8 @@ function makeBundle6Context(overrides: Partial<GameContext> = {}): GameContext {
         efficiencyPerTurn: 4,
         networkCitiesUnlocked: 1,
         victoryMajorCitiesEnRoute: 0,
+          isAffordable: true,
+          projectedFundsAfterDelivery: 100,
       } as any,
     ],
 
@@ -1616,6 +1624,8 @@ describe('resolveBuildTarget — JIRA-240 bundling guard (AC9-AC12)', () => {
           efficiencyPerTurn: 4,
           networkCitiesUnlocked: 1,
           victoryMajorCitiesEnRoute: 0,
+          isAffordable: true,
+          projectedFundsAfterDelivery: 100,
         } as any,
       ],
     });

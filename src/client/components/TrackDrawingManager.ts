@@ -4,6 +4,7 @@ import { TrackSegment, PlayerTrackState } from '../../shared/types/TrackTypes';
 import { MapRenderer } from './MapRenderer';
 import { TrackService } from '../services/TrackService';
 import { getWaterCrossingExtraCost } from '../../shared/config/waterCrossings';
+import { TERRAIN_BUILD_COSTS } from '../../shared/config/terrainCosts';
 import { getMajorCityLookup } from '../../shared/services/majorCityGroups';
 
 export class TrackDrawingManager {
@@ -33,16 +34,6 @@ export class TrackDrawingManager {
     // Track building costs
     // Turn build budget (defaults to 20M, can be reduced to 15M after crossgrade)
     private turnBuildLimit: number = 20;
-    private readonly TERRAIN_COSTS: { [key in TerrainType]: number } = {
-        [TerrainType.Clear]: 1,
-        [TerrainType.Mountain]: 2,
-        [TerrainType.Alpine]: 5,
-        [TerrainType.SmallCity]: 3,
-        [TerrainType.MediumCity]: 3,
-        [TerrainType.MajorCity]: 5,
-        [TerrainType.Water]: 0,
-        [TerrainType.FerryPort]: 0
-    };
 
     private gameStateService: any; // Using 'any' to avoid circular dependency
     private trackService: TrackService;
@@ -1283,7 +1274,7 @@ export class TrackDrawingManager {
 
     private calculateTrackCost(from: GridPoint, to: GridPoint): number {
         // Get the base cost from the terrain type
-        let cost = this.TERRAIN_COSTS[to.terrain];
+        let cost = TERRAIN_BUILD_COSTS[to.terrain];
 
         // Special handling for major city connections:
         // 1. First connection TO a major city or its outpost costs exactly 5 ECU

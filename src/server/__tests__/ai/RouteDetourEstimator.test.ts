@@ -37,7 +37,7 @@ jest.mock('../../services/MapTopology', () => ({
     const deltas: [number, number][] = isEvenRow
       ? [[-1, -1], [-1, 0], [0, -1], [0, 1], [1, -1], [1, 0]]
       : [[-1, 0], [-1, 1], [0, -1], [0, 1], [1, 0], [1, 1]];
-    const result = [];
+    const result: { row: number; col: number }[] = [];
     for (const [dr, dc] of deltas) {
       const nr = row + dr;
       const nc = col + dc;

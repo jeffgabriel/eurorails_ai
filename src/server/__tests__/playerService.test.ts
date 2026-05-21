@@ -1003,7 +1003,9 @@ describe('PlayerService Integration Tests', () => {
             expect(result.currentPlayerIndex).toBe(1);
 
             const afterDeck = demandDeckService.getDeckState();
-            expect(afterDeck.discardPileSize).toBe(beforeDeck.discardPileSize + 3);
+            // At least 3 cards discarded (old hand); may be more if event cards were drawn and discarded
+            expect(afterDeck.discardPileSize).toBeGreaterThanOrEqual(beforeDeck.discardPileSize + 3);
+            // All dealt cards should be accounted for (3 new hand cards dealt, same net count)
             expect(afterDeck.dealtCardsCount).toBe(beforeDeck.dealtCardsCount);
 
             const afterPlayerRow = await db.query('SELECT hand, current_turn_number FROM players WHERE id = $1', [playerId1]);

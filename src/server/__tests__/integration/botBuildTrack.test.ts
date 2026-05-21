@@ -151,11 +151,13 @@ jest.mock('../../services/loadService', () => ({
   },
 }));
 
-// Mock PlayerService (used by TurnExecutor for MoveTrain)
+// Mock PlayerService (used by TurnExecutor for MoveTrain, BuildTrack, etc.)
 jest.mock('../../services/playerService', () => ({
   PlayerService: {
     moveTrainForUser: jest.fn(),
     updateCurrentPlayerIndex: jest.fn(),
+    buildTrackForPlayer: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({ remainingMoney: 47 }),
+    getPlayers: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue([]),
   },
 }));
 
@@ -164,6 +166,7 @@ import { emitToGame } from '../../services/socketService';
 import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
 import { getMemory, updateMemory } from '../../services/ai/BotMemory';
+import { PlayerService } from '../../services/playerService';
 import { AIActionType, TerrainType, TrackSegment, StrategicRoute } from '../../../shared/types/GameTypes';
 
 const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
@@ -171,6 +174,7 @@ const mockConnect = (db as any).connect as unknown as jest.Mock<() => Promise<an
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
 const mockComputeBuild = computeBuildSegments as jest.MockedFunction<typeof computeBuildSegments>;
 const mockGetMemory = getMemory as jest.MockedFunction<typeof getMemory>;
+const mockBuildTrackForPlayer = PlayerService.buildTrackForPlayer as jest.Mock<(...args: any[]) => Promise<any>>;
 
 /** Default route targeting Berlin (not on network) — drives PlanExecutor to BUILD */
 function makeBuildRoute(): StrategicRoute {
@@ -332,21 +336,17 @@ describe('Bot Build Track Flow (Integration)', () => {
       expect(result.segmentsBuilt).toBe(1);
       expect(result.cost).toBe(1);
 
-      // Verify UPSERT to player_tracks via transaction client
-      const upsertCall = mockClient.query.mock.calls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('INSERT INTO player_tracks'),
+      // Verify PlayerService.buildTrackForPlayer was called with correct params
+      expect(mockBuildTrackForPlayer).toHaveBeenCalledTimes(1);
+      expect(mockBuildTrackForPlayer).toHaveBeenCalledWith(
+        gameId,
+        botId,
+        [seg],
+        [existingSeg],
+        1,
       );
-      expect(upsertCall).toBeDefined();
 
-      // Verify money deduction (UPDATE players SET money)
-      const moneyCall = mockClient.query.mock.calls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('UPDATE players SET money'),
-      );
-      expect(moneyCall).toBeDefined();
-      expect(moneyCall[1][0]).toBe(1); // cost
-      expect(moneyCall[1][1]).toBe(botId); // player_id
-
-      // Verify audit log (INSERT INTO bot_turn_audits) — now via db.query (best-effort, post-commit)
+      // Verify audit log (INSERT INTO bot_turn_audits) — via db.query (best-effort, post-commit)
       const auditCall = mockQuery.mock.calls.find(
         (call: any[]) => typeof call[0] === 'string' && call[0].includes('bot_turn_audits'),
       );
@@ -365,11 +365,6 @@ describe('Bot Build Track Flow (Integration)', () => {
           playerId: botId,
         }),
       );
-
-      // Verify transaction management (BEGIN + COMMIT)
-      const queries = mockClient.query.mock.calls.map((c: any[]) => c[0]);
-      expect(queries[0]).toBe('BEGIN');
-      expect(queries[queries.length - 1]).toBe('COMMIT');
     });
 
     it('should append to existing segments when bot already has track', async () => {
@@ -384,13 +379,14 @@ describe('Bot Build Track Flow (Integration)', () => {
 
       expect(result.action).toBe(AIActionType.BuildTrack);
 
-      // Verify UPSERT contains both existing and new segments
-      const upsertCall = mockClient.query.mock.calls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('INSERT INTO player_tracks'),
+      // Verify PlayerService received both existing and new segments
+      expect(mockBuildTrackForPlayer).toHaveBeenCalledWith(
+        gameId,
+        botId,
+        [newSeg],
+        [existingSeg],
+        1,
       );
-      expect(upsertCall).toBeDefined();
-      const segments = JSON.parse(upsertCall[1][2]);
-      expect(segments).toEqual([existingSeg, newSeg]);
     });
   });
 
@@ -428,11 +424,8 @@ describe('Bot Build Track Flow (Integration)', () => {
       mockComputeBuild.mockReturnValue([seg]);
       setupWorldSnapshotQuery();
 
-      // Make the transaction UPSERT fail — TurnExecutor will throw
-      mockClient.query
-        .mockResolvedValueOnce(mockResult([])) // BEGIN
-        .mockRejectedValueOnce(new Error('DB write failed')); // UPSERT fails
-      // Subsequent calls (ROLLBACK, etc.) fall back to default mockResolvedValue
+      // Make PlayerService.buildTrackForPlayer fail — TurnExecutor will throw
+      mockBuildTrackForPlayer.mockRejectedValueOnce(new Error('DB write failed'));
 
       const result = await AIStrategyEngine.takeTurn(gameId, botId);
 

@@ -116,10 +116,10 @@ describe('BotTurnTrigger — JIRA-143 R1: Turn counter starts at 1', () => {
       success: true,
     });
 
-    (VictoryService.getVictoryState as jest.Mock).mockResolvedValue(null);
-    (VictoryService.isFinalTurn as jest.Mock).mockResolvedValue(false);
+    (VictoryService.getVictoryState as any).mockResolvedValue(null);
+    (VictoryService.isFinalTurn as any).mockResolvedValue(false);
 
-    await onTurnChange('game-new', 'player-1', 'Bot 1');
+    await onTurnChange('game-new', 0, 'player-1');
 
     // The appendTurn call should have turn: 1 (COALESCE(null, 0) + 1 = 1)
     expect(mockAppendTurn).toHaveBeenCalledWith(
@@ -152,10 +152,10 @@ describe('BotTurnTrigger — JIRA-143 R1: Turn counter starts at 1', () => {
       success: true,
     });
 
-    (VictoryService.getVictoryState as jest.Mock).mockResolvedValue(null);
-    (VictoryService.isFinalTurn as jest.Mock).mockResolvedValue(false);
+    (VictoryService.getVictoryState as any).mockResolvedValue(null);
+    (VictoryService.isFinalTurn as any).mockResolvedValue(false);
 
-    await onTurnChange('game-existing', 'player-1', 'Bot 1');
+    await onTurnChange('game-existing', 0, 'player-1');
 
     // turn should be 5 + 1 = 6
     expect(mockAppendTurn).toHaveBeenCalledWith(

@@ -1,0 +1,59 @@
+● AIStrategyEngine.takeTurn (Integration) › JIRA-156 P2: RouteEnrichmentAdvisor enrich() called after new route creation › should call RouteEnrichmentAdvisor.enrich() after TripPlanner creates a new route when hexGrid is populated
+● AIStrategyEngine.takeTurn (Integration) › JIRA-156 P2: RouteEnrichmentAdvisor enrich() called after new route creation › should use the enriched route (from enrich() return value) for execution
+● AIStrategyEngine.takeTurn (Integration) › JIRA-170: Auto-deliver before LLM consultation › AC1/AC2: auto-delivers before TripPlanner when canDeliver is non-empty and no active route
+● AIStrategyEngine.takeTurn (Integration) › LLM failure → heuristic fallback (BE-004) › should PassTurn when both LLM and heuristicFallback fail
+● AIStrategyEngine.takeTurn (Integration) › LLM failure → heuristic fallback (BE-004) › should PassTurn when heuristicFallback returns PassTurn plan
+● AIStrategyEngine.takeTurn (Integration) › LLM failure → heuristic fallback (BE-004) › should use heuristicFallback BUILD when LLM planRoute returns null
+● AIStrategyEngine.takeTurn (Integration) › decision gate — active route auto-execution › should try heuristicFallback when route planning fails, PassTurn only if both fail
+● AIStrategyEngine.takeTurn (Integration) › initial build uses LLM route planning › should use InitialBuildPlanner (not LLM) during initialBuild
+● AIStrategyEngine.takeTurn (Integration) › initial build uses LLM route planning › should use InitialBuildPlanner during initialBuild regardless of LLM key
+● AIStrategyEngine.takeTurn (Integration) › initial build — LLM route planning › should use InitialBuildPlanner (not LLM planRoute) during initialBuild gameStatus
+● AIStrategyEngine.takeTurn (Integration) › route completion continuation (BE-003) › JIRA-97: should NOT chain BUILD from heuristicFallback after route completes (no validated route)
+● AIStrategyEngine.takeTurn (Integration) › route completion continuation (BE-003) › should not chain continuation when heuristicFallback fails
+● AIStrategyEngine.takeTurn (Integration) › successful turn — PassTurn (no API key) › should pass turn directly when no LLM API key is available
+● Bot Build Track Flow (Integration) › initial build phase › should build track during initial phase when bot has existing segments
+● Bot Build Track Flow (Integration) › initial build phase › should build track during initialBuild using active route
+● ContextBuilder ferry-aware estimateTrackCost › cross-water city with no ferry access: returns overland + ferry + far-side cost
+● ContextBuilder ferry-aware estimateTrackCost › ferry-paid estimate should be less than no-ferry-access estimate
+● ContextBuilder.build — demand context computation › should estimate track cost > 0 for off-network cities
+● ContextBuilder.build — demand context computation › should mark supply as reachable when supply city is within speed
+● ContextBuilder.build — on-train travel distance in estimatedTurns › on-train load to off-network city should include build turns AND travel turns
+● ContextBuilder.serializePrompt › should have PLAN PERSISTENCE in system prompt
+● Event card lifecycle integration (real DB + socket mocks) › cleanupExpiredEffects does not remove effects that have not yet expired
+● Event card lifecycle integration (real DB + socket mocks) › cleanupExpiredEffects removes expired effects and returns their IDs
+● Event card lifecycle integration (real DB + socket mocks) › emitActiveEffects does NOT broadcast to the game room
+● Event card lifecycle integration (real DB + socket mocks) › emitActiveEffects sends current effects to a single reconnecting socket
+● Event card lifecycle integration (real DB + socket mocks) › emitActiveEffects sends empty array when no active effects exist
+● Event card lifecycle integration (real DB + socket mocks) › emits event:card-drawn to the game room after effect is persisted
+● Event card lifecycle integration (real DB + socket mocks) › emits event:effect-applied to the game room after effect is persisted
+● Event card lifecycle integration (real DB + socket mocks) › emits event:effect-expired to the game room when expiry occurs
+● Event card lifecycle integration (real DB + socket mocks) › persists an active effect to the DB via addActiveEffect
+● JIRA-127: Build Cost Estimator Accuracy › cross-water and cold-start with budget penalty › should apply budget penalty to cross-water ferry cost estimates
+● JIRA-127: Build Cost Estimator Accuracy › increased fallback terrain multiplier (4.0) › should use 4.0 multiplier in same-landmass fallback when Dijkstra returns 0
+● JIRA-127: Build Cost Estimator Accuracy › multi-source frontier estimation (same-landmass) › should apply budget penalty when same-landmass estimate exceeds 20M
+● JIRA-127: Build Cost Estimator Accuracy › multi-source frontier estimation (same-landmass) › should use minimum cost from top 5 frontier nodes, not single closest by hexDistance
+● JIRA-156 mid-turn replan: delivery triggers TripPlanner + RouteEnrichmentAdvisor stub › triggers TripPlanner.planTrip() and RouteEnrichmentAdvisor.enrich() after delivery
+● JIRA-161: MIN_DELIVERIES_BEFORE_UPGRADE constant › is exported and equals 1
+● LLMStrategyBrain › evaluateUpgradeBeforeDrop › should treat upgrade without targetTrain as skip
+● Migration 036: games.active_event column › Data integrity › should allow setting active_event back to NULL after a value was set
+● Migration 036: games.active_event column › Data integrity › should allow setting active_event to a valid JSONB object
+● Migration 036: games.active_event column › Data integrity › should default active_event to NULL for new game rows
+● Migration 036: games.active_event column › Data integrity › should have active_event = NULL for pre-existing game rows
+● Migration 036: games.active_event column › Schema verification › should have active_event column as nullable
+● Migration 036: games.active_event column › Schema verification › should have active_event column on games table
+● Migration 036: games.active_event column › Schema verification › should have active_event column with type jsonb
+● PlayerService Integration Tests › Load Delivery › should correctly undo delivery when debt was repaid from the payoff
+● PlayerService Integration Tests › Load Delivery › should deliver a load immediately server-side and prevent double delivery
+● PlayerService Integration Tests › Load Delivery › should undo the last delivery and restore money, load, and the discarded demand card
+● PlayerService Integration Tests › Mercy Borrowing - deliverLoadForUser debt repayment › should apply full payment to money when no debt exists
+● PlayerService Integration Tests › Mercy Borrowing - deliverLoadForUser debt repayment › should clear debt and give excess to money when debt < payment
+● PlayerService Integration Tests › Mercy Borrowing - deliverLoadForUser debt repayment › should clear debt exactly when debt == payment
+● PlayerService Integration Tests › Mercy Borrowing - deliverLoadForUser debt repayment › should persist debt changes to database after delivery
+● PlayerService Integration Tests › Mercy Borrowing - deliverLoadForUser debt repayment › should reduce debt and give nothing to money when debt > payment
+● PlayerService Integration Tests › Track usage fees (move-train + undo) › charges ECU 4M per distinct opponent per turn and supports undo reversal
+● PlayerService Integration Tests › Track usage fees (move-train + undo) › rejects move when payer cannot afford new track-usage fees
+● TurnExecutorPlanner.execute — move toward stop city › A3: skips move when previewed build origin matches current bot position (origin_is_current_position)
+● TurnExecutorPlanner.execute — post-delivery replan › calls TripPlanner.planTrip() and RouteEnrichmentAdvisor.enrich() after delivery when brain is provided
+● TurnValidator › CITY_ENTRY_LIMIT › should reject building into Kaliningrad (row=19, col=63) when 1 opponent already has track there (1-player cap)
+● TurnValidator › computeSaturatedCityKeys › should include Kaliningrad key (19,63) when 1 opponent has track there
+● loadGridPoints — MaxConnections override › returns maxConnections=1 for Kaliningrad (row=19, col=63)

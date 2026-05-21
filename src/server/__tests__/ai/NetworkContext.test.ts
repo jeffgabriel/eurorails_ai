@@ -18,7 +18,7 @@ import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService'
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 // Spy holder so individual tests can override getFerryEdges
-const mockGetFerryEdges = jest.fn(() => [] as ReturnType<typeof import('../../../shared/services/majorCityGroups').getFerryEdges>);
+const mockGetFerryEdges = jest.fn((..._args: any[]) => [] as ReturnType<typeof import('../../../shared/services/majorCityGroups').getFerryEdges>);
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
   ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),

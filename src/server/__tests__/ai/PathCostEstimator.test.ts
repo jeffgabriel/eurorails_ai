@@ -41,7 +41,7 @@ import {
   GridCoord,
 } from '../../services/ai/PathCostEstimator';
 import { computeAggregateScore } from '../../services/ai/DeterministicTripPlanner';
-import { WorldSnapshot, TrackSegment } from '../../../shared/types/GameTypes';
+import { WorldSnapshot, TrackSegment, TerrainType } from '../../../shared/types/GameTypes';
 
 const mockEstimateRouteSegment = estimateRouteSegment as jest.MockedFunction<typeof estimateRouteSegment>;
 const mockSimulateTrip = simulateTrip as jest.MockedFunction<typeof simulateTrip>;
@@ -50,7 +50,7 @@ const mockSimulateTrip = simulateTrip as jest.MockedFunction<typeof simulateTrip
 
 /** Add a named city to the mock grid at the given coords */
 function addCity(name: string, row: number, col: number): void {
-  mockGrid.set(`${row},${col}`, { row, col, terrain: 0, name });
+  mockGrid.set(`${row},${col}`, { row, col, terrain: TerrainType.Clear, name });
 }
 
 /** Minimal WorldSnapshot for tests */
@@ -417,11 +417,11 @@ describe('estimateGraphPathCost', () => {
   it('JIRA-238: newSegments populated on reachable result, matches estimateRouteSegment.newSegments', () => {
     addCity('A', 1, 1);
     addCity('B', 4, 4);
-    const built: TrackSegment[] = [
-      { from: { row: 1, col: 1, terrain: 0 }, to: { row: 2, col: 2, terrain: 0 } },
-      { from: { row: 2, col: 2, terrain: 0 }, to: { row: 3, col: 3, terrain: 0 } },
-      { from: { row: 3, col: 3, terrain: 0 }, to: { row: 4, col: 4, terrain: 0 } },
-    ];
+    const built = [
+      { from: { row: 1, col: 1, terrain: TerrainType.Clear }, to: { row: 2, col: 2, terrain: TerrainType.Clear } },
+      { from: { row: 2, col: 2, terrain: TerrainType.Clear }, to: { row: 3, col: 3, terrain: TerrainType.Clear } },
+      { from: { row: 3, col: 3, terrain: TerrainType.Clear }, to: { row: 4, col: 4, terrain: TerrainType.Clear } },
+    ] as unknown as TrackSegment[];
     mockEstimateRouteSegment.mockReturnValue({
       newSegments: built,
       buildCost: 6,

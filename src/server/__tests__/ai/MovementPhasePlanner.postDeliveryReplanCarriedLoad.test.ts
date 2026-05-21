@@ -136,8 +136,8 @@ jest.mock('../../services/ai/WorldSnapshotService', () => ({
 }));
 
 // ContextBuilder mocks — track what freshSnapshot.bot.loads was when rebuildDemands fired
-const mockRebuildDemands = jest.fn(() => []);
-const mockRebuildCanDeliver = jest.fn(() => []);
+const mockRebuildDemands = jest.fn((..._args: unknown[]) => []);
+const mockRebuildCanDeliver = jest.fn((..._args: unknown[]) => []);
 jest.mock('../../services/ai/ContextBuilder', () => ({
   ContextBuilder: {
     rebuildDemands: (...args: unknown[]) => mockRebuildDemands(...args),
@@ -309,7 +309,7 @@ beforeEach(() => {
   mockExecuteStopAction = jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
     .mockResolvedValue({
       success: true,
-      plan: { type: AIActionType.DeliverLoad, load: 'China', city: 'Kaliningrad' },
+      plan: { type: AIActionType.DeliverLoad, load: 'China', city: 'Kaliningrad' } as any,
     });
 
   // isStopComplete: not complete yet (bot hasn't delivered yet on this call)

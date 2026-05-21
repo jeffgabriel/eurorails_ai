@@ -29,7 +29,7 @@ jest.mock('../../../services/MapTopology', () => ({
     const deltas: [number, number][] = isEvenRow
       ? [[-1, -1], [-1, 0], [0, -1], [0, 1], [1, -1], [1, 0]]
       : [[-1, 0], [-1, 1], [0, -1], [0, 1], [1, 0], [1, 1]];
-    const result = [];
+    const result: { row: number; col: number }[] = [];
     for (const [dr, dc] of deltas) {
       const nr = row + dr;
       const nc = col + dc;
@@ -271,7 +271,7 @@ describe('findBuildPath — mountain terrain', () => {
     );
 
     // Path: (0,0)→(1,0)[mountain,2M]→(2,0)[clear,1M] = total 3M
-    expect(result.feasible !== false).toBe(true);
+    expect(result.path.length > 0).toBe(true);
     expect(result.path).toHaveLength(3);
     expect(result.totalCost).toBe(3); // mountain=2 + clear=1
   });

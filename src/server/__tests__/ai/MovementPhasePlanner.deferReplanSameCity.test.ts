@@ -97,8 +97,8 @@ jest.mock('../../services/ai/WorldSnapshotService', () => ({
   capture: (...args: unknown[]) => mockCapture(...args),
 }));
 
-const mockRebuildDemands = jest.fn(() => []);
-const mockRebuildCanDeliver = jest.fn(() => []);
+const mockRebuildDemands = jest.fn((..._args: unknown[]) => []);
+const mockRebuildCanDeliver = jest.fn((..._args: unknown[]) => []);
 jest.mock('../../services/ai/ContextBuilder', () => ({
   ContextBuilder: {
     rebuildDemands: (...args: unknown[]) => mockRebuildDemands(...args),
@@ -178,7 +178,7 @@ function makeContext(loads: string[]): GameContext {
     canUpgrade: false, canBuild: true,
     isInitialBuild: false, opponents: [],
     phase: 'travel', turnNumber: 10,
-  } as GameContext;
+  } as unknown as GameContext;
 }
 
 function makeSnapshot(): WorldSnapshot {
@@ -219,7 +219,7 @@ beforeEach(() => {
   mockExecuteStopAction = jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
     .mockImplementation(async (stop: RouteStop) => ({
       success: true,
-      plan: { type: AIActionType.DeliverLoad, load: stop.loadType, city: stop.city },
+      plan: { type: AIActionType.DeliverLoad, load: stop.loadType, city: stop.city } as any,
     }));
 
   mockCapture.mockResolvedValue({

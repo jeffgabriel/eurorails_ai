@@ -368,9 +368,9 @@ function makeGameSnapshot(): WorldSnapshot {
       existingSegments: [],
       demandCards: [1, 2, 3],
       resolvedDemands: [
-        { cardId: 1, demands: [{ loadType: 'Beer', cityName: 'Bruxelles', payment: 10 }] },
-        { cardId: 2, demands: [{ loadType: 'Coal', cityName: 'Paris', payment: 15 }] },
-        { cardId: 3, demands: [{ loadType: 'Labor', cityName: 'Frankfurt', payment: 12 }] },
+        { cardId: 1, demands: [{ loadType: 'Beer', city: 'Bruxelles', payment: 10 }] },
+        { cardId: 2, demands: [{ loadType: 'Coal', city: 'Paris', payment: 15 }] },
+        { cardId: 3, demands: [{ loadType: 'Labor', city: 'Frankfurt', payment: 12 }] },
       ],
       trainType: TrainType.Freight,
       loads: [],

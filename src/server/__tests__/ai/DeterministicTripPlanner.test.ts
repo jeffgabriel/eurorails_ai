@@ -77,6 +77,7 @@ import {
   AIActionType,
   TrainType,
   GameState,
+  TerrainType,
 } from '../../../shared/types/GameTypes';
 
 const mockSimulateTrip = simulateTrip as jest.MockedFunction<typeof simulateTrip>;
@@ -86,7 +87,7 @@ const mockEstimateGraphPathCost = estimateGraphPathCost as jest.MockedFunction<t
 
 /** Add a named city to the mock grid at the given coords */
 function addCity(name: string, row: number, col: number): void {
-  (mockGrid as any).set(`${row},${col}`, { row, col, terrain: 0, name });
+  (mockGrid as any).set(`${row},${col}`, { row, col, terrain: TerrainType.Clear, name });
 }
 
 /** Create a minimal DemandContext row */
@@ -826,7 +827,7 @@ describe('scoreCandidate', () => {
   });
 
   it('infeasible simulator result → returns feasible: false', () => {
-    mockSimulateTrip.mockReturnValueOnce({ turnsToComplete: 0, totalBuildCost: 0, feasible: false, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValueOnce({ turnsToComplete: 0, totalBuildCost: 0, feasible: false, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const snapshot = makeSnapshot();
     const candidate = {
       id: 'infeasible-test',
@@ -862,7 +863,7 @@ describe('scoreCandidate — affordability gate (JIRA-223)', () => {
     // bot.money=7, minCashRelative=-25 → projectedMin = 7 + (-25) = -18 < 0
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 8, totalBuildCost: 30, feasible: true,
-      minCashRelative: -25, finalCashRelative: -5,
+      minCashRelative: -25, finalCashRelative: -5, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 7 });
     const result = scoreCandidate(makeCandidate('ac1-test'), { row: 5, col: 5 }, snapshot, defaultOpts);
@@ -873,7 +874,7 @@ describe('scoreCandidate — affordability gate (JIRA-223)', () => {
     // bot.money=30, minCashRelative=-20 → projectedMin = 10 >= 0 → passes gate
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 3, totalBuildCost: 5, feasible: true,
-      minCashRelative: -20, finalCashRelative: 15,
+      minCashRelative: -20, finalCashRelative: 15, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 30 });
     const result = scoreCandidate(makeCandidate('ac1-accept'), { row: 5, col: 5 }, snapshot, defaultOpts);
@@ -885,7 +886,7 @@ describe('scoreCandidate — affordability gate (JIRA-223)', () => {
     // Even though finalCashRelative is positive (trip recovers), min dips too far
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 5, totalBuildCost: 20, feasible: true,
-      minCashRelative: -15, finalCashRelative: 10,
+      minCashRelative: -15, finalCashRelative: 10, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 10 });
     const result = scoreCandidate(makeCandidate('ac2-mid-dip'), { row: 5, col: 5 }, snapshot, defaultOpts);
@@ -911,6 +912,7 @@ describe('scoreCandidate — affordability gate (JIRA-223)', () => {
       turnsToComplete: 12, totalBuildCost: 35, feasible: true,
       minCashRelative: -25,   // bot would need 25M more than it has at the worst point
       finalCashRelative: 13,  // trip is technically profitable overall
+      builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 7 });
     const result = scoreCandidate(berthFixtureCandidate, { row: 5, col: 5 }, snapshot, defaultOpts);
@@ -921,7 +923,7 @@ describe('scoreCandidate — affordability gate (JIRA-223)', () => {
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 8, totalBuildCost: 30, feasible: true,
-      minCashRelative: -25, finalCashRelative: -5,
+      minCashRelative: -25, finalCashRelative: -5, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 7 });
     const result = scoreCandidate(makeCandidate('log-test'), { row: 5, col: 5 }, snapshot, defaultOpts);
@@ -936,7 +938,7 @@ describe('scoreCandidate — affordability gate (JIRA-223)', () => {
     // bot.money=10, minCashRelative=-8 → projectedMin=2, but floor=4 → rejected
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 3, totalBuildCost: 10, feasible: true,
-      minCashRelative: -8, finalCashRelative: 5,
+      minCashRelative: -8, finalCashRelative: 5, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 10 });
     const result = scoreCandidate(makeCandidate('floor-override'), { row: 5, col: 5 }, snapshot, defaultOpts, { affordabilityFloorM: 4 });
@@ -947,7 +949,7 @@ describe('scoreCandidate — affordability gate (JIRA-223)', () => {
     // bot.money=15, minCashRelative=-10 → projectedMin=5 >= floor=4 → accepted
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 3, totalBuildCost: 12, feasible: true,
-      minCashRelative: -10, finalCashRelative: 5,
+      minCashRelative: -10, finalCashRelative: 5, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 15 });
     const result = scoreCandidate(makeCandidate('floor-override-pass'), { row: 5, col: 5 }, snapshot, defaultOpts, { affordabilityFloorM: 4 });
@@ -999,7 +1001,7 @@ describe('scoreCandidate — upgrade-aware affordability gate (JIRA-232)', () =>
     // freight + cash=30 + buildCost=14 → 30 < 20+14=34 → no upgrade trigger
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 5, totalBuildCost: 14, feasible: true,
-      minCashRelative: -14, finalCashRelative: 16,
+      minCashRelative: -14, finalCashRelative: 16, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 30, trainType: 'freight' as any });
     const result = scoreCandidate(makeCandidate('ac3-no-upgrade'), { row: 5, col: 5 }, snapshot, defaultOpts);
@@ -1011,12 +1013,12 @@ describe('scoreCandidate — upgrade-aware affordability gate (JIRA-232)', () =>
     // freight + cash=50 + buildCost=14 → 50 >= 34 → upgrade triggers
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 5, totalBuildCost: 14, feasible: true,
-      minCashRelative: -14, finalCashRelative: 16,
+      minCashRelative: -14, finalCashRelative: 16, builtSegments: [],
     });
     // Re-simulation with pendingUpgradeCost=20: minCashRelative=-34
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 5, totalBuildCost: 14, feasible: true,
-      minCashRelative: -34, finalCashRelative: -4,
+      minCashRelative: -34, finalCashRelative: -4, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 50, trainType: 'freight' as any });
     const result = scoreCandidate(makeCandidate('ac3-with-upgrade-pass'), { row: 5, col: 5 }, snapshot, defaultOpts);
@@ -1029,11 +1031,11 @@ describe('scoreCandidate — upgrade-aware affordability gate (JIRA-232)', () =>
     // Re-simulation returns minCashRelative=-41 (simulated deeper dip)
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 5, totalBuildCost: 14, feasible: true,
-      minCashRelative: -14, finalCashRelative: 16,
+      minCashRelative: -14, finalCashRelative: 16, builtSegments: [],
     });
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 5, totalBuildCost: 14, feasible: true,
-      minCashRelative: -41, finalCashRelative: -11,
+      minCashRelative: -41, finalCashRelative: -11, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 40, trainType: 'freight' as any });
     const result = scoreCandidate(makeCandidate('ac3-strict-infeasible'), { row: 5, col: 5 }, snapshot, defaultOpts);
@@ -1045,11 +1047,11 @@ describe('scoreCandidate — upgrade-aware affordability gate (JIRA-232)', () =>
     // freight + cash=60 + buildCost=14 → 60 >= 34 → upgrade triggers
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 5, totalBuildCost: 14, feasible: true,
-      minCashRelative: -14, finalCashRelative: 16,
+      minCashRelative: -14, finalCashRelative: 16, builtSegments: [],
     });
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 5, totalBuildCost: 14, feasible: true,
-      minCashRelative: -34, finalCashRelative: -4,
+      minCashRelative: -34, finalCashRelative: -4, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 60, trainType: 'freight' as any });
     const result = scoreCandidate(makeCandidate('ac4-pass'), { row: 5, col: 5 }, snapshot, defaultOpts);
@@ -1062,7 +1064,7 @@ describe('scoreCandidate — upgrade-aware affordability gate (JIRA-232)', () =>
     // Only one simulateTrip call, using base minCashRelative
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 5, totalBuildCost: 14, feasible: true,
-      minCashRelative: -14, finalCashRelative: 16,
+      minCashRelative: -14, finalCashRelative: 16, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 40, trainType: 'superfreight' as any });
     const result = scoreCandidate(makeCandidate('ac5-superfreight'), { row: 5, col: 5 }, snapshot, defaultOpts);
@@ -1076,12 +1078,12 @@ describe('scoreCandidate — upgrade-aware affordability gate (JIRA-232)', () =>
     // No memory passed → capSaturatedTurns defaults to 0 → safe to call selectUpgradeTarget
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 3, totalBuildCost: 5, feasible: true,
-      minCashRelative: -5, finalCashRelative: 25,
+      minCashRelative: -5, finalCashRelative: 25, builtSegments: [],
     });
     // freight + cash=100 + buildCost=5 → 100 >= 25 → upgrade triggers → second call
     mockSimulateTrip.mockReturnValueOnce({
       turnsToComplete: 3, totalBuildCost: 5, feasible: true,
-      minCashRelative: -25, finalCashRelative: 5,
+      minCashRelative: -25, finalCashRelative: 5, builtSegments: [],
     });
     const snapshot = makeSnapshot({ money: 100, trainType: 'freight' as any });
     // Call without memory (6th arg) — must not throw
@@ -1098,7 +1100,7 @@ describe('planTripDeterministic — JIRA-232 observability', () => {
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     mockSimulateTrip.mockReturnValue({
       turnsToComplete: 3, totalBuildCost: 5, feasible: true,
-      minCashRelative: 0, finalCashRelative: 0,
+      minCashRelative: 0, finalCashRelative: 0, builtSegments: [],
     });
     const snapshot = makeSnapshot({ trainType: 'superfreight' as any }); // no upgrade to keep mock calls simple
     planTripDeterministic(
@@ -1167,7 +1169,7 @@ describe('pickTop1', () => {
 
 describe('planTripDeterministic', () => {
   it('same snapshot, two consecutive calls — identical route returned (determinism)', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const demands = [
       makeDemand({ cardIndex: 1, loadType: 'Ham', deliveryCity: 'DeliveryCity', payout: 20 }),
     ];
@@ -1238,7 +1240,7 @@ describe('planTripDeterministic', () => {
   });
 
   it('verbose reasoning contains required substrings', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 2, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 2, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const demands = [
       makeDemand({ cardIndex: 1, loadType: 'Ham', deliveryCity: 'DeliveryCity', payout: 20 }),
       makeDemand({ cardIndex: 2, loadType: 'Coal', supplyCity: 'CityA', deliveryCity: 'CityB', payout: 15 }),
@@ -1256,7 +1258,7 @@ describe('planTripDeterministic', () => {
 
   it('when ≥2 candidates feasible, reasoning contains Runner-up #2', () => {
     // Both candidates must survive prune and be feasible
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 2, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 2, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const demands = [
       makeDemand({ cardIndex: 1, loadType: 'Ham', deliveryCity: 'DeliveryCity', payout: 20 }),
       makeDemand({ cardIndex: 2, loadType: 'Coal', supplyCity: 'CityA', deliveryCity: 'CityB', payout: 15 }),
@@ -1271,7 +1273,7 @@ describe('planTripDeterministic', () => {
   });
 
   it('returns a synthesizedAttempt with model: deterministic', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 2, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 2, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const demands = [
       makeDemand({ cardIndex: 1, loadType: 'Ham', deliveryCity: 'DeliveryCity', payout: 20 }),
     ];
@@ -1285,7 +1287,7 @@ describe('planTripDeterministic', () => {
   });
 
   it('carry demand uses deliver-only stop (no pickup)', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 1, totalBuildCost: 0, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 1, totalBuildCost: 0, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const demands = [
       makeDemand({
         cardIndex: 1,
@@ -1308,7 +1310,7 @@ describe('planTripDeterministic', () => {
   });
 
   it('route has correct structure (createdAtTurn, phase, currentStopIndex)', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 10, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 10, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const demands = [
       makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 30 }),
     ];
@@ -1333,7 +1335,7 @@ describe('planTripDeterministic — upgrade emission', () => {
   }
 
   it('Freight + cash >= upgradeCost + buildCost → emits upgradeOnRoute=fast_freight', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 10, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 10, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     // 100 cash >= 20 (upgrade) + 10 (build) ✓
     const snapshot = makeSnapshot({ trainType: 'freight', money: 100 });
     const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
@@ -1342,7 +1344,7 @@ describe('planTripDeterministic — upgrade emission', () => {
   });
 
   it('Freight + cash exactly upgradeCost + buildCost → emits upgradeOnRoute (boundary inclusive)', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 10, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 10, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     // 30 cash == 20 + 10 — boundary is inclusive (>= rule).
     const snapshot = makeSnapshot({ trainType: 'freight', money: 30 });
     const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
@@ -1350,7 +1352,7 @@ describe('planTripDeterministic — upgrade emission', () => {
   });
 
   it('Freight + cash < upgradeCost + buildCost → no upgradeOnRoute', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 15, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 15, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     // 25 cash < 20 + 15 — short by 10.
     const snapshot = makeSnapshot({ trainType: 'freight', money: 25 });
     const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
@@ -1359,14 +1361,14 @@ describe('planTripDeterministic — upgrade emission', () => {
   });
 
   it('Fast Freight + cash sufficient + cap-saturated ≥ threshold → emits upgradeOnRoute=superfreight', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const snapshot = makeSnapshot({ trainType: 'fast_freight', money: 50 });
     const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory({ capSaturatedTurns: 2 }));
     expect(result.route!.upgradeOnRoute).toBe('superfreight');
   });
 
   it('Fast Freight + cash sufficient + cap-saturated < threshold → upgrade gated, no superfreight', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const snapshot = makeSnapshot({ trainType: 'fast_freight', money: 50 });
     const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory({ capSaturatedTurns: 1 }));
     expect(result.route!.upgradeOnRoute).toBeUndefined();
@@ -1375,7 +1377,7 @@ describe('planTripDeterministic — upgrade emission', () => {
   });
 
   it('Heavy Freight + cash sufficient → emits upgradeOnRoute=superfreight (saturation gate not applied)', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     // Heavy Freight is already cap=3; the Super upgrade buys speed, not a slot,
     // so the cap-saturation gate does not apply. capSaturatedTurns=0 must still allow.
     const snapshot = makeSnapshot({ trainType: 'heavy_freight', money: 50 });
@@ -1384,14 +1386,14 @@ describe('planTripDeterministic — upgrade emission', () => {
   });
 
   it('Superfreight (top tier) → never emits upgradeOnRoute', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const snapshot = makeSnapshot({ trainType: 'superfreight', money: 1000 });
     const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
     expect(result.route!.upgradeOnRoute).toBeUndefined();
   });
 
   it('reasoning string mentions the upgrade decision when one is emitted', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 10, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 10, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const snapshot = makeSnapshot({ trainType: 'freight', money: 100 });
     const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
     expect(result.route!.reasoning).toContain('Upgrade emitted: fast_freight');
@@ -1399,7 +1401,7 @@ describe('planTripDeterministic — upgrade emission', () => {
   });
 
   it('reasoning string does NOT mention an upgrade when none is emitted', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const snapshot = makeSnapshot({ trainType: 'superfreight', money: 1000 });
     const result = planTripDeterministic(snapshot, makeContext(upgradeDemands()), makeMemory());
     expect(result.route!.reasoning).not.toContain('Upgrade emitted');
@@ -1414,7 +1416,7 @@ describe('planTripDeterministic — cash-aware build cap', () => {
   }
 
   it('cash ≤ static cap (130M) → reasoning reports cap as 130M', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const snapshot = makeSnapshot({ money: 100 });
     const result = planTripDeterministic(snapshot, makeContext(singleDemand()), makeMemory());
     expect(result.outcome).toBe('success');
@@ -1422,7 +1424,7 @@ describe('planTripDeterministic — cash-aware build cap', () => {
   });
 
   it('cash > static cap (cash=161M) → reasoning reports cap raised to 161M', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const snapshot = makeSnapshot({ money: 161 });
     const result = planTripDeterministic(snapshot, makeContext(singleDemand()), makeMemory());
     expect(result.outcome).toBe('success');
@@ -1430,7 +1432,7 @@ describe('planTripDeterministic — cash-aware build cap', () => {
   });
 
   it('cash much greater than static cap (cash=300M) → cap tracks cash', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const snapshot = makeSnapshot({ money: 300 });
     const result = planTripDeterministic(snapshot, makeContext(singleDemand()), makeMemory());
     expect(result.outcome).toBe('success');
@@ -1438,7 +1440,7 @@ describe('planTripDeterministic — cash-aware build cap', () => {
   });
 
   it('low cash (cash=10M) → static floor (130M) holds, cap does NOT shrink below it', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const snapshot = makeSnapshot({ money: 10 });
     const result = planTripDeterministic(snapshot, makeContext(singleDemand()), makeMemory());
     expect(result.outcome).toBe('success');
@@ -1446,7 +1448,7 @@ describe('planTripDeterministic — cash-aware build cap', () => {
   });
 
   it('options.pruneMaxBuildM override bypasses cash-aware logic', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const snapshot = makeSnapshot({ money: 500 });
     const result = planTripDeterministic(
       snapshot,
@@ -1462,7 +1464,7 @@ describe('planTripDeterministic — cash-aware build cap', () => {
 
 describe('planTripDeterministic — aggregate two-trip look-ahead (JIRA-229)', () => {
   it('single-card hand → aggregate falls back to standalone net/turns; reasoning marks standalone', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 5, totalBuildCost: 4, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 5, totalBuildCost: 4, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const result = planTripDeterministic(
       makeSnapshot(),
       makeContext([
@@ -1479,7 +1481,7 @@ describe('planTripDeterministic — aggregate two-trip look-ahead (JIRA-229)', (
     // Three singles, each on a distinct card. The chosen single's follow-up
     // is one of the other two singles. (A pair would consume 2 cards and
     // still have 1 disjoint single available as follow-up — also chains.)
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 4, totalBuildCost: 3, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 4, totalBuildCost: 3, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const result = planTripDeterministic(
       makeSnapshot(),
       makeContext([
@@ -1500,7 +1502,7 @@ describe('planTripDeterministic — aggregate two-trip look-ahead (JIRA-229)', (
 
   it('same-cardIndex candidates do NOT chain with each other (disjoint-cards check)', () => {
     // Both demands share cardIndex=5 — can't chain.
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 5, totalBuildCost: 2, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 5, totalBuildCost: 2, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const result = planTripDeterministic(
       makeSnapshot(),
       makeContext([
@@ -1514,7 +1516,7 @@ describe('planTripDeterministic — aggregate two-trip look-ahead (JIRA-229)', (
   });
 
   it('aggregate line appears in reasoning with expected format M/turn precision', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 5, totalBuildCost: 4, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 5, totalBuildCost: 4, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const result = planTripDeterministic(
       makeSnapshot(),
       makeContext([
@@ -1529,7 +1531,7 @@ describe('planTripDeterministic — aggregate two-trip look-ahead (JIRA-229)', (
   });
 
   it('runner-up lines report aggregate (not legacy score) as Lost-by metric', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 4, totalBuildCost: 3, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 4, totalBuildCost: 3, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const result = planTripDeterministic(
       makeSnapshot(),
       makeContext([
@@ -1545,7 +1547,7 @@ describe('planTripDeterministic — aggregate two-trip look-ahead (JIRA-229)', (
   });
 
   it('determinism — same snapshot twice yields identical aggregate-ranked pick', () => {
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
     const demands = [
       makeDemand({ cardIndex: 1, loadType: 'Ham', deliveryCity: 'DeliveryCity', payout: 20 }),
       makeDemand({ cardIndex: 2, loadType: 'Coal', supplyCity: 'CityA', deliveryCity: 'CityB', payout: 15 }),
@@ -1615,6 +1617,7 @@ describe('planTripDeterministic — JIRA-230 t46 regression (AC10, AC11)', () =>
           feasible: true,
           minCashRelative: hasZagreb ? -25 : 0,
           finalCashRelative: hasZagreb ? -2 : 23,
+          builtSegments: [],
         };
       },
     );
@@ -1690,7 +1693,7 @@ describe('planTripDeterministic — JIRA-230 perf budget (AC12)', () => {
       reachable: true, buildCost: 5, pathLength: 4, estimatedTurns: 1,
     });
     mockSimulateTrip.mockReturnValue({
-      turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0,
+      turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [],
     });
   });
 
@@ -1769,7 +1772,7 @@ describe('JIRA-231: planTripDeterministic feasibility filter', () => {
     addCity('Berlin', 5, 5);
 
     // Default: simulateTrip returns feasible result
-    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0 });
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 3, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
 
     // Default: estimateGraphPathCost returns a reachable, low-cost result
     mockEstimateGraphPathCost.mockReturnValue({
@@ -1912,8 +1915,8 @@ describe('JIRA-231: planTripDeterministic feasibility filter', () => {
       position: { row: 46, col: 45 },
       existingSegments: [
         {
-          from: { x: 1840, y: 1800, row: 46, col: 45, terrain: 0 },
-          to: { x: 1840, y: 1840, row: 46, col: 46, terrain: 0 },
+          from: { x: 1840, y: 1800, row: 46, col: 45, terrain: TerrainType.Clear },
+          to: { x: 1840, y: 1840, row: 46, col: 46, terrain: TerrainType.Clear },
           cost: 1,
         },
       ],
@@ -2012,8 +2015,8 @@ describe('JIRA-241 end-state scoring', () => {
   beforeEach(() => {
     // Ensure the mocked grid has the major-city coordinate fixtures used below.
     mockGrid.clear();
-    mockGrid.set('Wien', { row: 30, col: 60, terrain: 0, name: 'Wien' });
-    mockGrid.set('Milano', { row: 50, col: 40, terrain: 0, name: 'Milano' });
+    mockGrid.set('Wien', { row: 30, col: 60, terrain: TerrainType.Clear, name: 'Wien' });
+    mockGrid.set('Milano', { row: 50, col: 40, terrain: TerrainType.Clear, name: 'Milano' });
   });
 
   describe('AC1 — payoff cap fires when overshooting 250M', () => {

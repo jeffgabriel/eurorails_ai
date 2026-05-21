@@ -81,7 +81,9 @@ function makeRoute(upgradeOnRoute?: string): StrategicRoute {
   return {
     stops: [],
     currentStopIndex: 0,
-    phase: 'deliver',
+    phase: 'act',
+    createdAtTurn: 1,
+    reasoning: 'test',
     upgradeOnRoute,
   };
 }

@@ -4257,7 +4257,7 @@ describe('TurnExecutorPlanner.execute — JIRA-187 capped-city decision tree', (
       position: { city: 'Berlin', row: 10, col: 20 },
       money: 100,
       loads: ['Coal'],
-      canDeliver: [{ loadType: 'Coal', city: 'Berlin' }],
+      canDeliver: [{ loadType: 'Coal', city: 'Berlin' }] as any,
       citiesOnNetwork: ['Berlin'],
     });
 

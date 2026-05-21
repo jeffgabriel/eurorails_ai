@@ -200,7 +200,7 @@ beforeEach(() => {
     .mockReturnValue(false);
 
   mockResolveCappedCityDelivery = jest.spyOn(TurnExecutorPlanner, 'resolveCappedCityDelivery')
-    .mockReturnValue({ handled: false, plans: [], error: 'default' });
+    .mockReturnValue({ handled: false, error: 'NO_VIABLE_PATH' as any } as any);
 
   mockAssertBuildDirection = jest.spyOn(TurnExecutorPlanner, 'assertBuildDirectionAgreesWithMove')
     .mockImplementation(() => { /* no-op */ });

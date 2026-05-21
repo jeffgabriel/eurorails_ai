@@ -37,6 +37,26 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
   },
 }));
 
+// LLMStrategyBrain now bypasses ContextBuilder and calls ContextSerializer directly;
+// route the existing ContextBuilder mock spy through to ContextSerializer to keep tests valid.
+jest.mock('../../services/ai/prompts/ContextSerializer', () => {
+  const real = jest.requireActual<typeof import('../../services/ai/prompts/ContextSerializer')>('../../services/ai/prompts/ContextSerializer');
+  return {
+    ...real,
+    ContextSerializer: {
+      ...real.ContextSerializer,
+      serializeRoutePlanningPrompt: jest.fn((...args: any[]) => {
+        const { ContextBuilder } = jest.requireMock('../../services/ai/ContextBuilder');
+        return ContextBuilder.serializeRoutePlanningPrompt(...args);
+      }),
+      serializePrompt: jest.fn((...args: any[]) => {
+        const { ContextBuilder } = jest.requireMock('../../services/ai/ContextBuilder');
+        return ContextBuilder.serializePrompt(...args);
+      }),
+    },
+  };
+});
+
 // Mock ResponseParser
 jest.mock('../../services/ai/ResponseParser', () => {
   class ParseError extends Error {

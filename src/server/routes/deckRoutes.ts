@@ -1,5 +1,6 @@
 import express from 'express';
 import { demandDeckService } from '../services/demandDeckService';
+import { authenticateToken } from '../middleware/authMiddleware';
 
 const router = express.Router();
 
@@ -70,6 +71,20 @@ router.post('/reset', (req, res) => {
   } catch (error: any) {
     console.error('Error resetting deck:', error);
     return res.status(500).json({ 
+      error: 'Server error',
+      details: error.message || 'An unexpected error occurred'
+    });
+  }
+});
+
+// Get all event card definitions
+router.get('/events', authenticateToken, (req, res) => {
+  try {
+    const cards = demandDeckService.getAllEventCards();
+    return res.status(200).json(cards);
+  } catch (error: any) {
+    console.error('Error fetching event cards:', error);
+    return res.status(500).json({
       error: 'Server error',
       details: error.message || 'An unexpected error occurred'
     });

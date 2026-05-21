@@ -240,7 +240,7 @@ describe('TrackDrawingManager', () => {
                 { terrain: TerrainType.MediumCity, name: 'MediumCity', expected: 3 },
                 { terrain: TerrainType.MajorCity, name: 'MajorCity', expected: 5 },
                 { terrain: TerrainType.FerryPort, name: 'FerryPort', expected: 0 },
-                { terrain: TerrainType.Water, name: 'Water', expected: 0 }
+                { terrain: TerrainType.Water, name: 'Water', expected: Infinity }
             ];
 
             for (const testCase of terrainTypes) {

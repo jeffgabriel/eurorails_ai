@@ -35,7 +35,7 @@ function makeEntry(overrides: Partial<GameTurnLogEntry> = {}): GameTurnLogEntry 
     timestamp: '2026-05-15T22:00:00.000Z',
     action: 'MoveAndDeliver',
     ...overrides,
-  };
+  } as unknown as GameTurnLogEntry;
 }
 
 function lastWrittenLine(): string {

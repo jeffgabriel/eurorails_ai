@@ -124,7 +124,7 @@ export function computeSupplyRarity(
   const supplyCityCounts = new Map<string, Set<string>>();
   for (const d of demands) {
     if (!supplyCityCounts.has(d.loadType)) supplyCityCounts.set(d.loadType, new Set());
-    supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
+    if (d.supplyCity !== null) supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
   }
 
   const rarity = new Map<string, string>();
@@ -151,17 +151,18 @@ export function buildDemandRanking(demands: DemandContext[]): Array<{
   const supplyCityCounts = new Map<string, Set<string>>();
   for (const d of demands) {
     if (!supplyCityCounts.has(d.loadType)) supplyCityCounts.set(d.loadType, new Set());
-    supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
+    if (d.supplyCity !== null) supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
   }
 
   return [...demands]
+    .filter(d => d.supplyCity !== null)
     .sort((a, b) => b.demandScore - a.demandScore)
     .map((d, i) => {
       const cityCount = supplyCityCounts.get(d.loadType)?.size ?? 1;
       const supplyRarity = cityCount <= 1 ? 'UNIQUE' : cityCount === 2 ? 'LIMITED' : 'COMMON';
       return {
         loadType: d.loadType,
-        supplyCity: d.supplyCity,
+        supplyCity: d.supplyCity as string,
         deliveryCity: d.deliveryCity,
         payout: d.payout,
         score: d.demandScore,

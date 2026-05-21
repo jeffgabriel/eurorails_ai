@@ -97,6 +97,12 @@ jest.mock('../../services/playerService', () => ({
     updateCurrentPlayerIndex: jest.fn(),
     deliverLoadForUser: jest.fn(),
     getPlayers: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue([]),
+    // Methods migrated from inline TurnExecutor DB queries (added in main):
+    pickupLoadForPlayer: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({ updatedLoads: [] }),
+    dropLoadForPlayer: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(undefined),
+    buildTrackForPlayer: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({ segmentsBuilt: 0, cost: 0, updatedMoney: 0 }),
+    discardHandForPlayer: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({ newCards: [], discardedCardIds: [] }),
+    purchaseTrainType: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(undefined),
   },
 }));
 
@@ -3616,7 +3622,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // RouteEnrichmentAdvisor.enrich should have been called with the new route + snapshot + context + brain + gridPoints
       expect(RouteEnrichmentAdvisor.enrich).toHaveBeenCalledTimes(1);
       const [enrichRoute, enrichSnapshot, enrichContext, , enrichGrid] =
-        (RouteEnrichmentAdvisor.enrich as jest.Mock).mock.calls[0];
+        (RouteEnrichmentAdvisor.enrich as jest.Mock).mock.calls[0] as any[];
       expect(enrichRoute.stops[0].city).toBe('Berlin');
       expect(enrichSnapshot.hexGrid).toBe(hexGrid);
       expect(enrichContext).toBe(context);
@@ -3718,7 +3724,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockPlanRoute.mockResolvedValue({ route: originalRoute, model: 'claude-sonnet-4-20250514', latencyMs: 100 });
 
       // Override the mock to return enrichedRoute instead of passing through
-      (RouteEnrichmentAdvisor.enrich as jest.Mock).mockResolvedValue(enrichedRoute);
+      (RouteEnrichmentAdvisor.enrich as any).mockResolvedValue(enrichedRoute);
 
       mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
@@ -3838,7 +3844,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         'game-1',
         snapshot.bot.userId,
         'Berlin',
-        'Coal',
+        'Coal' as any,
         42,
       );
 

@@ -1,14 +1,20 @@
 import { db } from "../db/index";
 import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES, TRACK_USAGE_FEE, TerrainType } from "../../shared/types/GameTypes";
+import { getTrainCapacity } from "../../shared/services/trainProperties";
+import { LoadService } from "./loadService";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
-import { TrackService } from "./trackService";
+import { TrackService, getRiverEdgeKeys, segmentCrossesRiver } from "./trackService";
 import { DemandCard } from "../../shared/types/DemandCard";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
 import { loadGridPoints } from "./MapTopology";
 import { getFerryEdges } from "../../shared/services/majorCityGroups";
+import { TrackSegment } from "../../shared/types/TrackTypes";
+import { EventCardService } from "./EventCardService";
+import { activeEffectManager } from "./ActiveEffectManager";
+import { EventCardType, EventCardResult, EventCard } from "../../shared/types/EventCard";
 
 type TurnActionDeliver = {
   kind: "deliver";
@@ -44,6 +50,123 @@ interface PlayerRow {
 }
 
 export class PlayerService {
+  /**
+   * Data collected during a transaction for socket emission after COMMIT.
+   * Emissions are deferred to avoid notifying clients of effects that may roll back.
+   */
+  private static pendingEmissions: Array<{
+    gameId: string;
+    eventResult: EventCardResult;
+    drawingPlayerName: string;
+    card: EventCard;
+  }> = [];
+
+  /**
+   * Persist an active effect produced by an event card draw.
+   * Extracted to eliminate duplication across fulfillDemand, deliverLoad, and discardHandCore.
+   *
+   * Socket emissions are deferred — call flushEventEmissions() after COMMIT.
+   */
+  private static async persistEventEffect(
+    gameId: string,
+    eventResult: EventCardResult,
+    client: import('pg').PoolClient,
+    logPrefix: string,
+    card?: EventCard,
+  ): Promise<void> {
+    if (eventResult.persistentEffectDescriptor) {
+      console.info(`[${logPrefix}] Persisting active effect: cardId=${eventResult.cardId} gameId=${gameId}`);
+      await activeEffectManager.addActiveEffect(
+        gameId,
+        eventResult.persistentEffectDescriptor,
+        eventResult.cardType,
+        eventResult.perPlayerEffects,
+        client,
+        eventResult.floodedRiver,
+      );
+    }
+
+    // Collect emission data for post-COMMIT broadcast (SP-4).
+    if (card) {
+      let drawingPlayerName = 'Unknown Player';
+      try {
+        const nameRow = await client.query(
+          'SELECT name FROM players WHERE id = $1 LIMIT 1',
+          [eventResult.drawingPlayerId],
+        );
+        if (nameRow.rows[0]?.name) {
+          drawingPlayerName = nameRow.rows[0].name as string;
+        }
+      } catch (nameErr) {
+        console.warn(`[${logPrefix}] Could not look up player name for socket emit: ${nameErr}`);
+      }
+
+      PlayerService.pendingEmissions.push({ gameId, eventResult, drawingPlayerName, card });
+    }
+  }
+
+  /**
+   * Flush deferred socket emissions after a successful COMMIT.
+   * Non-fatal — game state (DB) is the source of truth.
+   */
+  private static async flushEventEmissions(): Promise<void> {
+    const emissions = PlayerService.pendingEmissions.splice(0);
+    if (emissions.length === 0) return;
+
+    try {
+      const { emitEventCardDrawn, emitEventEffectApplied } = await import('./socketService');
+
+      for (const { gameId, eventResult, drawingPlayerName, card } of emissions) {
+        const affectedPlayerIds = eventResult.perPlayerEffects.map((e) => e.playerId);
+        const duration = eventResult.persistentEffectDescriptor ? 'persistent' : 'immediate';
+        const effectSummary = `${card.type} affecting ${eventResult.affectedZone.length} mileposts`;
+
+        emitEventCardDrawn(gameId, {
+          gameId,
+          card,
+          drawingPlayerId: eventResult.drawingPlayerId,
+          drawingPlayerName,
+          affectedZone: eventResult.affectedZone,
+          affectedPlayerIds,
+          effectSummary,
+          duration,
+          timestamp: new Date().toISOString(),
+        });
+
+        if (eventResult.perPlayerEffects.length > 0) {
+          emitEventEffectApplied(gameId, {
+            gameId,
+            cardId: eventResult.cardId,
+            effects: eventResult.perPlayerEffects,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+    } catch (emitErr) {
+      console.error(`[PlayerService] Failed to flush event emissions: ${emitErr}`);
+    }
+  }
+
+  /**
+   * Return the canonical milepost key ("row,col") for a city name by looking
+   * up the grid. Returns null if the city is not found.
+   */
+  private static getCityMilepointKey(cityName: string): string | null {
+    const grid = loadGridPoints();
+    // Prefer MajorCity center; fall back to any milepost with matching name
+    for (const [key, point] of grid) {
+      if (point.name === cityName && point.terrain === TerrainType.MajorCity) {
+        return key;
+      }
+    }
+    for (const [key, point] of grid) {
+      if (point.name === cityName) {
+        return key;
+      }
+    }
+    return null;
+  }
+
   private static normalizeTrainType(raw: unknown): TrainType {
     const s = String(raw ?? "").toLowerCase();
     const compact = s.replace(/[\s_-]+/g, "");
@@ -159,13 +282,19 @@ export class PlayerService {
 
     // ALWAYS draw 3 initial cards server-side (ignore any client-provided cards)
     // Cards must be drawn server-side to ensure proper deck management and prevent duplicates
+    // Event cards drawn during initial deal are discarded and replaced per game rules
     const handCardIds: number[] = [];
-    for (let i = 0; i < 3; i++) {
-      const card = demandDeckService.drawCard();
-      if (!card) {
-        throw new Error(`Failed to draw initial card ${i + 1} for player ${player.id}`);
+    while (handCardIds.length < 3) {
+      const drawResult = demandDeckService.drawCard();
+      if (!drawResult) {
+        throw new Error(`Failed to draw initial card ${handCardIds.length + 1} for player ${player.id}`);
       }
-      handCardIds.push(card.id);
+      if (drawResult.type === 'event') {
+        console.warn(`[addPlayer] Drew event card ${drawResult.card.id} during initial deal — discarding`);
+        demandDeckService.discardEventCard(drawResult.card.id);
+        continue;
+      }
+      handCardIds.push(drawResult.card.id);
     }
 
     const query = `
@@ -599,26 +728,139 @@ export class PlayerService {
     }
   }
 
+  /**
+   * Advance the current player index for a game.
+   *
+   * When `client` and `prevPlayerIndex` are provided (transactional path):
+   *  1. Uses `client.query` for the UPDATE (participates in caller's transaction).
+   *  2. Calls `cleanupExpiredEffects` for the previous player.
+   *  3. Calls `consumeLostTurn` for the next player; if lost, recursively
+   *     advances with an infinite-loop guard (at most playerCount skips).
+   *  4. Emits `emitTurnChange` for the final active player.
+   *
+   * When neither `client` nor `prevPlayerIndex` is provided (legacy path),
+   * skips effect management entirely — existing callers are unaffected.
+   */
   static async updateCurrentPlayerIndex(
     gameId: string,
-    currentPlayerIndex: number
+    currentPlayerIndex: number,
+    client?: import('pg').PoolClient,
+    prevPlayerIndex?: number,
   ): Promise<void> {
     const query = `
-            UPDATE games 
+            UPDATE games
             SET current_player_index = $1, updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
         `;
-    await db.query(query, [currentPlayerIndex, gameId]);
-    
-    // Emit turn change event to all clients in the game room
+
+    if (client) {
+      await client.query(query, [currentPlayerIndex, gameId]);
+    } else {
+      await db.query(query, [currentPlayerIndex, gameId]);
+    }
+
+    // ── Transactional turn lifecycle (SP-3) ──────────────────────────────────
+    if (client && prevPlayerIndex !== undefined) {
+      // Step 1: Clean up effects that expired when prevPlayer completed their turn.
+      // Use the previous player's current_turn_number as the completed turn number.
+      const prevPlayerRow = await client.query(
+        'SELECT id, current_turn_number FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
+        [gameId, prevPlayerIndex],
+      );
+      const prevTurnNumber: number = Number(prevPlayerRow.rows[0]?.current_turn_number ?? 0);
+
+      const { expiredCardIds } = await activeEffectManager.cleanupExpiredEffects(
+        gameId,
+        prevPlayerIndex,
+        prevTurnNumber,
+        client,
+      );
+      if (expiredCardIds.length > 0) {
+        console.info(
+          `[PlayerService] Effects expired on turn end: cardIds=${expiredCardIds.join(',')} prevPlayerIndex=${prevPlayerIndex} gameId=${gameId}`,
+        );
+        // Emit expiry notifications (SP-4). Non-fatal — game state is source of truth.
+        try {
+          const { emitEventEffectExpired } = await import('./socketService');
+          const expiredAt = new Date().toISOString();
+          for (const cardId of expiredCardIds) {
+            emitEventEffectExpired(gameId, { gameId, cardId, timestamp: expiredAt });
+          }
+        } catch (emitErr) {
+          console.error(`[PlayerService] Failed to emit effect-expired for gameId=${gameId}:`, emitErr);
+        }
+      }
+
+      // Step 2: Determine total player count so we can guard against infinite skips.
+      const countRow = await client.query(
+        'SELECT COUNT(*) AS cnt FROM players WHERE game_id = $1',
+        [gameId],
+      );
+      const playerCount = Number(countRow.rows[0]?.cnt ?? 1);
+
+      // Step 3: Check for Derailment turn-skips, advancing until an active player.
+      let resolvedIndex = currentPlayerIndex;
+      let skipsRemaining = playerCount; // guard: at most playerCount advances
+
+      while (skipsRemaining > 0) {
+        const nextRow = await client.query(
+          'SELECT id, current_turn_number FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
+          [gameId, resolvedIndex],
+        );
+        const nextPlayerId: string | undefined = nextRow.rows[0]?.id as string | undefined;
+
+        if (!nextPlayerId) {
+          console.warn(`[PlayerService] No player found at index ${resolvedIndex} in game ${gameId}`);
+          break;
+        }
+
+        const turnSkipped = await activeEffectManager.consumeLostTurn(gameId, nextPlayerId, client);
+
+        if (!turnSkipped) {
+          // This player is active — stop here.
+          break;
+        }
+
+        // Player was skipped due to Derailment.
+        console.info(
+          `[PlayerService] Player turn skipped (Derailment): playerId=${nextPlayerId} index=${resolvedIndex} gameId=${gameId}`,
+        );
+
+        resolvedIndex = (resolvedIndex + 1) % playerCount;
+        skipsRemaining--;
+      }
+
+      // Step 4: Emit turn change for the resolved active player.
+      const { emitTurnChange } = await import('./socketService');
+      const finalRow = await client.query(
+        'SELECT id, current_turn_number FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
+        [gameId, resolvedIndex],
+      );
+      const finalPlayerId: string | undefined = finalRow.rows[0]?.id as string | undefined;
+      if (finalPlayerId) {
+        // Update the stored index if we advanced past skipped players.
+        if (resolvedIndex !== currentPlayerIndex) {
+          await client.query(
+            `UPDATE games SET current_player_index = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+            [resolvedIndex, gameId],
+          );
+        }
+        emitTurnChange(gameId, resolvedIndex, finalPlayerId);
+      } else {
+        console.warn(`[PlayerService] No player found at resolved index ${resolvedIndex} for game ${gameId}`);
+      }
+
+      return;
+    }
+
+    // ── Legacy path: no client — emit turn change via db.query ───────────────
     const { getSocketIO } = await import('./socketService');
     const io = getSocketIO();
     if (io) {
-      // Get the player ID for the current player (internal query - doesn't need hand data)
       // Query players in same order as getPlayers (ORDER BY created_at ASC for consistency)
       const playerQuery = await db.query(
         'SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
-        [gameId, currentPlayerIndex]
+        [gameId, currentPlayerIndex],
       );
       // Validate that we have a valid player at this index
       if (playerQuery.rows && playerQuery.rows.length > 0 && currentPlayerIndex >= 0) {
@@ -749,14 +991,24 @@ export class PlayerService {
 
       const player = playerResult.rows[0];
       
-      // Draw a new card from the deck first
-      const newCard = await demandDeckService.drawCard();
-      if (!newCard) {
+      // Draw a new card from the deck.
+      // Keep drawing until we get a demand card — event cards are processed and discarded.
+      let newCard: import('../../shared/types/DemandCard').DemandCard | null = null;
+      let drawResult = demandDeckService.drawCard();
+      while (drawResult !== null && drawResult.type === 'event') {
+        console.info(`[fulfillDemand] Drew event card ${drawResult.card.id} — processing via EventCardService`);
+        const eventResult = await EventCardService.processEventCard(gameId, drawResult.card, playerId, client);
+        await PlayerService.persistEventEffect(gameId, eventResult, client, 'fulfillDemand', drawResult.card);
+        demandDeckService.discardEventCard(drawResult.card.id);
+        drawResult = demandDeckService.drawCard();
+      }
+      if (drawResult === null) {
         throw new Error('Failed to draw new card');
       }
-      
+      newCard = drawResult.card;
+
       // Create the new hand by replacing the fulfilled card with the new card
-      const newHand = player.hand.map(id => id === cardId ? newCard.id : id);
+      const newHand = player.hand.map(id => id === cardId ? newCard!.id : id);
 
       // Update player's hand in database
       const updateQuery = `
@@ -767,9 +1019,11 @@ export class PlayerService {
       await client.query(updateQuery, [newHand, gameId, playerId]);
 
       await client.query('COMMIT');
-      
+      await PlayerService.flushEventEmissions();
+
       return { newCard };
     } catch (error) {
+      PlayerService.pendingEmissions.length = 0;
       await client.query('ROLLBACK');
       throw error;
     } finally {
@@ -797,6 +1051,7 @@ export class PlayerService {
     const client = await db.connect();
     let drewCardId: number | null = null;
     let discardedCardId: number | null = null;
+    const discardedEventCardIds: number[] = [];
     try {
       await client.query("BEGIN");
 
@@ -850,6 +1105,27 @@ export class PlayerService {
         throw new Error("Not your turn");
       }
 
+      // ── Event card restriction checks ─────────────────────────────────────
+      // Check pickup/delivery restrictions from active event effects (coastal Strike)
+      const deliveryRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId);
+      if (deliveryRestrictions.length > 0) {
+        const cityKey = PlayerService.getCityMilepointKey(city);
+        for (const restriction of deliveryRestrictions) {
+          if (restriction.type === 'no_pickup_delivery_in_zone') {
+            const zoneSet = new Set(restriction.zone);
+            if (cityKey && zoneSet.has(cityKey)) {
+              console.warn(
+                `[PlayerService] Delivery rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${city} cityKey=${cityKey}`,
+              );
+              throw new Error(
+                `Delivery blocked by active event (Strike): city ${city} is within the coastal strike zone`,
+              );
+            }
+          }
+        }
+      }
+      // ── End restriction checks ────────────────────────────────────────────
+
       if (!handIds.includes(cardId)) {
         throw new Error("Demand card not in hand");
       }
@@ -878,10 +1154,22 @@ export class PlayerService {
         throw new Error("Invalid payment");
       }
 
-      const newCard = demandDeckService.drawCard();
-      if (!newCard) {
+      // Draw a new card. Keep drawing until we get a demand card — event cards are
+      // processed and discarded.
+      let newDrawResult = demandDeckService.drawCard();
+      while (newDrawResult !== null && newDrawResult.type === 'event') {
+        const eventCardId = newDrawResult.card.id;
+        discardedEventCardIds.push(eventCardId);
+        console.info(`[deliverLoad] Drew event card ${eventCardId} — processing via EventCardService`);
+        const deliverEventResult = await EventCardService.processEventCard(gameId, newDrawResult.card, playerId, client);
+        await PlayerService.persistEventEffect(gameId, deliverEventResult, client, 'deliverLoad', newDrawResult.card);
+        demandDeckService.discardEventCard(eventCardId);
+        newDrawResult = demandDeckService.drawCard();
+      }
+      if (!newDrawResult) {
         throw new Error("Failed to draw new card");
       }
+      const newCard = newDrawResult.card;
       drewCardId = newCard.id;
 
       const updatedHandIds = handIds.map((id) => (id === cardId ? newCard.id : id));
@@ -925,8 +1213,10 @@ export class PlayerService {
       );
 
       await client.query("COMMIT");
+      await PlayerService.flushEventEmissions();
       return { payment, repayment, updatedMoney, updatedDebtOwed, updatedLoads, newCard };
     } catch (error) {
+      PlayerService.pendingEmissions.length = 0;
       await client.query("ROLLBACK");
       // Best-effort compensation for in-memory deck mutations.
       // If we drew a replacement card, return it to the top of the draw pile.
@@ -941,6 +1231,14 @@ export class PlayerService {
       if (typeof discardedCardId === "number") {
         try {
           demandDeckService.returnDiscardedCardToDealt(discardedCardId);
+        } catch {
+          // ignore
+        }
+      }
+      // Return any event cards that were discarded during the draw loop back to the draw pile.
+      for (const eventId of discardedEventCardIds) {
+        try {
+          demandDeckService.returnDiscardedEventCardToDrawPile(eventId);
         } catch {
           // ignore
         }
@@ -1141,6 +1439,30 @@ export class PlayerService {
         throw new Error("Not your turn");
       }
 
+      // ── Event card restriction checks ─────────────────────────────────────
+      // Check movement restrictions from active event effects (Snow, Rail Strike)
+      const movementRestrictions = await activeEffectManager.getMovementRestrictions(gameId);
+      const destKey = `${to.row},${to.col}`;
+      for (const restriction of movementRestrictions) {
+        if (restriction.type === 'blocked_terrain' && restriction.zone) {
+          // The zone is pre-filtered to only include blocked terrain mileposts (blockedTerrainZone).
+          // Zone membership alone is sufficient — no need to re-check terrain type.
+          const zoneSet = new Set(restriction.zone);
+          if (zoneSet.has(destKey)) {
+            console.warn(
+              `[PlayerService] Movement rejected by event restriction: type=blocked_terrain gameId=${gameId} playerId=${playerId} destKey=${destKey}`,
+            );
+            throw new Error(
+              `Movement blocked by active event (Snow): destination ${destKey} is in the blocked terrain zone`,
+            );
+          }
+        }
+        // no_movement_on_player_rail: checked after track usage is computed (below)
+        // half_rate: does not block movement, only caps speed — enforcement is client-side movement cap
+        // The server does not re-validate movement distance, so no throw needed here.
+      }
+      // ── End restriction checks ────────────────────────────────────────────
+
       // Lock action log row for this turn (if it exists) so we can safely compute already-paid opponents.
       const actionsResult = await client.query(
         `SELECT actions
@@ -1216,6 +1538,7 @@ export class PlayerService {
 
       // Compute owners used for this move. If this is the first placement (no from), no fees.
       let ownersUsed: string[] = [];
+      let usesOwnTrack = false;
       if (from && (from.row !== to.row || from.col !== to.col)) {
         const allTracks = await TrackService.getAllTracks(gameId);
         const usage = computeTrackUsageForMove({
@@ -1228,6 +1551,25 @@ export class PlayerService {
           throw new Error(usage.errorMessage || "Invalid move");
         }
         ownersUsed = Array.from(usage.ownersUsed);
+        // Check if any edge in the path is owned by the current player
+        usesOwnTrack = usage.path.some(edge => edge.ownerPlayerIds.includes(playerId));
+      }
+
+      // ── Rail Strike: reject if this move uses the targeted player's own track ──
+      // This check must happen after track usage is computed so we know which
+      // track edges are involved. The player can still move on opponent or
+      // public track; only movement on their own rail is blocked.
+      if (usesOwnTrack) {
+        for (const restriction of movementRestrictions) {
+          if (restriction.type === 'no_movement_on_player_rail' && restriction.targetPlayerId === playerId) {
+            console.warn(
+              `[PlayerService] Movement rejected by event restriction: type=no_movement_on_player_rail gameId=${gameId} playerId=${playerId}`,
+            );
+            throw new Error(
+              `Movement blocked by active event (Rail Strike): player ${playerId} cannot move on their own track this turn`,
+            );
+          }
+        }
       }
 
       const newlyPayable = ownersUsed.filter((pid) => !alreadyPaid.has(pid));
@@ -1595,6 +1937,125 @@ export class PlayerService {
   }
 
   /**
+   * Core card-discard logic: discard old hand, draw 3 new Demand cards, persist to DB.
+   * Does NOT validate turns or advance the game turn — callers handle that.
+   *
+   * Callers pass in mutable `discardedIds` and `drawnIds` arrays so that
+   * partial progress is visible for rollback compensation even if this
+   * method throws mid-way (e.g. deck exhausted after 2 draws, or DB UPDATE fails).
+   *
+   * @returns newHandIds (persisted to DB).
+   */
+  private static async discardHandCore(
+    gameId: string,
+    playerId: string,
+    handIds: number[],
+    client: import("pg").PoolClient,
+    discardedIds: number[],
+    drawnIds: number[],
+    discardedEventIds: number[] = []
+  ): Promise<{ newHandIds: number[] }> {
+    // Discard old hand (must be currently dealt).
+    for (const id of handIds) {
+      demandDeckService.discardCard(id);
+      discardedIds.push(id);
+    }
+
+    // Draw replacement hand (future-proof loop structure).
+    // Event cards drawn during this process are discarded and replaced.
+    const newCards: DemandCard[] = [];
+    while (newCards.length < 3) {
+      const result = demandDeckService.drawCard();
+      if (!result) {
+        throw new Error("Failed to draw new demand card");
+      }
+      if (result.type === 'event') {
+        // Process the event card via EventCardService (replaces Project 1 discard stub)
+        console.info(`[discardHandCore] Drew event card ${result.card.id} — processing via EventCardService`);
+        const discardEventResult = await EventCardService.processEventCard(gameId, result.card, playerId, client);
+        await PlayerService.persistEventEffect(gameId, discardEventResult, client, 'discardHandCore', result.card);
+        demandDeckService.discardEventCard(result.card.id);
+        discardedEventIds.push(result.card.id);
+        continue;
+      }
+      newCards.push(result.card);
+      drawnIds.push(result.card.id);
+    }
+    const newHandIds = newCards.map((c) => c.id);
+
+    await client.query(
+      `UPDATE players
+       SET hand = $1
+       WHERE game_id = $2 AND id = $3`,
+      [newHandIds, gameId, playerId]
+    );
+
+    return { newHandIds };
+  }
+
+  /**
+   * Discard a player's entire hand and draw 3 new Demand cards.
+   * Accepts playerId directly — works for both human and bot players.
+   * Does NOT advance the game turn; callers manage turn lifecycle.
+   */
+  static async discardHandForPlayer(
+    gameId: string,
+    playerId: string
+  ): Promise<{ newHandIds: number[] }> {
+    const client = await db.connect();
+    const discardedIds: number[] = [];
+    const drawnIds: number[] = [];
+    const discardedEventIds: number[] = [];
+    try {
+      await client.query("BEGIN");
+
+      // Fetch current hand with row lock.
+      const playerResult = await client.query(
+        `SELECT hand
+         FROM players
+         WHERE game_id = $1 AND id = $2
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId, playerId]
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const currentHand: unknown = playerResult.rows[0].hand;
+      const handIds: number[] = Array.isArray(currentHand)
+        ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+        : [];
+
+      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client, discardedIds, drawnIds, discardedEventIds);
+
+      await client.query("COMMIT");
+      await PlayerService.flushEventEmissions();
+      return { newHandIds: coreResult.newHandIds };
+    } catch (err) {
+      PlayerService.pendingEmissions.length = 0;
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        /* rollback best-effort */
+      }
+      // Best-effort deck compensation: return drawn cards, restore discarded originals.
+      for (const id of drawnIds) {
+        try { demandDeckService.returnDealtCardToTop(id); } catch { /* best-effort */ }
+      }
+      for (const id of discardedIds) {
+        try { demandDeckService.returnDiscardedCardToDealt(id); } catch { /* best-effort */ }
+      }
+      for (const id of discardedEventIds) {
+        try { demandDeckService.returnDiscardedEventCardToDrawPile(id); } catch { /* best-effort */ }
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Discard the authenticated user's entire hand and draw 3 new Demand cards,
    * consuming (ending) the user's turn by advancing the game's currentPlayerIndex.
    *
@@ -1621,6 +2082,7 @@ export class PlayerService {
     const client = await db.connect();
     const discardedIds: number[] = [];
     const drawnIds: number[] = [];
+    const discardedEventIds: number[] = [];
     try {
       await client.query("BEGIN");
 
@@ -1705,30 +2167,8 @@ export class PlayerService {
       // - turn_build_cost === 0
       // - no server-tracked turn_actions this turn
 
-      // Discard old hand (must be currently dealt).
-      for (const id of handIds) {
-        demandDeckService.discardCard(id);
-        discardedIds.push(id);
-      }
-
-      // Draw replacement hand (future-proof loop structure).
-      const newCards: DemandCard[] = [];
-      while (newCards.length < 3) {
-        const card = demandDeckService.drawCard();
-        if (!card) {
-          throw new Error("Failed to draw new demand card");
-        }
-        newCards.push(card);
-        drawnIds.push(card.id);
-      }
-      const newHandIds = newCards.map((c) => c.id);
-
-      await client.query(
-        `UPDATE players
-         SET hand = $1
-         WHERE game_id = $2 AND id = $3`,
-        [newHandIds, gameId, playerId]
-      );
+      // Core card logic: discard old hand, draw 3 new cards, persist.
+      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client, discardedIds, drawnIds, discardedEventIds);
 
       // Increment per-player turn count at END of the active player's turn.
       await client.query(
@@ -1793,6 +2233,13 @@ export class PlayerService {
       for (const id of discardedIds) {
         try {
           demandDeckService.returnDiscardedCardToDealt(id);
+        } catch {
+          // ignore
+        }
+      }
+      for (const id of discardedEventIds) {
+        try {
+          demandDeckService.returnDiscardedEventCardToDrawPile(id);
         } catch {
           // ignore
         }
@@ -1907,15 +2354,20 @@ export class PlayerService {
         discardedIds.push(id);
       }
 
-      // Draw replacement hand.
+      // Draw replacement hand (event cards discarded and replaced per game rules).
       const newCards: DemandCard[] = [];
       while (newCards.length < 3) {
-        const card = demandDeckService.drawCard();
-        if (!card) {
+        const result = demandDeckService.drawCard();
+        if (!result) {
           throw new Error("Failed to draw new demand card");
         }
-        newCards.push(card);
-        drawnIds.push(card.id);
+        if (result.type === 'event') {
+          console.warn(`[restartPlayer] Drew event card ${result.card.id} during restart hand — discarding`);
+          demandDeckService.discardEventCard(result.card.id);
+          continue;
+        }
+        newCards.push(result.card);
+        drawnIds.push(result.card.id);
       }
       const newHandIds = newCards.map((c) => c.id);
 
@@ -2109,6 +2561,279 @@ export class PlayerService {
         throw new Error("Failed to load updated player");
       }
       return updatedPlayer;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Pick up a load for a player. Validates train capacity, atomically appends
+   * the load to the player's loads array, and clears any dropped-load state.
+   * Used by both human players and bots.
+   */
+  static async pickupLoadForPlayer(
+    gameId: string,
+    playerId: string,
+    loadType: LoadType,
+    cityName: string,
+  ): Promise<{ updatedLoads: LoadType[] }> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Lock the player row and read current state
+      const playerResult = await client.query(
+        `SELECT loads, train_type as "trainType"
+         FROM players
+         WHERE id = $1 AND game_id = $2
+         FOR UPDATE`,
+        [playerId, gameId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const currentLoads: LoadType[] = Array.isArray(playerResult.rows[0].loads)
+        ? (playerResult.rows[0].loads as LoadType[])
+        : [];
+      const trainType = PlayerService.normalizeTrainType(playerResult.rows[0].trainType);
+      const capacity = getTrainCapacity(trainType);
+
+      if (currentLoads.length >= capacity) {
+        throw new Error(`Train at full capacity (${currentLoads.length}/${capacity})`);
+      }
+
+      // ── Event card restriction checks ─────────────────────────────────────
+      // Check pickup/delivery restrictions from active event effects (coastal Strike)
+      const pickupRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId);
+      if (pickupRestrictions.length > 0 && cityName) {
+        const cityKey = PlayerService.getCityMilepointKey(cityName);
+        for (const restriction of pickupRestrictions) {
+          if (restriction.type === 'no_pickup_delivery_in_zone') {
+            const zoneSet = new Set(restriction.zone);
+            if (cityKey && zoneSet.has(cityKey)) {
+              console.warn(
+                `[PlayerService] Pickup rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${cityName} cityKey=${cityKey}`,
+              );
+              throw new Error(
+                `Pickup blocked by active event (Strike): city ${cityName} is within the coastal strike zone`,
+              );
+            }
+          }
+        }
+      }
+      // ── End restriction checks ────────────────────────────────────────────
+
+      // Atomically append load
+      const updateResult = await client.query(
+        `UPDATE players SET loads = array_append(loads, $1)
+         WHERE id = $2 AND game_id = $3
+         RETURNING loads`,
+        [loadType, playerId, gameId],
+      );
+
+      await client.query("COMMIT");
+
+      const updatedLoads: LoadType[] = updateResult.rows[0].loads as LoadType[];
+
+      // Best-effort: clear dropped-load state if this load was dropped at the city
+      if (cityName) {
+        try {
+          const loadSvc = LoadService.getInstance();
+          await loadSvc.pickupDroppedLoad(cityName, loadType, gameId);
+        } catch (droppedErr) {
+          console.error(
+            "[PlayerService] pickupLoadForPlayer dropped-load clear failed:",
+            droppedErr instanceof Error ? droppedErr.message : droppedErr,
+          );
+        }
+      }
+
+      return { updatedLoads };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Drop a load for a player at a city. Validates the player is carrying the load,
+   * removes it from their loads array, and handles city placement via LoadService.
+   * Used by both human players and bots.
+   */
+  static async dropLoadForPlayer(
+    gameId: string,
+    playerId: string,
+    loadType: LoadType,
+    cityName: string,
+  ): Promise<void> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Lock the player row and read current loads
+      const playerResult = await client.query(
+        `SELECT loads
+         FROM players
+         WHERE id = $1 AND game_id = $2
+         FOR UPDATE`,
+        [playerId, gameId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const currentLoads: LoadType[] = Array.isArray(playerResult.rows[0].loads)
+        ? (playerResult.rows[0].loads as LoadType[])
+        : [];
+
+      if (!currentLoads.includes(loadType)) {
+        throw new Error(`Player is not carrying load: ${loadType}`);
+      }
+
+      // Remove the first occurrence of this load type
+      await client.query(
+        `UPDATE players SET loads = array_remove(loads, $1)
+         WHERE id = $2 AND game_id = $3`,
+        [loadType, playerId, gameId],
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Best-effort: handle city placement via LoadService
+    try {
+      const loadSvc = LoadService.getInstance();
+      if (loadSvc.isLoadAvailableAtCity(loadType, cityName)) {
+        // Load is native to this city — return to tray
+        await loadSvc.returnLoad(cityName, loadType, gameId);
+      } else {
+        // Drop as a non-native load at this city
+        await loadSvc.setLoadInCity(cityName, loadType, gameId);
+      }
+    } catch (dropErr) {
+      console.error(
+        "[PlayerService] dropLoadForPlayer city placement failed:",
+        dropErr instanceof Error ? dropErr.message : dropErr,
+      );
+    }
+  }
+
+  /**
+   * Build track for a player. Atomically UPSERTs player_tracks and deducts cost
+   * from the player's money. Validates sufficient funds before deducting.
+   * Used by both human players and bots.
+   */
+  static async buildTrackForPlayer(
+    gameId: string,
+    playerId: string,
+    newSegments: TrackSegment[],
+    existingSegments: TrackSegment[],
+    cost: number,
+  ): Promise<{ remainingMoney: number }> {
+    const allSegments = [...existingSegments, ...newSegments];
+    const totalCost = allSegments.reduce((s, seg) => s + seg.cost, 0);
+
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Validate player has sufficient funds
+      const playerResult = await client.query(
+        `SELECT money FROM players WHERE id = $1 AND game_id = $2 FOR UPDATE`,
+        [playerId, gameId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+      const currentMoney = playerResult.rows[0].money as number;
+      if (currentMoney < cost) {
+        throw new Error(
+          `Insufficient funds: need ${cost}, have ${currentMoney}`,
+        );
+      }
+
+      // ── Event card restriction checks ─────────────────────────────────────
+      // Check build restrictions from active event effects (Snow blocked_terrain, Rail Strike)
+      const buildRestrictions = await activeEffectManager.getBuildRestrictions(gameId);
+      for (const restriction of buildRestrictions) {
+        if (restriction.type === 'blocked_terrain' && restriction.zone) {
+          // The zone is pre-filtered to only include blocked terrain mileposts (blockedTerrainZone).
+          // Zone membership alone is sufficient — no need to re-check terrain type.
+          const zoneSet = new Set(restriction.zone);
+          for (const seg of newSegments) {
+            const destKey = `${seg.to.row},${seg.to.col}`;
+            if (zoneSet.has(destKey)) {
+              console.warn(
+                `[PlayerService] Build rejected by event restriction: type=blocked_terrain gameId=${gameId} playerId=${playerId} destKey=${destKey}`,
+              );
+              throw new Error(
+                `Build blocked by active event (Snow): destination milepost ${destKey} is in the blocked terrain zone`,
+              );
+            }
+          }
+        }
+        if (restriction.type === 'no_build_for_player' && restriction.targetPlayerId === playerId) {
+          console.warn(
+            `[PlayerService] Build rejected by event restriction: type=no_build_for_player gameId=${gameId} playerId=${playerId}`,
+          );
+          throw new Error(
+            `Build blocked by active event (Rail Strike): player ${playerId} cannot build track this turn`,
+          );
+        }
+      }
+
+      // Check for active Flood effects blocking river rebuild
+      // (Product Decision 2: Flood does NOT emit a BuildRestriction — we check floodedRiver directly)
+      const activeEffects = await activeEffectManager.getActiveEffects(gameId);
+      for (const effect of activeEffects) {
+        if (effect.cardType === EventCardType.Flood && effect.floodedRiver) {
+          const riverEdgeKeys = getRiverEdgeKeys(effect.floodedRiver);
+          if (riverEdgeKeys) {
+            for (const seg of newSegments) {
+              if (segmentCrossesRiver(seg, riverEdgeKeys)) {
+                console.warn(
+                  `[PlayerService] Build rejected by event restriction: type=flood_rebuild gameId=${gameId} playerId=${playerId} river=${effect.floodedRiver}`,
+                );
+                throw new Error(
+                  `Build blocked: cannot rebuild track across the ${effect.floodedRiver} river while Flood event is active`,
+                );
+              }
+            }
+          }
+        }
+      }
+      // ── End restriction checks ────────────────────────────────────────────
+
+      // 1. UPSERT player_tracks
+      await client.query(
+        `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (game_id, player_id)
+         DO UPDATE SET segments = $3, total_cost = $4, turn_build_cost = $5, last_build_timestamp = NOW()`,
+        [gameId, playerId, JSON.stringify(allSegments), totalCost, cost],
+      );
+
+      // 2. Deduct money
+      const moneyResult = await client.query(
+        `UPDATE players SET money = money - $1 WHERE id = $2 RETURNING money`,
+        [cost, playerId],
+      );
+
+      await client.query("COMMIT");
+
+      const remainingMoney = moneyResult.rows[0]?.money as number;
+      return { remainingMoney };
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;

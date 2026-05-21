@@ -105,12 +105,12 @@ const mockHexDistance = jest.fn((r1: number, c1: number, r2: number, c2: number)
   return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
 });
 
-const mockComputeLandmass = jest.fn(() => new Set<string>());
-const mockComputeFerryRouteInfo = jest.fn(() => ({
+const mockComputeLandmass = jest.fn((..._args: any[]) => new Set<string>());
+const mockComputeFerryRouteInfo = jest.fn((..._args: any[]) => ({
   requiresFerry: false,
   canCrossFerry: false,
-  departurePorts: [],
-  arrivalPorts: [],
+  departurePorts: [] as Array<{ row: number; col: number }>,
+  arrivalPorts: [] as Array<{ row: number; col: number }>,
   cheapestFerryCost: 0,
 }));
 

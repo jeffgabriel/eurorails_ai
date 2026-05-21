@@ -350,6 +350,12 @@ export async function onTurnChange(
     // the turn changes current_player_index, making the check always fail.
     await checkAndResolveFinalTurn(gameId);
 
+    // Clear the double-execution guard BEFORE advancing so that if the next
+    // player is the same bot (e.g., round 1→2 transition where the build order
+    // reverses and the bot goes first again), the fire-and-forget trigger from
+    // emitTurnChange can re-enter onTurnChange.
+    pendingBotTurns.delete(gameId);
+
     // Advance to next player
     await advanceTurnAfterBot(gameId);
   } catch (error) {
@@ -426,7 +432,7 @@ export async function advanceTurnAfterBot(gameId: string): Promise<void> {
   if (!game) return;
 
   if (game.status === 'initialBuild') {
-    await InitialBuildService.advanceTurn(gameId);
+    await InitialBuildService.advanceTurn(gameId, game.current_player_index);
   } else if (game.status === 'active') {
     const countResult = await db.query(
       'SELECT COUNT(*)::int as count FROM players WHERE game_id = $1',

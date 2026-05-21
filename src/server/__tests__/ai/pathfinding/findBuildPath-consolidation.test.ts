@@ -46,7 +46,7 @@ jest.mock('../../../services/MapTopology', () => ({
     const deltas: [number, number][] = isEvenRow
       ? [[-1, -1], [-1, 0], [0, -1], [0, 1], [1, -1], [1, 0]]
       : [[-1, 0], [-1, 1], [0, -1], [0, 1], [1, 0], [1, 1]];
-    const result = [];
+    const result: { row: number; col: number }[] = [];
     for (const [dr, dc] of deltas) {
       const nr = row + dr;
       const nc = col + dc;
@@ -239,7 +239,7 @@ describe('Cost agreement: simulateTrip vs computeBuildSegments (AC5)', () => {
       const snapshot = makeSimulateSnapshot();
 
       // simulateTrip: deliver stop at target, no payment (just measuring build cost)
-      const tripResult = simulateTrip(startPos, [{ action: 'deliver', city: 'End' }], snapshot);
+      const tripResult = simulateTrip(startPos, [{ action: 'deliver', city: 'End', loadType: 'Iron' }], snapshot);
 
       // computeBuildSegments: single start position, target at End
       const segments = computeBuildSegments(
@@ -280,7 +280,7 @@ describe('Cost agreement: simulateTrip vs computeBuildSegments (AC5)', () => {
       const snapshot = makeSimulateSnapshot({ existingSegments: existingSegs });
 
       // simulateTrip: deliver stop at (0,4)
-      const tripResult = simulateTrip(startPos, [{ action: 'deliver', city: 'Target' }], snapshot);
+      const tripResult = simulateTrip(startPos, [{ action: 'deliver', city: 'Target', loadType: 'Iron' }], snapshot);
 
       // computeBuildSegments: start from existing track endpoints, target at (0,4)
       const segments = computeBuildSegments(
@@ -317,7 +317,7 @@ describe('Cost agreement: simulateTrip vs computeBuildSegments (AC5)', () => {
       const snapshot = makeSimulateSnapshot();
 
       // simulateTrip: deliver stop at MountainEnd
-      const tripResult = simulateTrip(startPos, [{ action: 'deliver', city: 'MountainEnd' }], snapshot);
+      const tripResult = simulateTrip(startPos, [{ action: 'deliver', city: 'MountainEnd', loadType: 'Iron' }], snapshot);
 
       // computeBuildSegments: no existing track, target at (2,0)
       const segments = computeBuildSegments(
@@ -360,8 +360,8 @@ describe('Cost agreement: simulateTrip vs computeBuildSegments (AC5)', () => {
       const tripResult = simulateTrip(
         startPos,
         [
-          { action: 'pickup', city: 'PickupCity2' },
-          { action: 'deliver', city: 'DeliveryCity2', payment: 10 },
+          { action: 'pickup', city: 'PickupCity2', loadType: 'Iron' },
+          { action: 'deliver', city: 'DeliveryCity2', payment: 10, loadType: 'Iron' },
         ],
         snapshot,
       );
@@ -455,7 +455,7 @@ describe('AC7: s3 t15 affordability gate regression (pair:116-Fish+71-China:B-th
 
     const result = simulateTrip(
       startPos,
-      [{ action: 'deliver', city: 'FarTarget' }],
+      [{ action: 'deliver', city: 'FarTarget', loadType: 'Iron' }],
       snapshot,
     );
 
@@ -503,7 +503,7 @@ describe('Parallel-build penalty alignment (JIRA-236 regression)', () => {
     const snapshot = makeSimulateSnapshot({ existingSegments: existingSegs });
 
     // simulateTrip: deliver at ParallelTarget
-    const tripResult = simulateTrip(startPos, [{ action: 'deliver', city: 'ParallelTarget' }], snapshot);
+    const tripResult = simulateTrip(startPos, [{ action: 'deliver', city: 'ParallelTarget', loadType: 'Iron' }], snapshot);
 
     // computeBuildSegments: start from existing track, target at (0,4)
     // Pass existingTrackIndex to match simulator's behavior

@@ -160,7 +160,7 @@ describe('ClaudeAgentSdkAdapter — happy path', () => {
     await adapter.chat({ ...baseRequest, model: 'claude-haiku-4-5-20251001' });
 
     const callArgs = mockQuery.mock.calls[0][0];
-    expect(callArgs.options.model).toBe('claude-haiku-4-5-20251001');
+    expect(callArgs.options!.model).toBe('claude-haiku-4-5-20251001');
   });
 
   it('passes allowedTools: [] to disable tool use', async () => {
@@ -176,8 +176,8 @@ describe('ClaudeAgentSdkAdapter — happy path', () => {
     await adapter.chat(baseRequest);
 
     const callArgs = mockQuery.mock.calls[0][0];
-    expect(callArgs.options.allowedTools).toEqual([]);
-    expect(callArgs.options.tools).toEqual([]);
+    expect(callArgs.options!.allowedTools).toEqual([]);
+    expect(callArgs.options!.tools).toEqual([]);
   });
 
   it('accumulates result text from SDK result block with success subtype', async () => {

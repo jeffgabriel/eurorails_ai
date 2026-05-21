@@ -59,7 +59,7 @@ module.exports = {
         // Explicitly handle JS files with babel-jest (only for .js/.jsx, not .ts/.tsx)
         '^.+\\.(js|jsx)$': 'babel-jest',
       },
-      transformIgnorePatterns: ['/node_modules/(?!(phaser)/)'],
+      transformIgnorePatterns: ['/node_modules/(?!(phaser|uuid)/)'],
       moduleNameMapper: {
         '^phaser$': '<rootDir>/node_modules/phaser/dist/phaser.js',
         '^@/(.*)$': '<rootDir>/src/$1',
@@ -84,8 +84,9 @@ module.exports = {
             useESM: false,
           },
         ],
+        '^.+\\.(js|jsx)$': 'babel-jest',
       },
-      transformIgnorePatterns: ['/node_modules/'],
+      transformIgnorePatterns: ['/node_modules/(?!(uuid)/)'],
       // Map the ESM-only claude-agent-sdk to a CJS-compatible stub for Jest.
       // Real usage is in production code; tests mock this at the module boundary.
       moduleNameMapper: {
@@ -139,8 +140,9 @@ module.exports = {
             useESM: false,
           },
         ],
+        '^.+\\.(js|jsx)$': 'babel-jest',
       },
-      transformIgnorePatterns: ['/node_modules/'],
+      transformIgnorePatterns: ['/node_modules/(?!(uuid)/)'],
     },
   ],
 };

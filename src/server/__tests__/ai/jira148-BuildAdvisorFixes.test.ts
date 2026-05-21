@@ -62,11 +62,8 @@ function makeDemand(overrides: Partial<DemandContext> = {}): DemandContext {
     estimatedTurns: 3,
     demandScore: 2.5,
     efficiencyPerTurn: 1.5,
-    corridorCities: 2,
-    onRoute: false,
-    gameState: GameState.Mid,
     ...overrides,
-  };
+  } as unknown as DemandContext;
 }
 
 function makeRoute(overrides: Partial<StrategicRoute> = {}): StrategicRoute {
@@ -97,7 +94,7 @@ describe('JIRA-148: getBuildAdvisorPrompt — no demand cards', () => {
     const route = makeRoute();
     const corridorMap = { rendered: 'test corridor', bounds: { minRow: 0, maxRow: 20, minCol: 0, maxCol: 20 } };
 
-    const { user } = getBuildAdvisorPrompt(context, route, corridorMap);
+    const { user } = getBuildAdvisorPrompt(context, route, corridorMap as any);
 
     expect(user).not.toContain('DEMAND CARDS');
     expect(user).not.toContain('Coal from Essen');
@@ -110,7 +107,7 @@ describe('JIRA-148: getBuildAdvisorPrompt — no demand cards', () => {
     const route = makeRoute();
     const corridorMap = { rendered: 'test corridor map', bounds: { minRow: 0, maxRow: 20, minCol: 0, maxCol: 20 } };
 
-    const { user } = getBuildAdvisorPrompt(context, route, corridorMap);
+    const { user } = getBuildAdvisorPrompt(context, route, corridorMap as any);
 
     expect(user).toContain('CORRIDOR MAP');
     expect(user).toContain('ACTIVE ROUTE');

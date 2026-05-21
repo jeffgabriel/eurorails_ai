@@ -49,10 +49,9 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     unconnectedMajorCities: [],
     turnNumber: 5,
     trainType: 'Freight',
-    demandCards: [],
     gameState: GameState.Mid,
     ...overrides,
-  };
+  } as unknown as GameContext;
 }
 
 /** Minimal CorridorMap for tests */
@@ -147,7 +146,7 @@ describe('AC2: Legend entries for ferry port and water', () => {
       allPlayerTracks: [],
       loadAvailability: {},
     };
-    const result = MapRenderer.renderRouteCorridor(route, snapshot, smallGrid, []);
+    const result = MapRenderer.renderRouteCorridor(route, snapshot as any, smallGrid, []);
     expect(result.rendered).toContain('F=ferry port');
     expect(result.rendered).toContain('~=water(impassable)');
   });
