@@ -36,6 +36,12 @@ jest.mock('../../services/ai/PathCostEstimator', () => ({
   clearPathCostCache: jest.fn(),
 }));
 
+// Mock BotMemory so updateMemory (called by end-game lock hook) doesn't hit the DB
+const mockUpdateMemory = jest.fn().mockResolvedValue(undefined);
+jest.mock('../../services/ai/BotMemory', () => ({
+  updateMemory: mockUpdateMemory,
+}));
+
 // Mock MapTopology to control grid + city lookup
 // Using Map<string, any> since the mock grid is just for test fixtures
 const mockGrid = new Map<string, { row: number; col: number; terrain: number; name?: string }>();
@@ -2676,5 +2682,99 @@ describe('JIRA-249/250: enumerateCandidates includes carry floor and corridor ca
 
     const corridorCandidates = candidates.filter(c => c.id.startsWith('corridor:'));
     expect(corridorCandidates.length).toBeGreaterThan(0);
+  });
+});
+
+// ── JIRA-255 Layer A: End-game lock mechanism ──────────────────────────
+
+describe('JIRA-255 Layer A: end-game lock in planTripDeterministic', () => {
+  beforeEach(() => {
+    mockUpdateMemory.mockClear();
+    // Default cheapPrune: always keep
+    mockEstimateGraphPathCost.mockReturnValue({
+      buildCost: 0, pathLength: 1, estimatedTurns: 1, reachable: true, newSegments: [],
+    });
+    // Default simulateTrip: feasible result
+    mockSimulateTrip.mockReturnValue({
+      feasible: true,
+      net: 20,
+      turns: 3,
+      builtSegments: [],
+      endCity: 'DeliveryCity',
+      minCashRelative: 0,
+      reasoning: 'ok',
+    });
+  });
+
+  /** A demand that cheapPrune keeps and simulateTrip scores as feasible */
+  function makeSingleDemand(): DemandContext {
+    return makeDemand({ cardIndex: 0, loadType: 'Coal', deliveryCity: 'Paris', payout: 25 });
+  }
+
+  it('sets endGameLocked=true when cash > 200 and lock was false', () => {
+    const memory = makeMemory({ endGameLocked: false });
+    const snap = makeSnapshot({ money: 205 });
+    const ctx = makeContext([makeSingleDemand()]);
+
+    planTripDeterministic(snap, ctx, memory);
+
+    expect(memory.endGameLocked).toBe(true);
+    expect(mockUpdateMemory).toHaveBeenCalledWith('test-game', 'bot-1', { endGameLocked: true });
+  });
+
+  it('sets endGameLocked=true when classifyGamePhase returns late (turn >= 80)', () => {
+    const memory = makeMemory({ endGameLocked: false, deliveryCount: 5 });
+    // money <= 200 but turn=80 → late
+    const snap: WorldSnapshot = {
+      ...makeSnapshot({ money: 100 }),
+      turnNumber: 80,
+    };
+    const ctx = makeContext([makeSingleDemand()]);
+
+    planTripDeterministic(snap, ctx, memory);
+
+    expect(memory.endGameLocked).toBe(true);
+    expect(mockUpdateMemory).toHaveBeenCalledWith('test-game', 'bot-1', { endGameLocked: true });
+  });
+
+  it('does not set endGameLocked when cash <= 200 and phase is not late', () => {
+    const memory = makeMemory({ deliveryCount: 1 });
+    // money=100, turn=10 (default in makeSnapshot), deliveries=1, cmc=0 → early phase
+    const snap = makeSnapshot({ money: 100 });
+    const ctx = makeContext([makeSingleDemand()]);
+
+    planTripDeterministic(snap, ctx, memory);
+
+    // Lock was not set — remains absent (undefined)
+    expect(memory.endGameLocked).toBeFalsy();
+    expect(mockUpdateMemory).not.toHaveBeenCalledWith('test-game', 'bot-1', { endGameLocked: true });
+  });
+
+  it('endGameLocked remains true when already set (sticky, not re-set on cash dip)', () => {
+    const memory = makeMemory({ endGameLocked: true });
+    // money now only 150 (post-build dip) — lock should stay
+    const snap = makeSnapshot({ money: 150 });
+    const ctx = makeContext([makeSingleDemand()]);
+
+    mockUpdateMemory.mockClear();
+    planTripDeterministic(snap, ctx, memory);
+
+    expect(memory.endGameLocked).toBe(true);
+    // updateMemory should NOT be called again since lock was already set
+    expect(mockUpdateMemory).not.toHaveBeenCalledWith('test-game', 'bot-1', { endGameLocked: true });
+  });
+
+  it('sets endGameLocked=true when citiesConnected >= 5 (late via classifyGamePhase)', () => {
+    const memory = makeMemory({ endGameLocked: false, deliveryCount: 10 });
+    // money=50 but 5 cities connected → late phase
+    const snap = makeSnapshot({ money: 50 });
+    const ctx = makeContext([makeSingleDemand()], {
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E'],
+    });
+
+    planTripDeterministic(snap, ctx, memory);
+
+    expect(memory.endGameLocked).toBe(true);
+    expect(mockUpdateMemory).toHaveBeenCalledWith('test-game', 'bot-1', { endGameLocked: true });
   });
 });
