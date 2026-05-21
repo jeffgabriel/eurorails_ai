@@ -1,13 +1,15 @@
 /**
- * routeHelpers unit tests — isStopComplete, resolveBuildTarget
+ * routeHelpers unit tests — isStopComplete, resolveBuildTarget, isStructurallyReachable
  *
  * Tests cover:
  * - isStopComplete: pickup completion (count-aware JIRA-104 logic), delivery completion
  * - resolveBuildTarget: route-based targets, victory build override, null (all on-network)
+ * - isStructurallyReachable: unbounded-budget reachability check (JIRA-253)
  */
 
-import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState, isDeliveryComplete, isRouteImpossible, findNextRoutePickupOffNetwork, BuildTargetResult } from '../../services/ai/routeHelpers';
+import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState, isDeliveryComplete, isRouteImpossible, findNextRoutePickupOffNetwork, BuildTargetResult, isStructurallyReachable } from '../../services/ai/routeHelpers';
 import { GameState, GameContext, RouteStop, StrategicRoute, TrainType, WorldSnapshot, TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
+import { GridCoord, _resetCache } from '../../services/MapTopology';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1733,5 +1735,97 @@ describe('JIRA-243: resolveBuildTarget — End-state victory-build override', ()
     expect(endResult!.isVictoryBuild).toBe(true);
     expect(midResult!.isVictoryBuild).toBe(true);
     expect(endResult!.targetCity).toBe(midResult!.targetCity);
+  });
+});
+
+// ── isStructurallyReachable tests ──────────────────────────────────────────
+
+describe('isStructurallyReachable', () => {
+  // Known grid positions from gridPoints.json (GridX = col, GridY = row)
+  // Frankfurt: Small City, row=29, col=44
+  // Wroclaw: Small City, row=29, col=57
+  // Leipzig: Small City, row=27, col=50 (between Frankfurt and Berlin)
+  const FRANKFURT: GridCoord = { row: 29, col: 44 };
+  const WROCLAW: GridCoord = { row: 29, col: 57 };
+  const LEIPZIG: GridCoord = { row: 27, col: 50 };
+
+  beforeEach(() => _resetCache());
+
+  it('returns true when target is structurally reachable (Frankfurt → Wroclaw)', () => {
+    // Frankfurt and Wroclaw are both on the European mainland with no structural barrier
+    const result = isStructurallyReachable(
+      FRANKFURT,
+      WROCLAW,
+      [],
+      new Set<string>(),
+    );
+    expect(result).toBe(true);
+  });
+
+  it('returns true for a closer reachable target (Frankfurt → Leipzig)', () => {
+    // Leipzig is a Small City between Frankfurt and Berlin — no structural barrier
+    const result = isStructurallyReachable(
+      FRANKFURT,
+      LEIPZIG,
+      [],
+      new Set<string>(),
+    );
+    expect(result).toBe(true);
+  });
+
+  it('returns false for a target in the middle of the ocean (not a valid grid node)', () => {
+    // Coordinates deep in the ocean — no grid node exists there, so pathfinding
+    // cannot land on this point. The last segment of computeBuildSegments will NOT
+    // match this coordinate.
+    const OCEAN_COORD: GridCoord = { row: 10, col: 5 }; // far Atlantic, no land nodes
+    const result = isStructurallyReachable(
+      FRANKFURT,
+      OCEAN_COORD,
+      [],
+      new Set<string>(),
+    );
+    expect(result).toBe(false);
+  });
+
+  it('returns false when buildOrigin is null/undefined (fail-safe)', () => {
+    const result = isStructurallyReachable(
+      null as unknown as GridCoord,
+      WROCLAW,
+      [],
+      new Set<string>(),
+    );
+    expect(result).toBe(false);
+  });
+
+  it('returns false when target is null/undefined (fail-safe)', () => {
+    const result = isStructurallyReachable(
+      FRANKFURT,
+      null as unknown as GridCoord,
+      [],
+      new Set<string>(),
+    );
+    expect(result).toBe(false);
+  });
+
+  it('does not mutate existingSegments input (pure function)', () => {
+    const existingSegments: TrackSegment[] = [];
+    const occupiedEdges = new Set<string>();
+    const segmentsBefore = [...existingSegments];
+    const edgesBefore = new Set(occupiedEdges);
+
+    isStructurallyReachable(FRANKFURT, WROCLAW, existingSegments, occupiedEdges);
+
+    expect(existingSegments).toEqual(segmentsBefore);
+    expect(occupiedEdges).toEqual(edgesBefore);
+  });
+
+  it('does not mutate occupiedEdges input (pure function)', () => {
+    const existingSegments: TrackSegment[] = [];
+    const occupiedEdges = new Set<string>(['10,10-10,11', '10,11-10,10']);
+    const edgesSnapshot = new Set(occupiedEdges);
+
+    isStructurallyReachable(FRANKFURT, WROCLAW, existingSegments, occupiedEdges);
+
+    expect(occupiedEdges).toEqual(edgesSnapshot);
   });
 });
