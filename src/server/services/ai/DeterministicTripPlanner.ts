@@ -36,7 +36,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { cheapestUnconnectedMajorConnectorCost } from './victoryRules';
 import { updateMemory } from './BotMemory';
-import { isWinCompleting } from './winCompletion';
+import { isWinCompleting, fullWinCost } from './winCompletion';
 
 // ── Tunables ───────────────────────────────────────────────────────────
 
@@ -1406,6 +1406,13 @@ function synthesizeReasoning(
   opts: ResolvedOptions,
   supplyDiffLines?: string[],
   enumerationMs?: number,
+  endGameContext?: {
+    endGameLocked: boolean;
+    fullWinCostM: number;
+    isTop1WinCompleting: boolean;
+    projectedCash: number;
+    winCompleterCount: number;
+  },
 ): string {
   const pattern = inferPatternLabel(top1);
   const stopsStr = top1.stops
@@ -1431,6 +1438,15 @@ function synthesizeReasoning(
   }
   reasoning += `  Stops: ${stopsStr}\n`;
   reasoning += `  Rationale: ${patternExplanation}\n`;
+
+  // JIRA-255 Layer D: end-game annotation — only emit when active to avoid log noise.
+  if (endGameContext?.endGameLocked) {
+    if (endGameContext.isTop1WinCompleting) {
+      reasoning += `  End-game: win-completer (projected $${endGameContext.projectedCash.toFixed(0)}M cash, full win cost $${endGameContext.fullWinCostM.toFixed(0)}M); ranked by fewest turns.\n`;
+    } else {
+      reasoning += `  End-game: locked (full win cost $${endGameContext.fullWinCostM.toFixed(0)}M); no win-completers in set (${endGameContext.winCompleterCount}); velocity ranking applied.\n`;
+    }
+  }
 
   // JIRA-230 BE-003: chosen-supply surface lines
   if (supplyDiffLines && supplyDiffLines.length > 0) {
@@ -1914,13 +1930,33 @@ export function planTripDeterministic(
     }
   }
 
+  // JIRA-255 Layer D: compute end-game context for diagnostic emit.
+  // Only when endGameLocked to avoid computing fullWinCost on every non-end-game turn.
+  let endGameContext: Parameters<typeof synthesizeReasoning>[6] | undefined;
+  if (memory.endGameLocked) {
+    const egUnconnected = context.unconnectedMajorCities ?? [];
+    const egCmcCount = context.connectedMajorCities?.length ?? 0;
+    const egFullWinCostM = fullWinCost(egUnconnected, egCmcCount);
+    const egWinCompleterCount = feasible.filter(
+      (c) => isWinCompleting(snapshot.bot.money, c.net, egUnconnected, egCmcCount),
+    ).length;
+    const egIsTop1Completing = isWinCompleting(snapshot.bot.money, top1.net, egUnconnected, egCmcCount);
+    endGameContext = {
+      endGameLocked: true,
+      fullWinCostM: egFullWinCostM,
+      isTop1WinCompleting: egIsTop1Completing,
+      projectedCash: snapshot.bot.money + top1.net,
+      winCompleterCount: egWinCompleterCount,
+    };
+  }
+
   const latencyMs = Date.now() - startMs;
   const upgradeNote = upgradeOnRoute
     ? `\n  Upgrade emitted: ${upgradeOnRoute} (cost ${UPGRADE_COST_M}M, cash ${snapshot.bot.money}M, build ${top1.buildCost}M).`
     : upgradeDecision.gateReason
       ? `\n  Upgrade skipped: ${upgradeDecision.gateReason}.`
       : '';
-  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, supplyDiffLines, enumerationMs) + upgradeNote;
+  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, supplyDiffLines, enumerationMs, endGameContext) + upgradeNote;
   const route = buildStrategicRoute(top1, snapshot.turnNumber, reasoning, upgradeOnRoute);
 
   return {
