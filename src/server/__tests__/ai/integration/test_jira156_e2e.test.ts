@@ -610,6 +610,7 @@ describe('JIRA-156 mid-turn replan: delivery triggers TripPlanner + RouteEnrichm
     const context = makeContext({
       position: { city: 'Berlin', row: 2, col: 2 },
       citiesOnNetwork: ['Berlin', 'Lyon', 'Madrid'],
+      loads: ['Coal'], // JIRA-249 L3: guard requires load present before deliver
     });
     const snapshot = makeSnapshot({ botCity: 'Berlin', botRow: 2, botCol: 2 });
 

@@ -426,6 +426,7 @@ describe('MovementPhasePlanner.run — delivery + PostDeliveryReplanner', () => 
     });
     const context = makeContext({
       position: { row: 5, col: 5, city: 'Berlin' },
+      loads: ['Wine'], // JIRA-249 L3: guard requires load present before deliver
     });
 
     mockExecuteStopAction.mockResolvedValue({
@@ -463,6 +464,7 @@ describe('MovementPhasePlanner.run — delivery + PostDeliveryReplanner', () => 
     });
     const context = makeContext({
       position: { row: 5, col: 5, city: 'Berlin' },
+      loads: ['Wine'], // JIRA-249 L3: guard requires load present before deliver
     });
 
     mockExecuteStopAction.mockResolvedValue({
@@ -526,6 +528,7 @@ describe('MovementPhasePlanner.run — delivery + PostDeliveryReplanner', () => 
       position: { row: 1, col: 1, city: 'Paris' },
       citiesOnNetwork: ['Berlin'],
       speed: 9,
+      loads: ['Wine'], // JIRA-249 L3: guard requires load present before deliver
     });
     const snapshot = makeSnapshot();
 
@@ -678,6 +681,7 @@ describe('MovementPhasePlanner.run — delivery + PostDeliveryReplanner', () => 
       position: { row: 1, col: 1, city: 'Paris' },
       citiesOnNetwork: ['Berlin', 'Wien'],
       speed: 9,
+      loads: ['Wine'], // JIRA-249 L3: guard requires load present before deliver
     });
     const snapshot = makeSnapshot();
 
@@ -809,6 +813,7 @@ describe('MovementPhasePlanner.run — PhaseAResult fields', () => {
     });
     const context = makeContext({
       position: { row: 5, col: 5, city: 'Berlin' },
+      loads: ['Wine'], // JIRA-249 L3: guard requires load present before deliver
     });
 
     mockExecuteStopAction.mockResolvedValue({
@@ -868,6 +873,7 @@ describe('JIRA-202: arrival on last milepost executes stop action', () => {
       position: { row: 1, col: 1, city: 'Paris' },
       citiesOnNetwork: ['Berlin'],
       speed: 9,
+      loads: ['Wine'], // JIRA-249 L3: guard requires load present before deliver
     });
     const snapshot = makeSnapshot();
 
@@ -1935,6 +1941,98 @@ describe('JIRA-244 AC3: A3 empty-result — a3_target_already_reachable via paid
     // Secondary assertion: MovementPhasePlanner did NOT produce a PassTurn plan
     // (PassTurn is only added by TurnExecutorPlanner from an empty accumulatedPlans;
     // what we verify here is that A3 did not emit it from this branch)
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.PassTurn)).toBe(false);
+  });
+});
+
+// ── JIRA-249 Layer 3: Runtime arrival guard ───────────────────────────────────
+
+describe('JIRA-249 Layer 3: MovementPhasePlanner runtime arrival guard', () => {
+  /**
+   * UT1: Bot arrives at Praha with route.next = deliver(Wine@Praha) but bot.loads
+   * does NOT contain 'Wine'. Guard should fire: return with terminationReason
+   * 'arrived_for_deliver_but_load_not_carried' and NOT call executeStopAction.
+   */
+  it('UT1: guard fires when arrived at deliver city but load is not in context.loads', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    const route = makeRoute({
+      stops: [{ action: 'deliver', city: 'Praha', loadType: 'Wine', demandCardId: 1, payment: 20 }],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Praha' },
+      loads: [], // Wine NOT in loads — guard should fire
+    });
+
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    // Guard fired: terminationReason set
+    expect(trace.a2.terminationReason).toBe('arrived_for_deliver_but_load_not_carried');
+    // executeStopAction was NOT called (guard intercepted before it)
+    expect(mockExecuteStopAction).not.toHaveBeenCalled();
+    // No delivery recorded
+    expect(result.hasDelivery).toBe(false);
+    // No PassTurn emitted
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.PassTurn)).toBe(false);
+  });
+
+  /**
+   * UT2: Bot arrives at Praha with route.next = deliver(Wine@Praha) and bot.loads
+   * DOES contain 'Wine'. Guard should NOT fire — normal delivery proceeds.
+   */
+  it('UT2: guard does NOT fire when load is present in context.loads', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    const route = makeRoute({
+      stops: [{ action: 'deliver', city: 'Praha', loadType: 'Wine', demandCardId: 1, payment: 20 }],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Praha' },
+      loads: ['Wine'], // Wine IS in loads — guard should not fire
+    });
+
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Praha' },
+    });
+
+    mockPostDeliveryReplan.mockResolvedValue({
+      route: makeRoute({ stops: [], currentStopIndex: 0 }),
+      moveTargetInvalidated: true,
+    });
+
+    const trace = makeTrace();
+    await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    // Guard did NOT fire: terminationReason is not the guard reason
+    expect(trace.a2.terminationReason).not.toBe('arrived_for_deliver_but_load_not_carried');
+    // executeStopAction WAS called — normal delivery flow
+    expect(mockExecuteStopAction).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * UT3: Guard fires (load missing) → no PassTurn emitted. The result's
+   * accumulatedPlans should not contain a PassTurn action.
+   */
+  it('UT3: PassTurn is not emitted when arrival guard triggers a skip', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    const route = makeRoute({
+      stops: [{ action: 'deliver', city: 'Berlin', loadType: 'Coal', demandCardId: 2, payment: 15 }],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Berlin' },
+      loads: [], // Coal NOT in loads
+    });
+
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    expect(trace.a2.terminationReason).toBe('arrived_for_deliver_but_load_not_carried');
     expect(result.accumulatedPlans.some(p => p.type === AIActionType.PassTurn)).toBe(false);
   });
 });
