@@ -425,6 +425,64 @@ describe('NewRoutePlanner.run', () => {
       expect(result.pendingUpgradeAction).toBeNull();
       expect(result.upgradeSuppressionReason).toContain('Upgrade blocked');
     });
+
+    it('JIRA-253 Layer C: suppresses upgrade and sets route_abandoned_this_turn reason when route is abandoned', async () => {
+      // Simulate: TripPlanner returns a route with upgradeOnRoute, but TurnExecutorPlanner
+      // immediately abandons it (A3 partial-path abandon or impossibility abandon).
+      const route = makeRoute({ upgradeOnRoute: TrainType.FastFreight });
+      MockTripPlannerClass.mockImplementation(() => ({
+        planTrip: jest.fn().mockResolvedValue(makeTripResult(route)),
+      }) as unknown as TripPlanner);
+
+      // Override executor to signal routeAbandoned=true (A3 fires)
+      mockExecute.mockResolvedValue(makeExecResult({ routeAbandoned: true, plans: [{ type: AIActionType.PassTurn }] }));
+
+      const result = await NewRoutePlanner.run(
+        makeSnapshot({ money: 100, trainType: TrainType.Freight }),
+        makeContext(),
+        makeBrain(),
+        gridPoints,
+        makeMemory({ deliveryCount: 5 }),
+        tag, gameId, botPlayerId, BotSkillLevel.Medium,
+      );
+
+      // Upgrade should be suppressed because route was abandoned this turn
+      expect(result.pendingUpgradeAction).toBeNull();
+      expect(result.upgradeSuppressionReason).toBe('route_abandoned_this_turn');
+    });
+  });
+
+  describe('JIRA-253 Layer C: tryConsumeUpgrade with routeAbandonedThisTurn', () => {
+    const snapshotForUpgrade = makeSnapshot({ money: 100, trainType: TrainType.Freight });
+
+    it('returns null when routeAbandonedThisTurn = true (upgrade suppressed)', () => {
+      const route = makeRoute({ upgradeOnRoute: TrainType.FastFreight });
+      const result = NewRoutePlanner.tryConsumeUpgrade(route, snapshotForUpgrade, tag, 5, true);
+      expect(result.action).toBeNull();
+      expect(result.reason).toBe('Upgrade suppressed: route_abandoned_this_turn');
+    });
+
+    it('does NOT consume upgradeOnRoute from route when routeAbandonedThisTurn = true', () => {
+      const route = makeRoute({ upgradeOnRoute: TrainType.FastFreight });
+      NewRoutePlanner.tryConsumeUpgrade(route, snapshotForUpgrade, tag, 5, true);
+      // upgradeOnRoute should still be set (not consumed)
+      expect(route.upgradeOnRoute).toBe(TrainType.FastFreight);
+    });
+
+    it('returns valid UpgradeTrain when routeAbandonedThisTurn = false (normal path)', () => {
+      const route = makeRoute({ upgradeOnRoute: TrainType.FastFreight });
+      const result = NewRoutePlanner.tryConsumeUpgrade(route, snapshotForUpgrade, tag, 5, false);
+      expect(result.action).not.toBeNull();
+      expect(result.action!.type).toBe(AIActionType.UpgradeTrain);
+      expect(result.action!.targetTrain).toBe(TrainType.FastFreight);
+    });
+
+    it('returns valid UpgradeTrain when routeAbandonedThisTurn is omitted (default = false)', () => {
+      const route = makeRoute({ upgradeOnRoute: TrainType.FastFreight });
+      const result = NewRoutePlanner.tryConsumeUpgrade(route, snapshotForUpgrade, tag, 5);
+      expect(result.action).not.toBeNull();
+      expect(result.action!.type).toBe(AIActionType.UpgradeTrain);
+    });
   });
 
   describe('Scenario 6 — JIRA-89 dead-load drop', () => {
