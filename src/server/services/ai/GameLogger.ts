@@ -176,6 +176,15 @@ export interface GameTurnLogEntry {
   // Populated on every bot turn that runs checkBotVictory; omitted when check was skipped.
   victoryCheck?: VictoryCheckResult;
 
+  // JIRA-255: End-game routing diagnostics.
+  // Only populated when end-game routing is active (endGameLocked=true) to prevent log noise.
+  /** True when the end-game lock is active for this turn; absent when not engaged. */
+  endGameLocked?: boolean;
+  /** Minimum cash required to win (ECU millions) including cheapest unconnected major city connections. */
+  fullWinCost?: number;
+  /** Number of candidates in the feasible set that would complete the win condition. */
+  winCompleterCount?: number;
+
   // Execution Results
   success: boolean;
   error?: string;

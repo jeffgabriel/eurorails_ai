@@ -2988,3 +2988,76 @@ describe('JIRA-255 Layer C: end-game ranking in planTripDeterministic', () => {
     expect(firstDeliver?.city).toBe('Berlin');
   });
 });
+
+// ── JIRA-255 Layer D: diagnostic logging in reasoning strings ──────────
+
+describe('JIRA-255 Layer D: end-game diagnostic logging in reasoning strings', () => {
+  beforeEach(() => {
+    mockUpdateMemory.mockClear();
+    mockEstimateGraphPathCost.mockReturnValue({
+      buildCost: 0, pathLength: 1, estimatedTurns: 1, reachable: true, newSegments: [],
+    });
+  });
+
+  it('reasoning includes win-completer annotation when endGameLocked=true and candidate wins', () => {
+    // cash=227, payout=67, buildCost=0 → net=67 → 227+67=294 >= 250 → win-completing
+    const demand = makeDemand({ cardIndex: 0, loadType: 'Hops', deliveryCity: 'Paris', payout: 67 });
+
+    // Use correct TripSimulation shape: turnsToComplete + totalBuildCost
+    mockSimulateTrip.mockReturnValue({
+      feasible: true, turnsToComplete: 5, totalBuildCost: 0,
+      builtSegments: [], minCashRelative: 0, finalCashRelative: 67,
+    });
+
+    const memory = makeMemory({ endGameLocked: true });
+    const snap = makeSnapshot({ money: 227 });
+    const ctx = makeContext([demand], {
+      unconnectedMajorCities: [],
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+    });
+
+    const result = planTripDeterministic(snap, ctx, memory);
+    expect(result.reasoning).toContain('win-completer');
+    expect(result.reasoning).toContain('projected $294');
+    expect(result.reasoning).toContain('full win cost $250');
+  });
+
+  it('reasoning includes locked-but-no-completers annotation when endGameLocked=true but not win-completing', () => {
+    // cash=50, payout=10, buildCost=0 → net=10 → 60 < 250 → not win-completing
+    const demand = makeDemand({ cardIndex: 0, loadType: 'Coal', deliveryCity: 'Berlin', payout: 10 });
+
+    mockSimulateTrip.mockReturnValue({
+      feasible: true, turnsToComplete: 3, totalBuildCost: 0,
+      builtSegments: [], minCashRelative: 0, finalCashRelative: 10,
+    });
+
+    const memory = makeMemory({ endGameLocked: true });
+    const snap = makeSnapshot({ money: 50 });
+    const ctx = makeContext([demand], {
+      unconnectedMajorCities: [],
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+    });
+
+    const result = planTripDeterministic(snap, ctx, memory);
+    expect(result.reasoning).toContain('End-game: locked');
+    expect(result.reasoning).toContain('no win-completers in set');
+    expect(result.reasoning).toContain('velocity ranking applied');
+  });
+
+  it('reasoning does NOT contain end-game annotation when endGameLocked=false', () => {
+    const demand = makeDemand({ cardIndex: 0, loadType: 'Coal', deliveryCity: 'Berlin', payout: 10 });
+
+    mockSimulateTrip.mockReturnValue({
+      feasible: true, turnsToComplete: 3, totalBuildCost: 0,
+      builtSegments: [], minCashRelative: 0, finalCashRelative: 10,
+    });
+
+    const memory = makeMemory({ endGameLocked: false });
+    const snap = makeSnapshot({ money: 50 });
+    const ctx = makeContext([demand]);
+
+    const result = planTripDeterministic(snap, ctx, memory);
+    expect(result.reasoning).not.toContain('End-game:');
+    expect(result.reasoning).not.toContain('win-completer');
+  });
+});
