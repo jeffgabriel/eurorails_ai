@@ -2,16 +2,25 @@
 
 **Branch:** `compounds/guardrail-updates`
 **Diverged from main:** 2026-03-12 (commit `44d38ce` — JIRA-106 server-side victory check)
-**Last commit on our side:** 2026-05-19
-**Scale:** 423 commits · ~610 files changed · +108K / -26K lines
+**Last bot-fixes commit:** 2026-05-19
+**Main integration merged:** 2026-05-20 (commit `86ca166`)
+**Scale:** 517 commits · ~683 files changed · +127K / -28K lines
+**PR:** #244
 
 ---
 
 ## TL;DR
 
-Two months of work on the bot, almost entirely concentrated under `src/server/services/ai/`. Decomposes cleanly into ~7 capability areas, most of it living in new self-contained modules with low coupling to anything you've touched on main. The hard merge surface is small — TurnExecutor + ActionResolver + AIStrategyEngine — where our bot loop overlaps with your PlayerService consolidation and action-restriction enforcement.
+Two months of work on the bot, almost entirely concentrated under `src/server/services/ai/`. Decomposes cleanly into ~9 capability areas, most of it living in new self-contained modules with low coupling to anything you've touched on main.
 
-Recommendation at the end. Capability summary first so you can decide what's worth bringing back.
+The original plan was a phased selective re-apply onto main. **It was instead executed as a single integration merge** — main's last 89 commits pulled into `compounds/guardrail-updates`, conflicts resolved in place. All conflicts landed; the build is green; smoke test passes for non-event-card play.
+
+Three things are still open after the merge:
+1. **Phase 4 (event-card awareness)** is explicitly deferred. The bot doesn't yet consult `ActiveEffectManager`, gets silently rejected by `ActionRestrictionEnforcement`, and has no `activeEffects` in its `WorldSnapshot`. First concrete symptom filed as **JIRA-251** (Rail Strike).
+2. **Three pre-existing planner bugs** surfaced during smoke test — **JIRA-248/249/250** — all in the same family: deterministic candidate generator mishandles `carriedLoads + matching demand cards`.
+3. **Six places where our work and your work overlap** (Kaliningrad cap hack vs. your geometric fix, PlayerService method consolidation, etc.) are catalogued in **[`docs/main-merge-overlap-checklist.md`](main-merge-overlap-checklist.md)** with per-row verdicts and open questions for you.
+
+Capability summary first so you can decide what's worth bringing back. Merge facts and resolution details after.
 
 ---
 
@@ -25,7 +34,7 @@ The old `ContextBuilder.ts` was a 4K+ line god object. Split into focused sub-mo
 - `NetworkContext.ts` (335 LOC) — reachable cities, connected/unconnected majors, phase. Wrapper over `MapTopology` + `TrackNetworkService`.
 - `BuildContext.ts` (101), `DemandContext.ts` (160), `UpgradeContext.ts` (92), `UpgradeGatingConstants.ts` (32).
 
-`ContextBuilder` still exists, but is now a façade over these.
+`ContextBuilder` still exists, but is now a façade over these. The merge **kept the refactor entirely** — any small additions you made to monolithic `ContextBuilder.ts` for event-card context serialization will need to be re-applied to the split sub-modules during Phase 4.
 
 ### 2. Deterministic Trip Planner
 
@@ -37,7 +46,9 @@ The old `ContextBuilder.ts` was a 4K+ line god object. Split into focused sub-mo
 4. Score by aggregate two-trip income velocity (`computeAggregateScore`).
 5. Return top-1 as the `StrategicRoute`.
 
-Replaces the prior reactive "best-demand-right-now" heuristic. Recent extension: `applyEndStateScoring` (JIRA-241 Task 2) — once cash latches into End phase, scoring penalises routes that don't help close the remaining major-city gap.
+Replaces the prior reactive "best-demand-right-now" heuristic. Recent extensions: `applyEndStateScoring` (JIRA-241 Task 2) — once cash latches into End phase, scoring penalises routes that don't help close the remaining major-city gap.
+
+**Known weaknesses surfaced by smoke testing** (filed as JIRA-248/249/250 — see below) — the candidate generator does not robustly handle the carried-load + matching-demand case. These are pre-existing and unrelated to the merge.
 
 ### 3. Build Advisor — currently flag-gated OFF
 
@@ -76,7 +87,7 @@ Pluggable backend behind a `ProviderAdapter` interface. Concrete adapters: Anthr
 
 ### 8. Route helpers (`routeHelpers.ts`)
 
-Single source of truth for: `isStopComplete`, `resolveBuildTarget`, `getNetworkFrontier`. Replaces duplicate logic previously scattered across PlanExecutor / TurnComposer / AIStrategyEngine. Contains the `VICTORY_BUILD_TRIGGER_M = 230` threshold — bot starts pacing toward the 7-city goal at 230M cash, accumulating the final 20M during the city-build sprint (recovered ~8 wasted turns in game `38e92b14`).
+Single source of truth for: `isStopComplete`, `resolveBuildTarget`, `getNetworkFrontier`. Replaces duplicate logic previously scattered across PlanExecutor / TurnComposer / AIStrategyEngine (both deleted on our side — `PlanExecutor.ts` and `TurnComposer.ts` no longer exist; the merge handled the modify/delete conflicts cleanly). Contains the `VICTORY_BUILD_TRIGGER_M = 230` threshold — bot starts pacing toward the 7-city goal at 230M cash, accumulating the final 20M during the city-build sprint (recovered ~8 wasted turns in game `38e92b14`).
 
 ### 9. Prompts, schemas, diagnostics
 
@@ -89,69 +100,127 @@ Single source of truth for: `isStopComplete`, `resolveBuildTarget`, `getNetworkF
 
 ## JIRA scope
 
-~300 tickets, all shipped, filed under `docs/ai/done/` (canonical location — no in-progress dir at the moment). Most recent landings: JIRA-241 (persistent gameState), 242 (early-phase brackets), 243 (victory clinch), 244 (ferry-aware citiesOnNetwork), 245 (findFinalVictoryRoute), 246 (cash-floor removal), 247 (origin-is-current-position fix).
+~300 tickets, mostly shipped under `docs/ai/done/`. Four new tickets sit in `docs/ai/jira/` after the merge smoke test:
 
-Themed clusters across the JIRA-1 to JIRA-247 range:
+- **JIRA-248** — Replan drops carried-load delivery silently (Labor for Bern at T28→T29, game `75c6afc8`).
+- **JIRA-249** — Trip planner emits `deliver(X)` without preceding `pickup(X)` when a new demand is drawn (Wine→Praha at T15, same game). Bot drives to Praha, arrives empty-handed, PassTurn, backtracks to Frankfurt.
+- **JIRA-250** — Two demands of the same loadType at the same supply city; planner picks up only one (Fish at Oslo for both Milano and Zurich; Zurich is on the way). Corridor pickup missed.
+- **JIRA-251** — Bot blind to active Rail Strike (first Phase 4 vertical-slice ticket).
+
+The first three are all pre-existing weaknesses in the deterministic candidate generator's handling of `carriedLoads + matching demand cards`. The technical files cross-reference the family relationship. JIRA-251 is the first concrete Phase 4 symptom; its technical file lays out the fix-shape pattern (snapshot enrichment → planner consultation → guardrail backstop → server-rejection visibility) that the rest of Phase 4 should reuse.
+
+Themed clusters across JIRA-1 to JIRA-251:
 
 - **1–20:** starting-city, initial-build, demand-scoring foundations.
 - **22–100:** post-delivery, ferry handling, route-stop ordering, train upgrades, double-delivery bugs.
 - **100–130:** build-without-route, cost-estimation accuracy, post-delivery loops, network-aware building.
 - **130–200:** holistic turn validation, network frontier, supply-aware enumeration, ContextBuilder decomposition (JIRA-195).
 - **200–247:** spider-web vs corridor builds, deterministic trip planner introduction, end-state scoring + persistent phase, victory clinch + final-victory route, cash-floor removal, BuildAdvisor re-enablement experiments.
+- **248–251:** post-merge smoke-test findings (planner family bugs + first Phase 4 symptom).
 
 Most tickets follow a two-file pattern: `jira-N-*-behavioral.md` (problem-only) + `jira-N-*-technical.md` (fix plan). Cherry-pick anything you want to read in depth.
 
 ---
 
-## How this lands on current main (Compounds-backed)
+## How the merge actually landed
 
-Ran `compounds impact` at depth-2 on hot-zone files and representative leaf entities. Numbers:
+The selective-re-apply plan was replaced with a single integration merge (`86ca166`). 25 conflicts surfaced; resolution summary:
 
-| Class | Files (rough) | Effort | Risk |
-|---|---|---|---|
-| **Lift new modules** (DemandEngine, DeterministicTripPlanner, BuildAdvisor, GuardrailEnforcer, NetworkContext, findBuildPath, victoryRules, routeHelpers, providers/\*, prompts/\*) | ~30–40 | Low — drop in, run tests | Low |
-| **Fix MapTopology import paths** (you moved it to `services/`) | **89 sites** | Mechanical — sed-style | Trivial |
-| **Re-apply read-only layer** (ContextBuilder façade, WorldSnapshotService, schemas) | ~5–10 | Import fixes + spot-merge — *does not touch your PlayerService internals* | Low–medium |
-| **Re-apply integration layer** (TurnExecutor, ActionResolver, AIStrategyEngine, BotTurnTrigger) against your new PlayerService surface + action-restriction enforcement | ~5–10 | Real merge work | Medium–high |
+| Conflict class | Count | Resolution |
+|---|---|---|
+| Modify/delete (we deleted; main improved) | 4 | `git rm` — `PlanExecutor.ts`, `TurnComposer.ts`, and their tests. Our migration into `TurnExecutorPlanner` is complete; all references are comments. |
+| Modify/delete (we modified; main deleted) | 1 | `BotTurnTrigger.test.ts` moved from top-level to `__tests__/ai/` (main's commit `b9bd535`). Took main's delete. |
+| Config / lockfile | 3 | `.mcp.json` (your URL), `gridPoints.json` (took yours — Kaliningrad geometric move), `package-lock.json` regenerated. |
+| Add/add | 1 | `.mcp.json` (URL choice). |
+| Test files | 8 | Mostly took ours — our `jest.requireActual` spread pattern + bot-specific test scaffolding. |
+| Source files | 8 | Per-file judgment (see overlap checklist for the big ones). |
 
-Concrete signal from the impact queries:
+Specific source-file resolutions worth your attention:
 
-- `scoreDemand`: **5** affected entities at depth 2 → DemandEngine is a leaf.
-- `applyEndStateScoring`: **11** affected → DeterministicTripPlanner is a leaf.
-- `GuardrailEnforcer`: **20** affected → leaf.
-- `ContextBuilder` downstream: **111** affected, but **zero reach into the PlayerService methods you rewrote**. Reaches into MapTopology, majorCityGroups, shared utilities only.
-- `TurnExecutor` downstream: **82** affected, and it *does* call `getPlayers`, `deliverLoadForUser`, `moveTrainForUser`, `drawCard` directly. **It does not call your new wrapper methods** (`pickupLoadForPlayer`, `buildTrackForPlayer`, `dropLoadForPlayer`, `discardHandForPlayer`, `purchaseTrainType`) from PRs #229 / #230 / #231. **This is the real reconciliation surface.**
+- **`MapTopology.ts`** — your relocation (`edda820`) and ours (`1ad22c7`) landed in the same place. Took your `getTerrainBuildCost` import from the terrain-cost consolidation.
+- **`TurnExecutor.ts`** — took your `PlayerService.{pickupLoad,dropLoad,buildTrack,discardHand}ForPlayer` migration entirely. Removed our inline DB `FOR UPDATE` blocks; the JIRA-196 capacity-gate tests that exercised that path are `it.skip`'d as obsolete. Snapshot-mirror logic preserved.
+- **`ActionResolver.ts`** — union of imports + `NetworkBuildAnalyzer` and `BuildRouteResolver` from our side, `getTrainSpeed`/`getTrainCapacity`/`isPositionAtCity` from your shared-services consolidations.
+- **`AIStrategyEngine.ts`** — took our `NewRoutePlanner` extraction (JIRA-195b sub-slice D). The "old planning code" main still had at the same site references the deleted `PlanExecutor` and would not compile against our codebase.
+- **`ContextBuilder.ts`** — took our refactored version entirely (534 lines vs. main's 2864). Any small additions you made to monolithic `ContextBuilder.ts` for event-card serialization were not preserved — they'll need to be re-applied to the split sub-modules in Phase 4.
+- **`socketService.ts`** — union of both sides' imports (Whisper from us, event-card broadcasting from you).
+- **`computeBuildSegments.ts`** — adopted your `getWaterCrossingExtraCost` shared util everywhere, dropped our local `getWaterCrossingCost` + `_waterCrossingCosts` map.
+- **`jest.config.js`** — kept our `claude-agent-sdk` module mapper AND added your `uuid` v14 ESM passthrough.
+
+One source-side bug surfaced during the merge that we fixed in place:
+
+- **`ActionResolver.resolve()` — `case 'PASS':` restored.** The merge auto-resolved the action-dispatch switch in a way that lost the string case for `PASS` (only the `AIActionType.PassTurn` enum case remained). Tests caught it; one-line fix in commit `86ca166`.
+
+And one DB-side bug that required a follow-up commit:
+
+- **Migration number collision (commit `0250e5f`).** Both branches numbered their migration 036. The runner skipped both (version 36 was already in `schema_migrations`), leaving `games.active_event` missing. Renumbered yours to 038. Without this, the bot crashes mid-game on `column active_event does not exist`.
+
+Full per-file rationale plus the open-questions-for-you list lives in [`docs/main-merge-overlap-checklist.md`](main-merge-overlap-checklist.md).
 
 ---
 
-## Known gaps where our bot is now ignorant of your main
+## Phase 4 — event-card awareness (deferred)
 
-1. **Event cards.** The bot was built under the assumption that the deck is demand-only. Your PRs #234–#238 unified demand + event cards into a single `GameDeck` draw pile and added `EventCardService`, `ActiveEffectManager`, `AreaOfEffectService`. Our `WorldSnapshot`, `GameContext`, prompts, and guardrails have **no event-card awareness**. Closing this is design work, not just plumbing.
-2. **Action restriction enforcement** (PR #240). The bot's TurnExecutor builds plans assuming any well-formed action succeeds; your PlayerService now rejects actions that violate active-effect restrictions (Snow blocked terrain, Rail Strike scope, etc.). The bot has no read path for "what restrictions are active" yet.
-3. **Initial-build race fix** (PR #232) lands cleanly — no overlap with us.
-4. **Kaliningrad fix** (PR #243) lands cleanly — no overlap.
+The merge kept all your event-card infrastructure intact (`EventCardService`, `ActiveEffectManager`, `AreaOfEffectService`, `ActionRestrictionEnforcement`, `TrackService.removeSegmentsCrossingRiver`, migration 038). The bot is wired into none of it.
+
+Specifically, the bot is currently blind to:
+
+- **Event card draws.** The deck has 20 event cards mixed in. The bot draws them but ignores their effects.
+- **Active effects in its snapshot.** `WorldSnapshot.activeEffects` is `null`. The planner has no input signal.
+- **`ActionRestrictionEnforcement` rejections.** When an action is rejected server-side, the bot's per-turn log records `success: false` with no rejection reason. The bot re-emits the same failing action next turn.
+- **`TrackService.removeSegmentsCrossingRiver`** under Flood events. The bot's `existingSegments` would go stale.
+
+**JIRA-251** is the first concrete repro (Rail Strike). Its technical file proposes the pattern:
+
+```
+snapshot enrichment → planner consultation → guardrail backstop → server-rejection visibility
+```
+
+The hard work is the snapshot wiring + the guardrail gate registry. Per-event-type logic is small. Scope is its own project after #244 merges.
 
 ---
 
-## Recommended path
+## Test baseline
 
-**Selective re-apply via a Compounds Standard-tier `plan_change`, not a full merge.** Four phases:
+- **Pre-merge baseline:** 41 known-failing tests — `docs/test-baseline-pre-merge.failing-tests.txt`.
+- **Post-merge baseline:** 59 known-failing tests — `docs/test-baseline-post-merge.failing-tests.txt`.
+- **Delta breakdown:**
+  - 24 new failures are your new tests that require a test DB with the new migrations applied (Event card lifecycle, Migration 038, PlayerService Integration). They go green automatically with test-DB setup.
+  - 3 new failures reference the old Kaliningrad coords (`19,63`). Resolution depends on whether the `MaxConnections` mechanism stays (see overlap checklist row 1).
+  - 3 new failures in `AIStrategyEngine.takeTurn` integration tests (JIRA-170, JIRA-97). Pass in isolation, fail in full-suite — test-isolation / mock-leak issues. Not gameplay regressions.
+  - Offset by 12 pre-merge baseline tests now passing (cleanup from your refactor + targeted test fixes during the merge).
 
-- **Phase 1 — Mechanical:** MapTopology import rewrites + drop in the leaf modules. Low risk, fast.
-- **Phase 2 — Read-only port:** ContextBuilder façade, WorldSnapshotService, schemas, prompts. Import fixes + spot-merge.
-- **Phase 3 — Integration layer:** re-apply TurnExecutor / ActionResolver / AIStrategyEngine against your new PlayerService surface. Update direct-method calls to your new wrappers where appropriate. **This is where the real reconciliation cost lives.**
-- **Phase 4 — Gap closing:** make the bot event-card-aware and action-restriction-aware. Bigger, design-first, probably worth scoping separately so it doesn't gate Phases 1–3.
+Verification command:
+```
+diff <(sort docs/test-baseline-post-merge.failing-tests.txt) <(npm test -- --forceExit 2>&1 | grep -E '^\s+●\s' | sed -E 's/^\s+● //' | sort -u)
+```
 
-Phases 1–3 are a tractable Standard-tier project. Phase 4 needs its own scoping pass.
+---
+
+## Smoke test status
+
+Played a live game with a Medium-skill Sonnet bot against the merged branch. Bot:
+
+- ✅ Picks up loads (via `PlayerService.pickupLoadForPlayer`).
+- ✅ Delivers and gets paid.
+- ✅ Builds track (`buildTrackForPlayer`).
+- ✅ Discards hand when stuck.
+- ✅ Server-side action restriction enforcement runs (cleanly when no events active).
+- ⚠️ Three planner bugs observed and filed (JIRA-248/249/250).
+- ❌ Rail Strike event → bot blind, MoveTrain fails silently across 6+ turns (JIRA-251).
+
+Non-event play is stable. Event-card-active play is broken in the way Phase 4 is supposed to fix.
 
 ---
 
 ## What I'd like from you
 
-1. **Veto power on themes.** Anything in the capability list above you'd prefer we drop on the floor — especially BuildAdvisor (currently OFF after the A/B) or anything in the prompt-engineering layer?
-2. **Event-card integration appetite.** Phase 4 as part of this merge, or as a separate follow-on? I'd lean separate to keep the merge bounded.
-3. **Demo first?** Happy to record a local game showing bot behavior at the end of bot-fixes vs. behavior at the divergence point, if that helps you decide what's worth bringing back.
+1. **Verdicts on the overlap checklist.** [`docs/main-merge-overlap-checklist.md`](main-merge-overlap-checklist.md) — 7 rows with "Open question for Jeff" lines. The biggest ones:
+   - Row 1 (Kaliningrad): keep the `MaxConnections` mechanism in code (latent / future-use), or rip it out?
+   - Row 4 (JIRA-196 capacity check): confirm `PlayerService.pickupLoadForPlayer`'s gate has equivalent coverage; otherwise the obsolete `it.skip`'d tests need re-homing.
+   - Row 6 (InitialBuildService race): verify your FOR UPDATE fix is still in the critical path after our `InitialBuildRunner` extract.
+2. **Phase 4 appetite + scoping.** When you're ready to scope it, JIRA-251 is the worked example. The pattern reuses for all other event types.
+3. **JIRA-248/249/250 priority.** These three are pre-existing bot-planner bugs (not merge-induced). Useful to know if you want them fixed inside this PR (small) or as a follow-on.
 
 ---
 
-*Draft — let me know if the depth or framing is wrong and I'll re-cut.*
+*Updated 2026-05-21 after the integration merge landed.*
