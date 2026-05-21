@@ -517,3 +517,217 @@ describe('JIRA-231: Feasibility producer — supply city saturated', () => {
     }
   });
 });
+
+// ── JIRA-250 Layer 1: Multiplicity-aware carry-load detection ─────────────────
+
+describe('JIRA-250 Layer 1: computeAllDemandContexts — multiplicity-aware carry-load assignment', () => {
+  /**
+   * Unit Test 1: bot.loads = ['Labor'], 2 Labor demands.
+   * Expected: exactly one demand gets supplyCity=null (carried), the other gets a real supplyCity.
+   */
+  it('UT1: one carried Labor + two Labor demands → exactly one demand gets supplyCity=null', () => {
+    const snapshot: WorldSnapshot = {
+      ...makeSnapshot({ loads: ['Labor'] }),
+      bot: {
+        ...makeSnapshot({ loads: ['Labor'] }).bot,
+        loads: ['Labor'],
+        resolvedDemands: [
+          {
+            cardId: 1,
+            demands: [{ city: 'Berlin', loadType: 'Labor', payment: 15 }],
+          },
+          {
+            cardId: 2,
+            demands: [{ city: 'Hamburg', loadType: 'Labor', payment: 12 }],
+          },
+        ],
+      },
+    };
+
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(5, 5, 'Warsaw', ['Labor']),   // supply city
+      makeCityPoint(10, 10, 'Berlin'),
+      makeCityPoint(15, 15, 'Hamburg'),
+    ];
+
+    mockEstimateGraphPathCost.mockReturnValue({
+      reachable: true, buildCost: 0, pathLength: 18, estimatedTurns: 2,
+    });
+
+    const contexts = computeAllDemandContexts(
+      snapshot,
+      null,
+      gridPoints,
+      ['Warsaw', 'Berlin', 'Hamburg'],
+      ['Warsaw', 'Berlin', 'Hamburg'],
+      [],
+    );
+
+    expect(contexts).toHaveLength(2);
+    const nullSupplyCities = contexts.filter(c => c.supplyCity === null);
+    const realSupplyCities = contexts.filter(c => c.supplyCity !== null && c.supplyCity !== 'NoSupply');
+    expect(nullSupplyCities).toHaveLength(1);
+    expect(realSupplyCities).toHaveLength(1);
+    expect(realSupplyCities[0].supplyCity).toBe('Warsaw');
+  });
+
+  /**
+   * Unit Test 2: bot.loads = ['Fish', 'Fish'], 1 Fish demand.
+   * Expected: that demand gets supplyCity=null (carried).
+   */
+  it('UT2: two carried Fish + one Fish demand → demand gets supplyCity=null', () => {
+    const snapshot: WorldSnapshot = {
+      ...makeSnapshot({ loads: ['Fish', 'Fish'] }),
+      bot: {
+        ...makeSnapshot({ loads: ['Fish', 'Fish'] }).bot,
+        loads: ['Fish', 'Fish'],
+        resolvedDemands: [
+          {
+            cardId: 1,
+            demands: [{ city: 'Marseille', loadType: 'Fish', payment: 18 }],
+          },
+        ],
+      },
+    };
+
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(3, 3, 'Oslo', ['Fish']),    // supply city
+      makeCityPoint(10, 10, 'Marseille'),
+    ];
+
+    mockEstimateGraphPathCost.mockReturnValue({
+      reachable: true, buildCost: 0, pathLength: 18, estimatedTurns: 2,
+    });
+
+    const contexts = computeAllDemandContexts(
+      snapshot,
+      null,
+      gridPoints,
+      ['Oslo', 'Marseille'],
+      ['Oslo', 'Marseille'],
+      [],
+    );
+
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0].supplyCity).toBeNull();
+    expect(contexts[0].isLoadOnTrain).toBe(true);
+  });
+
+  /**
+   * Unit Test 3: bot.loads = [], Wine demands.
+   * Expected: all Wine demands retain their original supplyCity.
+   */
+  it('UT3: empty loads + two Wine demands → both demands retain real supplyCity', () => {
+    const snapshot: WorldSnapshot = {
+      ...makeSnapshot({ loads: [] }),
+      bot: {
+        ...makeSnapshot({ loads: [] }).bot,
+        loads: [],
+        resolvedDemands: [
+          {
+            cardId: 1,
+            demands: [{ city: 'London', loadType: 'Wine', payment: 20 }],
+          },
+          {
+            cardId: 2,
+            demands: [{ city: 'Berlin', loadType: 'Wine', payment: 16 }],
+          },
+        ],
+      },
+    };
+
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(3, 3, 'Bordeaux', ['Wine']),  // supply city
+      makeCityPoint(10, 10, 'London'),
+      makeCityPoint(15, 15, 'Berlin'),
+    ];
+
+    mockEstimateGraphPathCost.mockReturnValue({
+      reachable: true, buildCost: 0, pathLength: 18, estimatedTurns: 2,
+    });
+
+    const contexts = computeAllDemandContexts(
+      snapshot,
+      null,
+      gridPoints,
+      ['Bordeaux', 'London', 'Berlin'],
+      ['Bordeaux', 'London', 'Berlin'],
+      [],
+    );
+
+    expect(contexts).toHaveLength(2);
+    for (const ctx of contexts) {
+      expect(ctx.supplyCity).not.toBeNull();
+      expect(ctx.supplyCity).not.toBe('NoSupply');
+      expect(ctx.isLoadOnTrain).toBe(false);
+    }
+  });
+
+  /**
+   * Unit Test 4: Multiple load types with varying counts.
+   * bot.loads = ['Fish', 'Coal'], demands = [Fish→Berlin, Fish→London, Coal→Paris].
+   * Expected: one Fish demand gets supplyCity=null, the other retains its supplyCity.
+   * Coal demand gets supplyCity=null.
+   */
+  it('UT4: mixed loads with multiple types → correct multiplicity-aware assignment across types', () => {
+    const snapshot: WorldSnapshot = {
+      ...makeSnapshot({ loads: ['Fish', 'Coal'] }),
+      bot: {
+        ...makeSnapshot({ loads: ['Fish', 'Coal'] }).bot,
+        loads: ['Fish', 'Coal'],
+        resolvedDemands: [
+          {
+            cardId: 1,
+            demands: [{ city: 'Berlin', loadType: 'Fish', payment: 20 }],
+          },
+          {
+            cardId: 2,
+            demands: [{ city: 'London', loadType: 'Fish', payment: 18 }],
+          },
+          {
+            cardId: 3,
+            demands: [{ city: 'Paris', loadType: 'Coal', payment: 14 }],
+          },
+        ],
+      },
+    };
+
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(3, 3, 'Oslo', ['Fish']),       // Fish supply city
+      makeCityPoint(4, 4, 'Hamburg', ['Coal']),    // Coal supply city
+      makeCityPoint(10, 10, 'Berlin'),
+      makeCityPoint(15, 15, 'London'),
+      makeCityPoint(12, 12, 'Paris'),
+    ];
+
+    mockEstimateGraphPathCost.mockReturnValue({
+      reachable: true, buildCost: 0, pathLength: 18, estimatedTurns: 2,
+    });
+
+    const contexts = computeAllDemandContexts(
+      snapshot,
+      null,
+      gridPoints,
+      ['Oslo', 'Hamburg', 'Berlin', 'London', 'Paris'],
+      ['Oslo', 'Hamburg', 'Berlin', 'London', 'Paris'],
+      [],
+    );
+
+    expect(contexts).toHaveLength(3);
+
+    const fishContexts = contexts.filter(c => c.loadType === 'Fish');
+    const coalContexts = contexts.filter(c => c.loadType === 'Coal');
+
+    // Exactly one Fish demand should be carried (supplyCity=null)
+    const fishCarried = fishContexts.filter(c => c.supplyCity === null);
+    const fishFresh = fishContexts.filter(c => c.supplyCity !== null && c.supplyCity !== 'NoSupply');
+    expect(fishCarried).toHaveLength(1);
+    expect(fishFresh).toHaveLength(1);
+    expect(fishFresh[0].supplyCity).toBe('Oslo');
+
+    // The Coal demand should be carried (supplyCity=null)
+    expect(coalContexts).toHaveLength(1);
+    expect(coalContexts[0].supplyCity).toBeNull();
+    expect(coalContexts[0].isLoadOnTrain).toBe(true);
+  });
+});
