@@ -119,6 +119,12 @@ export interface DeterministicTripPlannerOptions {
   pruneMaxTurns?: number;
   pruneMaxBuildM?: number;
   hopAvgCostM?: number;
+  /**
+   * JIRA-253 Layer B: Route signatures to exclude from candidate consideration.
+   * Candidates whose id matches an entry here are rejected with reason `excluded_by_caller`
+   * and recorded in the result's `candidateRejections` array for diagnostics.
+   */
+  excludeRouteSignatures?: string[];
 }
 
 export interface DeterministicTripPlanResult {
@@ -197,7 +203,7 @@ interface GridCoord {
  * - `deliver_exceeds_carried`: a deliver(L) would consume more L than the bot
  *   has available (carried + picked up so far in the candidate).
  */
-export type CandidateRejectionReason = 'deliver_without_pickup' | 'deliver_exceeds_carried';
+export type CandidateRejectionReason = 'deliver_without_pickup' | 'deliver_exceeds_carried' | 'excluded_by_caller';
 
 /** Structured record of a single grammar-rule violation for a rejected candidate. */
 export interface CandidateRejection {
@@ -215,6 +221,8 @@ interface ResolvedOptions {
   pruneMaxTurns: number;
   pruneMaxBuildM: number;
   hopAvgCostM: number;
+  /** JIRA-253 Layer B: resolved exclude set (empty when caller passes none) */
+  excludeRouteSignatures?: Set<string>;
 }
 
 interface PruneStats {
@@ -1595,6 +1603,7 @@ export function planTripDeterministic(
     pruneMaxTurns: options?.pruneMaxTurns ?? PRUNE_MAX_TURNS,
     pruneMaxBuildM: dynamicBuildCap,
     hopAvgCostM: options?.hopAvgCostM ?? HOP_AVG_COST_M,
+    excludeRouteSignatures: new Set(options?.excludeRouteSignatures ?? []),
   };
 
   // Empty hand check (R8)
@@ -1723,6 +1732,20 @@ export function planTripDeterministic(
   const candidateRejections: CandidateRejection[] = [];
   const feasible: ScoredCandidate[] = [];
   for (const cand of survivors) {
+    // JIRA-253 Layer B: exclude candidates whose signature matches the caller's exclusion set.
+    if (opts.excludeRouteSignatures && opts.excludeRouteSignatures.size > 0 && opts.excludeRouteSignatures.has(cand.id)) {
+      candidateRejections.push({
+        candidateId: cand.id,
+        reason: 'excluded_by_caller',
+        offendingStopIndex: -1,
+        loadType: '',
+        context: { carriedAtStart, pickupsBeforeOffender: [] },
+      });
+      console.warn(
+        `[DeterministicTripPlanner] Excluded by caller — skipping candidate id=${cand.id}`,
+      );
+      continue;
+    }
     const grammarCheck = isCandidateGrammaticallyValid(cand, carriedAtStart);
     if (!grammarCheck.ok) {
       // Log structured rejection to candidateRejections for diagnostics.
