@@ -735,7 +735,7 @@ describe('TurnExecutorPlanner.execute — delivery at current city', () => {
       stops: [makeStop('deliver', 'Berlin', 'Coal')],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, loads: ['Coal'] }); // JIRA-249 L3
     const snapshot = makeSnapshot();
 
     const result = await TurnExecutorPlanner.execute(route, snapshot, context);
@@ -760,7 +760,7 @@ describe('TurnExecutorPlanner.execute — delivery at current city', () => {
       stops: [makeStop('deliver', 'Berlin', 'Coal')],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, loads: ['Coal'] }); // JIRA-249 L3
     const snapshot = makeSnapshot();
 
     const result = await TurnExecutorPlanner.execute(route, snapshot, context);
@@ -782,7 +782,7 @@ describe('TurnExecutorPlanner.execute — delivery at current city', () => {
       stops: [makeStop('deliver', 'Berlin', 'Coal')],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, loads: ['Coal'] }); // JIRA-249 L3
     const snapshot = makeSnapshot();
 
     const result = await TurnExecutorPlanner.execute(route, snapshot, context);
@@ -1351,7 +1351,7 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
       stops: [makeStop('deliver', 'Berlin', 'Coal')],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, loads: ['Coal'] }); // JIRA-249 L3
     const snapshot = makeSnapshot();
     const fakeBrain = {} as any;
     const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
@@ -1384,7 +1384,7 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
       stops: [makeStop('deliver', 'Berlin', 'Coal')],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, loads: ['Coal'] }); // JIRA-249 L3
     const snapshot = makeSnapshot();
     const fakeBrain = {} as any;
     const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
@@ -1412,7 +1412,7 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
       stops: [makeStop('deliver', 'Berlin', 'Coal')],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, loads: ['Coal'] }); // JIRA-249 L3
     const snapshot = makeSnapshot();
     const fakeBrain = {} as any;
     const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
@@ -1439,7 +1439,7 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
       stops: [makeStop('deliver', 'Berlin', 'Coal')],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, loads: ['Coal'] }); // JIRA-249 L3
     const snapshot = makeSnapshot();
 
     // No brain passed → no TripPlanner
@@ -1488,6 +1488,7 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
     // context.demands includes the Beer→Beograd demand that is about to be fulfilled
     const context = makeContext({
       position: { city: 'Beograd', row: 3, col: 3 },
+      loads: ['Beer'], // JIRA-249 L3: guard requires load present before deliver
       demands: [
         {
           cardIndex: 0,
@@ -1614,7 +1615,7 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
       stops: [{ action: 'deliver', city: 'Beograd', loadType: 'Beer', demandCardId: 10 }],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Beograd', row: 3, col: 3 } });
+    const context = makeContext({ position: { city: 'Beograd', row: 3, col: 3 }, loads: ['Beer'] }); // JIRA-249 L3
     const snapshot = {
       ...makeSnapshot(),
       bot: {
@@ -1796,7 +1797,7 @@ describe('TurnExecutorPlanner.execute — JIRA-194 reset move target after post-
       stops: [makeStop('deliver', 'Berlin', 'Coal'), makeStop('pickup', 'Paris', 'Wine')],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, loads: ['Coal'] }); // JIRA-249 L3
     const snapshot = makeSnapshot();
     const fakeBrain = {} as any;
     const fakeGridPoints = [] as any;
@@ -1829,7 +1830,7 @@ describe('TurnExecutorPlanner.execute — JIRA-194 reset move target after post-
       stops: [makeStop('deliver', 'Berlin', 'Coal'), makeStop('pickup', 'Paris', 'Wine')],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, loads: ['Coal'] }); // JIRA-249 L3
     const snapshot = makeSnapshot();
     const fakeBrain = {} as any;
     const fakeGridPoints = [] as any;
@@ -1859,7 +1860,7 @@ describe('TurnExecutorPlanner.execute — JIRA-194 reset move target after post-
       stops: [makeStop('deliver', 'Berlin', 'Coal'), makeStop('pickup', 'Paris', 'Wine')],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, loads: ['Coal'] }); // JIRA-249 L3
     const snapshot = makeSnapshot();
 
     // No brain → no TripPlanner → no-brain branch
@@ -3867,7 +3868,7 @@ describe('TurnExecutorPlanner.execute — JIRA-185 post-delivery context sync', 
       stops: [makeStop('deliver', 'Paris', 'Wine')],
       currentStopIndex: 0,
     });
-    const context = makeContext({ position: { city: 'Paris', row: 1, col: 1 }, money: 100 });
+    const context = makeContext({ position: { city: 'Paris', row: 1, col: 1 }, money: 100, loads: ['Wine'] }); // JIRA-249 L3
     const snapshot = makeSnapshot();
     const fakeBrain = {} as any;
     const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
