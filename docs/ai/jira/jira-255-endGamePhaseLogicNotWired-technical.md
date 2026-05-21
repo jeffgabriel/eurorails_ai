@@ -1,4 +1,4 @@
-# JIRA-255 — Wire end-game phase awareness into scoring; add cash-completion boost (technical)
+# JIRA-255 — End-game state lock + fewest-turns-to-victory ranking (technical)
 
 Companion to `jira-255-endGamePhaseLogicNotWired-behavioral.md`.
 
@@ -6,202 +6,148 @@ Companion to `jira-255-endGamePhaseLogicNotWired-behavioral.md`.
 
 ### 1. `classifyGamePhase` is dead code
 
-`src/server/services/ai/DeterministicTripPlanner.ts:68-76`:
+`src/server/services/ai/DeterministicTripPlanner.ts:68` — `classifyGamePhase(turn, deliveries, citiesConnected): 'early' | 'mid' | 'late'`. Defined, exported, has its own test suite. `grep -r classifyGamePhase src/` shows zero production callers.
 
-```ts
-export function classifyGamePhase(
-  turn: number,
-  deliveries: number,
-  citiesConnected: number,
-): 'early' | 'mid' | 'late' {
-  if (citiesConnected >= 5 || turn >= 80) return 'late';
-  if (turn < 25 || deliveries < 3 || citiesConnected < 2) return 'early';
-  return 'mid';
-}
-```
+### 2. `NetworkContext.computePhase` feeds the log/LLM only
 
-`grep -r classifyGamePhase src/` shows the function is exported and has its own test block (`src/server/__tests__/ai/DeterministicTripPlanner.test.ts:265-310`) — but it is **never called from production code**. The phase classifier is a stub.
+`src/server/services/ai/context/NetworkContext.ts:259-269` produces the `gamePhase` log field. Not consumed by `DeterministicTripPlanner.scoreCandidate` or `computeAggregateScore`. The deterministic planner has no phase awareness.
 
-### 2. `NetworkContext.computePhase` feeds the log + LLM prompt, not the scorer
+### 3. `aggregateScore` is pure income velocity
 
-`src/server/services/ai/context/NetworkContext.ts:258-269`:
-
-```ts
-static computePhase(snapshot, connectedMajorCities): string {
-  if (snapshot.gameStatus === 'initialBuild') return 'Initial Build';
-  if (connectedMajorCities.length >= 6 && snapshot.bot.money >= 230) return 'Victory Imminent';
-  if (connectedMajorCities.length >= 5 && snapshot.bot.money >= 250) return 'Victory Imminent';
-  if (connectedMajorCities.length >= 5 && snapshot.bot.money >= 150) return 'Late Game';
-  if (connectedMajorCities.length >= 3 || snapshot.bot.money >= 80) return 'Mid Game';
-  return 'Early Game';
-}
-```
-
-`computePhase` is wired into `ContextBuilder` → `WhisperService` → LLM prompt; the value also lands in the turn log as `gamePhase`. It is **not** read by `DeterministicTripPlanner.scoreCandidate` or `computeAggregateScore`. So the deterministic planner (the path Sonnet's T76 replan ran through, `[deterministic-top-1]`) does not see the phase.
-
-In Sonnet's T76 state (`cmc=3`, `cash=227`), `computePhase` returns `'Mid Game'` because `cmc < 5` short-circuits the `Late Game` and `Victory Imminent` cases — even though cash is just $3M from the `Victory Imminent` cash threshold of $230M (the `cmc >= 6 && money >= 230` rule's cash side).
-
-### 3. `aggregateScore` is pure income velocity (no win-completion term)
-
-`src/server/services/ai/DeterministicTripPlanner.ts:1086`:
+`DeterministicTripPlanner.ts:1086` (`scoreCandidate`) and `1182-1184` (`computeAggregateScore`):
 
 ```ts
 aggregateScore: net / Math.max(turns, 1),
+// chained:
+const aggregate = (c1.net + c2ChainedNet) / Math.max(c1.turns + c2Chained.turnsToComplete, 1);
 ```
 
-And the chained variant at lines 1182–1184:
+No notion of "this candidate funds the full win cost."
 
-```ts
-const aggregateTurns = Math.max(c1.turns + c2Chained.turnsToComplete, 1);
-const aggregateNet = c1.net + c2ChainedNet;
-const aggregate = aggregateNet / aggregateTurns;
-```
+### 4. `PRUNE_MAX_TURNS = 12` drops win-completers
 
-There is no awareness of "this candidate's NET, added to current cash and minus the remaining city-connection track cost, clears the full win cost." A candidate that funds both win dimensions ranks identically on velocity to one that overshoots cash but leaves cities unfunded.
+`DeterministicTripPlanner.ts:78` — applied before scoring. The T76 log records `Discarded by prune: 831 (turns > 12)`. The only win-completing candidate at T76 (triple-Hops-Cardiff) is in this bucket.
 
-### 4. `PRUNE_MAX_TURNS = 12` discards win-completing candidates before scoring
+### 5. `NetworkContext.computeUnconnectedMajorCities` is unused by the planner
 
-`src/server/services/ai/DeterministicTripPlanner.ts:78`:
-
-```ts
-export const PRUNE_MAX_TURNS = 12;
-```
-
-Applied in the candidate-filtering pass before `scoreCandidate` runs. The T76 log shows `"Discarded by prune: 831 (turns > 12)"`. The triple-Hops-Cardiff route (3 pickups + 3 deliveries + 22M ferry build ≈ 14-18 turns) is in this bucket. Layer A's scoring boost is useless if the candidate is pruned before it can be scored.
-
-### 5. The win-cost formula needs the city-connection budget too
-
-`src/server/services/ai/context/NetworkContext.ts:272-288` already exposes the per-city cost for unconnected majors via `computeUnconnectedMajorCities`, returning `{cityName, estimatedCost}[]` sorted cheapest-first:
-
-```ts
-return unconnected.map(cityName => ({
-  cityName,
-  estimatedCost: NetworkContext.estimateTrackCostToCity(cityName, segments, gridPoints),
-})).sort((a, b) => a.estimatedCost - b.estimatedCost);
-```
-
-Summing the cheapest `(7 - cmc.length)` entries gives `costToConnectRemainingMajors`. The full win cost is `CASH_WIN_THRESHOLD_M + costToConnectRemainingMajors`. The boost/protection should gate on `(currentCash + candidate.net) − costToConnectRemainingMajors ≥ CASH_WIN_THRESHOLD_M`.
+`NetworkContext.ts:272-288` returns `{cityName, estimatedCost}[]` for unconnected majors, sorted cheapest-first. The data the planner needs to compute `fullWinCost` already exists; it just isn't read.
 
 ## Fix shape
 
-Three layers. **Layer A (pre-prune protection) and Layer B (completion boost) are both required** — a boost on a pruned candidate does nothing, and surviving prune without a boost still loses to a faster non-completing candidate. Layer C wires phase classification.
+Three layers. All required.
 
-### Layer A — Pre-prune protection for win-completing candidates
+### Layer A — End-game state lock
 
-Modify the candidate filtering pass so that a candidate with `turns > PRUNE_MAX_TURNS` is **only** pruned if it is *not* a win-completing candidate. Concretely:
+Add a sticky flag on bot memory:
 
 ```ts
-// New helper, e.g. src/server/services/ai/winCompletion.ts:
+// extend BotMemoryState:
+endGameLocked: boolean; // once true, stays true for the rest of the game
+```
 
+Set in the planner entry point (e.g. `AIStrategyEngine` or `DeterministicTripPlanner.planTrip`):
+
+```ts
+if (snapshot.bot.money > 200 && !memory.endGameLocked) {
+  memory.endGameLocked = true;
+  await updateMemory(gameId, playerId, { endGameLocked: true });
+}
+```
+
+The lock is one-way. Once active, end-game routing rules apply on every subsequent replan — even if cash temporarily drops below $200M from a build.
+
+### Layer B — Pre-prune carve-out + win-completer filter
+
+New helper (e.g. `src/server/services/ai/winCompletion.ts`):
+
+```ts
 export const CASH_WIN_THRESHOLD_M = 250;
 
-/**
- * The full win budget: $250M cash + the track cost to connect the remaining
- * unconnected major cities. Computed from existing NetworkContext data.
- */
 export function fullWinCost(
-  currentCash: number,
   unconnectedMajors: Array<{ cityName: string; estimatedCost: number }>,
   cmcCount: number,
 ): number {
-  const remainingToConnect = Math.max(0, 7 - cmcCount);
-  const cityCost = unconnectedMajors
-    .slice(0, remainingToConnect)
+  const remaining = Math.max(0, 7 - cmcCount);
+  const cityCost = unconnectedMajors.slice(0, remaining)
     .reduce((sum, c) => sum + c.estimatedCost, 0);
   return CASH_WIN_THRESHOLD_M + cityCost;
 }
 
-/**
- * True if this candidate's projected cash, minus the remaining city-track
- * budget, clears the full win cost.
- */
 export function isWinCompleting(
   currentCash: number,
-  candidate: { net: number },
+  candidateNet: number,
   unconnectedMajors: Array<{ cityName: string; estimatedCost: number }>,
   cmcCount: number,
 ): boolean {
-  return (currentCash + candidate.net) >= fullWinCost(currentCash, unconnectedMajors, cmcCount);
+  return currentCash + candidateNet >= fullWinCost(unconnectedMajors, cmcCount);
 }
 ```
 
-In the prune pass (search for the `turns > PRUNE_MAX_TURNS` discard, near where the T76 reasoning prints `Discarded by prune: 831 (turns > 12)`):
+In the prune pass — skip the `turns > PRUNE_MAX_TURNS` discard when the candidate is a win-completer and the bot is in end-game state:
 
 ```ts
 if (candidate.turns > PRUNE_MAX_TURNS) {
-  if (!isWinCompleting(currentCash, candidate, unconnectedMajors, cmcCount)) {
-    continue; // existing prune behavior
+  if (memory.endGameLocked && isWinCompleting(cash, candidate.net, unconnectedMajors, cmcCount)) {
+    // keep — long-turn winners survive in end-game
+  } else {
+    continue;
   }
-  // win-completing → keep in scoring pool regardless of turn count
 }
 ```
 
-Keep a hard ceiling (e.g. `WIN_COMPLETING_MAX_TURNS = 25`) so a 50-turn candidate doesn't bypass prune.
+### Layer C — Fewest-turns-to-victory ranking in end-game
 
-### Layer B — Win-completion boost on `aggregateScore`
-
-After Layer A keeps the candidate in the pool, the boost ensures it ranks above faster non-completers:
+In end-game state, replace `aggregateScore` ranking with a two-tier sort:
 
 ```ts
-const COMPLETION_BOOST_M_PER_TURN = 2.0; // additive boost on aggregateScore
-
-function winCompletionBoost(
-  currentCash: number,
-  candidate: { net: number },
-  unconnectedMajors: Array<{ cityName: string; estimatedCost: number }>,
-  cmcCount: number,
-): number {
-  if (!isWinCompleting(currentCash, candidate, unconnectedMajors, cmcCount)) return 0;
-  return COMPLETION_BOOST_M_PER_TURN;
+function endGameRankKey(c: ScoredCandidate, ctx: WinContext): [number, number] {
+  const completing = isWinCompleting(ctx.cash, c.net, ctx.unconnectedMajors, ctx.cmcCount);
+  // Primary: completers (0) sort before non-completers (1).
+  // Secondary: ascending turns. Among completers, fewer turns = better.
+  //            Among non-completers, fall back to velocity.
+  return [completing ? 0 : 1, completing ? c.turns : -c.aggregateScore];
 }
 ```
 
-Apply where `aggregateScore` is set — both the no-followup path (`scoreCandidate` ≈ line 1086) and the chained path (`computeAggregateScore` ≈ lines 1182–1184). Mutate `aggregateScore` in place after the velocity calculation, before the rank-sort.
+If no completer exists in the candidate set, the second tier (`-aggregateScore` on non-completers) is the ranker — same as today.
 
-The boost is **flat** (M/turn-scaled), not multiplicative — matches the JIRA-242 precedent of a flat additive bonus on `aggregateScore`. Magnitude tuned so a $67M-NET / 16-turn triple completer (velocity 4.19) beats a $18M-NET / 6-turn single non-completer (velocity 3.0) with boost-margin to spare.
+Outside end-game state, ranking is unchanged.
 
-Why a flat boost rather than threshold-based reranking:
-- Threshold reranking ("all completers above all non-completers") could promote a strictly worse candidate (e.g. NET +$1M just-barely-completing over a NET +$40M non-completing with massive headroom). The flat boost keeps velocity in the picture among completers, just shifts them as a group above non-completers when the win is actually on the table.
-- Multiplicative scaling distorts mid-game cases.
-- The flat additive bonus matches existing JIRA-242 pattern.
+### Layer D — Wire `classifyGamePhase` (housekeeping)
 
-### Layer C — Wire `classifyGamePhase` into the scorer
+The dead `classifyGamePhase` becomes the gate on Layers B/C alongside the `endGameLocked` flag. Either:
+- Use `classifyGamePhase(turn, deliveries, cmc) === 'late'` as an alternate trigger for setting `endGameLocked` (in addition to `cash > 200`), OR
+- Delete `classifyGamePhase` and its tests if `endGameLocked` covers all the cases.
 
-Wire the dead `classifyGamePhase` from `DeterministicTripPlanner.ts:68` into the planner's pipeline. Use it as a coarse gate on the Layer A/B logic — e.g. only apply pre-prune protection and the boost when `classifyGamePhase(turn, deliveries, cmc) === 'late'`. Pass `(turn, deliveries, citiesConnected)` into `scoreCandidate` and the prune.
+Recommend the first option — phase-and-cash both rotating the lock catches more cases (e.g. games where `cmc` reaches 5 before cash reaches $200M).
 
-This kills two birds: the dead classifier is now load-bearing, and the boost is bounded to its intended phase — no risk of distorting early/mid-game cases.
+## Out of scope
 
-For traceability, the boost should be recorded in the candidate's reasoning string (the human-readable rationale already emits things like "Picked: pair-fresh+fresh — payout 48M, build 0M, 12 turns, NET 48M"). Append `(+2.0 win-completion boost; projected cash $294M ≥ full win cost $280M)` when active.
+- **Turn-count accuracy in the existing estimator.** Triple-Hops-Cardiff is currently estimated at ~14-18 turns; the actual game time is closer to ~9. The estimator inflates because it does not account for parallel movement during builds, may double-count ferry turns, or treats partial-turn movement as full turns. Fix the estimator in a separate ticket — Layer B's carve-out keeps win-completers in scope regardless of the inflation.
+- LLM-path scoring. The deterministic planner is the entry here (`[deterministic-top-1]` in the T76 reasoning).
+- Replacing `aggregateScore` outside end-game state. Pre-end-game ranking is unchanged.
 
 ## Acceptance from behavioral
 
-- **AC1 — Pre-prune protection.** Unit test on the candidate prune pass: fixture `currentCash = 227`, `cmc = 3`, capacity 3, `unconnectedMajorCost = $30M`, candidate `{ net: 67, turns: 16 }` (triple-Hops-Cardiff). With Layer A: assert the candidate appears in the survivors list. Without Layer A (baseline): assert it is in the `turns > 12` discard bucket.
-- **AC2 — Win-completion boost.** Unit test on `scoreCandidate`: same fixture + a competing candidate `{ net: 18, turns: 6 }` (single-Potatoes). With Layer B: assert the triple's `aggregateScore > single`. Without Layer B: single wins on velocity.
-- **AC3 — Win cost includes city-track-budget.** Unit test on `isWinCompleting`: fixture `currentCash = 260, cmc = 3, unconnectedMajorCost = $30M`, candidate `{ net: 10 }`. Assert: NOT win-completing (`260 + 10 − 30 = 240 < 250`). Same fixture with candidate `{ net: 25 }`: assert IS win-completing (`260 + 25 − 30 = 255 ≥ 250`).
-- **AC4 — Boost dormant outside late phase.** Unit test on Layer C gate: fixture `currentCash = 80, turn = 20, deliveries = 1, cmc = 2` (classifies as `'early'`). Assert: boost does not fire even if `(cash + net) − cityCost ≥ 250` mathematically.
-- **AC5 — Hard ceiling on pre-prune protection.** Unit test: fixture with a win-completing candidate `{ turns: 30 }`. Assert: candidate is pruned by the `WIN_COMPLETING_MAX_TURNS` ceiling even though it satisfies `isWinCompleting`.
-- **AC6 — Game replay regression.** Replay Sonnet T76 snapshot from game `6033c903`. Assert: top-1 chosen candidate is the triple-Hops-Cardiff (or equivalent win-completer). Reasoning string includes the boost annotation. Single-Potatoes-Lodz is no longer top-1.
-- **AC7 — Phase classifier wired.** After Layer C: `grep -rn "classifyGamePhase" src/` shows at least one non-test usage in `DeterministicTripPlanner` (or wherever the prune/score pipeline runs).
+- **AC1** Unit test: bot snapshot `cash = 205M`, `endGameLocked = false`. After one replan tick, `memory.endGameLocked === true`. Persist via `updateMemory`.
+- **AC2** Unit test: `endGameLocked = true`, then a build drops `cash` to $180M. Lock remains true; end-game ranking still applies.
+- **AC3** Unit test on the prune pass: `endGameLocked = true`, candidate `{ net: 67, turns: 16 }`, `fullWinCost = $280M`, `cash = $227M`. Assert candidate survives. With `endGameLocked = false`, candidate is discarded by `turns > 12`.
+- **AC4** Unit test on ranking: `endGameLocked = true`, candidate A `{ net: 67, turns: 16, win-completing }`, candidate B `{ net: 18, turns: 6, not win-completing }`. Assert A ranks above B.
+- **AC5** Unit test on ranking: `endGameLocked = true`, both candidates win-completing, A `{ turns: 9 }`, B `{ turns: 16 }`. Assert A ranks above B (fewest turns wins).
+- **AC6** Unit test on ranking: `endGameLocked = true`, no win-completer in the candidate set. Assert ranking falls back to `-aggregateScore` (i.e. existing velocity ranking).
+- **AC7** Unit test outside end-game: `endGameLocked = false`, cash $80M. Assert ranking is unchanged from today's behavior.
+- **AC8** Game replay on Sonnet T76 snapshot, game `6033c903`. Assert top-1 is the triple-Hops-Cardiff candidate.
+- **AC9** `grep -rn "classifyGamePhase" src/` shows at least one non-test usage in the planner pipeline.
 
-## Validation hooks to inspect during fix
+## Validation hooks
 
-- The turn log's `composition` block: a candidate's score breakdown should expose `completionBoost: number` and `fullWinCost: number` fields per candidate (extend the existing diagnostic emit).
-- `gamePhase` (or sibling) in the turn log: should reflect the late-phase classification at T76 in the replay fixture, surfaced from `classifyGamePhase`, not just from `NetworkContext.computePhase`.
-- The planner's reasoning string: include the boost annotation when active — e.g. `"Picked: triple-3fresh — payout 89M, build 22M, 16 turns, NET 67M (+2.0 win-completion boost; projected cash $294M − $30M city-track ≥ $280M full win cost)"`.
-- `Discarded by prune` log line: post-fix, should report the carve-out — `"Discarded by prune: 831 (turns > 12, 0 win-completing kept)"` or similar.
-
-## Not in scope
-
-- Replacing `aggregateScore` with a multi-objective scorer. The flat-boost approach preserves the current rank key.
-- Re-tuning `PRUNE_MAX_TURNS = 12` globally. Layer A is a targeted carve-out for win-completers, not a blanket increase.
-- LLM-path scoring. The deterministic planner is what ran here (`[deterministic-top-1]` in the reasoning). Whether the LLM-path needs the same fix is a separate question.
-- Cash-side win-completion **without** a fresh route — e.g. "the bot is at $245M; should it pivot to whatever shortest delivery closes the last $5M?" That's a different bug (post-delivery replan ordering, sibling of JIRA-252).
-- Refining the `estimateTrackCostToCity` Dijkstra heuristic. We use it as-is; if its estimates drift from actual build cost, that's a separate bug in `NetworkContext`.
+- New log fields per turn: `endGameLocked: boolean`, `fullWinCost: number`, `winCompleterCount: number`.
+- Reasoning string for the picked candidate, when in end-game: `Picked: triple-3fresh — payout 89M, NET 67M, 16 turns. End-game: win-completer (projected $294M cash, full win cost $280M), ranked by fewest turns.`
+- Prune log line in end-game: `Discarded by prune: 829 (turns > 12, 2 win-completing kept).`
 
 ## Relationship to existing JIRAs
 
-- **JIRA-229** introduced `aggregateScore`. Layer B extends it with a phase-gated additive term.
-- **JIRA-242** added a flat additive bonus on `aggregateScore` for multi-delivery candidates — proves the additive-bonus pattern works without distorting other rank cases. Reuse the pattern.
-- **JIRA-253** narrowed the A3 partial-path abandon predicate. With 253 in place, multi-turn builds for big-NET routes are no longer abandoned — so the planner can actually execute the boost-promoted candidate.
-- **JIRA-252** addresses post-delivery replan ordering. Different timing concern; both bugs waste turns at the cash-completion margin.
-- **`PRUNE_MAX_TURNS` (JIRA-237 background, line 78)** is a velocity-only filter. Layer A is its first phase-aware carve-out.
+- **JIRA-229** introduced `aggregateScore`. This ticket adds a phase override that does not modify mid-game ranking.
+- **JIRA-242** added flat additive bonuses on `aggregateScore` for multi-delivery candidates — different pattern (additive bonus) than this ticket (rank-key override) but in the same scoring path.
+- **JIRA-253** narrowed the A3 partial-path abandon predicate, allowing multi-turn builds to execute. Required for any long-turn win-completer surfaced by Layer B to actually run.
+- **JIRA-252** addresses post-delivery replan ordering — sibling timing concern.
