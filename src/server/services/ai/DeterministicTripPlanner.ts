@@ -35,6 +35,7 @@ import {
   VICTORY_CITY_COUNT,
 } from '../../../shared/types/GameTypes';
 import { cheapestUnconnectedMajorConnectorCost } from './victoryRules';
+import { isWinCompleting, fullWinCost } from './winCompletion';
 
 // ── Tunables ───────────────────────────────────────────────────────────
 
@@ -133,6 +134,21 @@ export interface DeterministicTripPlanResult {
   synthesizedAttempt: LlmAttempt;
   /** JIRA-249/250: Structured records of candidates rejected by the grammar validator. */
   candidateRejections?: CandidateRejection[];
+  /**
+   * JIRA-255 Layer A: The resolved end-game lock state for this planning call.
+   * Callers (e.g. TripPlanner) should persist this to memory when it transitions
+   * from false to true so the lock remains sticky across replans.
+   */
+  endGameLocked?: boolean;
+  /**
+   * JIRA-255 Diagnostics: full win cost for this turn (ECU M).
+   * Exposed so callers can include it in turn logs.
+   */
+  fullWinCostM?: number;
+  /**
+   * JIRA-255 Diagnostics: number of win-completing candidates in the feasible set.
+   */
+  winCompleterCount?: number;
 }
 
 // ── Internal types ─────────────────────────────────────────────────────
@@ -936,9 +952,24 @@ export function enumerateCandidates(
 // ── Spatial prune (R5) ─────────────────────────────────────────────────
 
 /**
+ * JIRA-255 Layer B: Context for win-completer carve-out in cheapPrune.
+ * When provided and endGameLocked is true, candidates that would complete
+ * the win survive even when they exceed PRUNE_MAX_TURNS.
+ */
+export interface WinCompletionContext {
+  endGameLocked: boolean;
+  currentCash: number;
+  unconnectedMajors: Array<{ cityName: string; estimatedCost: number }>;
+  cmcCount: number;
+}
+
+/**
  * Graph-aware spatial prune: compute turn + build estimates using PathCostEstimator.
  * Returns keep=false if either threshold is exceeded or any leg is unreachable.
  * JIRA-230 BE-003: replaced hex-distance sum with iterated estimateGraphPathCost calls.
+ *
+ * JIRA-255 Layer B: when winCtx.endGameLocked is true, candidates whose net
+ * payout would cover the full win cost survive regardless of turn count.
  */
 export function cheapPrune(
   candidate: Candidate,
@@ -946,6 +977,7 @@ export function cheapPrune(
   speed: number,
   opts: ResolvedOptions,
   snapshot: WorldSnapshot,
+  winCtx?: WinCompletionContext,
 ): { keep: boolean; estTurns: number; estBuild: number } {
   let totalBuild = 0;
   let totalTurns = 0;
@@ -970,6 +1002,21 @@ export function cheapPrune(
   }
   const estTurns = Math.max(1, totalTurns);
   const estBuild = totalBuild;
+
+  // JIRA-255 Layer B: win-completer carve-out.
+  // When in end-game and this candidate's net would fund the win, allow it
+  // through even if it exceeds PRUNE_MAX_TURNS. Build cost gate still applies —
+  // we cannot build more than we can afford.
+  if (estTurns > opts.pruneMaxTurns && winCtx?.endGameLocked) {
+    const candidateNet = candidate.payout - estBuild;
+    if (isWinCompleting(winCtx.currentCash, candidateNet, winCtx.unconnectedMajors, winCtx.cmcCount)) {
+      // Keep: long-turn win-completers survive in end-game. Build gate still applies.
+      if (estBuild <= opts.pruneMaxBuildM) {
+        return { keep: true, estTurns, estBuild };
+      }
+    }
+  }
+
   const keep = estTurns <= opts.pruneMaxTurns && estBuild <= opts.pruneMaxBuildM;
   return { keep, estTurns, estBuild };
 }
@@ -1582,6 +1629,18 @@ export function planTripDeterministic(
 ): DeterministicTripPlanResult {
   const startMs = Date.now();
 
+  // JIRA-255 Layer A + D: Set the sticky end-game lock when cash > 200M
+  // OR classifyGamePhase returns 'late' (≥5 cmc or turn ≥ 80).
+  // The lock is one-way — once set, it stays set for the rest of the game
+  // even if cash temporarily dips below 200M from a build.
+  const cmcCount = context.connectedMajorCities?.length ?? 0;
+  const deliveries = memory.deliveryCount ?? 0;
+  const isLatePhase = classifyGamePhase(snapshot.turnNumber, deliveries, cmcCount) === 'late';
+  const endGameLocked: boolean =
+    memory.endGameLocked === true ||
+    snapshot.bot.money > 200 ||
+    isLatePhase;
+
   // Cash-aware prune cap (JIRA-227 Fix B.1): when bot's cash exceeds the
   // static cap, raise the prune threshold to match — the bot can afford trips
   // it couldn't before. Static cap remains a floor for low-cash scenarios.
@@ -1597,6 +1656,15 @@ export function planTripDeterministic(
     pruneMaxBuildM: dynamicBuildCap,
     hopAvgCostM: options?.hopAvgCostM ?? HOP_AVG_COST_M,
     excludeRouteSignatures: new Set(options?.excludeRouteSignatures ?? []),
+  };
+
+  // JIRA-255 Layer B: win-completion context for cheapPrune carve-out.
+  const unconnectedMajors = context.unconnectedMajorCities ?? [];
+  const winCtx: WinCompletionContext = {
+    endGameLocked,
+    currentCash: snapshot.bot.money,
+    unconnectedMajors,
+    cmcCount,
   };
 
   // Empty hand check (R8)
@@ -1642,9 +1710,14 @@ export function planTripDeterministic(
   let prunedByBuild = 0;
   const survivors: Candidate[] = [];
 
+  let winCompleterKeptByPrune = 0;
   for (const cand of allCandidates) {
-    const { keep, estTurns, estBuild } = cheapPrune(cand, startPos, speed, opts, snapshot);
+    const { keep, estTurns, estBuild } = cheapPrune(cand, startPos, speed, opts, snapshot, winCtx);
     if (keep) {
+      // Track whether this was a win-completer carve-out (turns > limit but kept).
+      if (estTurns > opts.pruneMaxTurns && endGameLocked) {
+        winCompleterKeptByPrune++;
+      }
       survivors.push(cand);
     } else {
       if (Math.ceil(estTurns) > opts.pruneMaxTurns) prunedByTurns++;
@@ -1687,6 +1760,9 @@ export function planTripDeterministic(
       reasoning,
       outcome: 'no_feasible_candidates',
       synthesizedAttempt: synthesizeLlmAttempt(null, latencyMs),
+      endGameLocked,
+      fullWinCostM: fullWinCost(unconnectedMajors, cmcCount),
+      winCompleterCount: 0,
     };
   }
 
@@ -1742,6 +1818,9 @@ export function planTripDeterministic(
       outcome: 'no_feasible_candidates',
       synthesizedAttempt: synthesizeLlmAttempt(null, latencyMs),
       candidateRejections: candidateRejections.length > 0 ? candidateRejections : undefined,
+      endGameLocked,
+      fullWinCostM: fullWinCost(unconnectedMajors, cmcCount),
+      winCompleterCount: 0,
     };
   }
 
@@ -1780,12 +1859,37 @@ export function planTripDeterministic(
     }
   }
 
-  // Sort by aggregate score (rank key per JIRA-229) and pick top-1
-  const sorted = [...feasible].sort((a, b) => {
-    if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
-    if (b.net !== a.net) return b.net - a.net;
-    return a.id.localeCompare(b.id);
-  });
+  // JIRA-255 Layer C: When endGameLocked, apply two-tier ranking:
+  //   Primary:   win-completers (rank 0) sort before non-completers (rank 1).
+  //   Secondary: among win-completers, fewest turns wins.
+  //              among non-completers, fall back to -aggregateScore (velocity).
+  // When not end-game-locked, ranking is unchanged (aggregateScore descending).
+  const winCompleterCount = endGameLocked
+    ? feasible.filter(c => isWinCompleting(snapshot.bot.money, c.net, unconnectedMajors, cmcCount)).length
+    : 0;
+
+  const sorted = endGameLocked
+    ? [...feasible].sort((a, b) => {
+        const aWins = isWinCompleting(snapshot.bot.money, a.net, unconnectedMajors, cmcCount);
+        const bWins = isWinCompleting(snapshot.bot.money, b.net, unconnectedMajors, cmcCount);
+        const aTier = aWins ? 0 : 1;
+        const bTier = bWins ? 0 : 1;
+        if (aTier !== bTier) return aTier - bTier; // completers first
+        if (aWins && bWins) {
+          // Both win-completing: fewest turns wins
+          if (a.turns !== b.turns) return a.turns - b.turns;
+        } else {
+          // Both non-completing: fall back to velocity
+          if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
+        }
+        if (b.net !== a.net) return b.net - a.net;
+        return a.id.localeCompare(b.id);
+      })
+    : [...feasible].sort((a, b) => {
+        if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
+        if (b.net !== a.net) return b.net - a.net;
+        return a.id.localeCompare(b.id);
+      });
   const top1 = pickTop1(sorted)!;
 
   // JIRA-232 Defect B: emit predicted build cost for post-game diff against actual.
@@ -1829,7 +1933,29 @@ export function planTripDeterministic(
     : upgradeDecision.gateReason
       ? `\n  Upgrade skipped: ${upgradeDecision.gateReason}.`
       : '';
-  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, supplyDiffLines, enumerationMs) + upgradeNote;
+
+  // JIRA-255 Diagnostics: end-game reasoning annotation.
+  let endGameNote = '';
+  if (endGameLocked) {
+    const top1Completing = isWinCompleting(snapshot.bot.money, top1.net, unconnectedMajors, cmcCount);
+    const fwc = fullWinCost(unconnectedMajors, cmcCount);
+    if (top1Completing) {
+      const projectedCash = snapshot.bot.money + top1.net;
+      endGameNote = `\n  End-game: win-completer (projected $${projectedCash.toFixed(0)}M cash, full win cost $${fwc.toFixed(0)}M), ranked by fewest turns.`;
+    } else {
+      endGameNote = `\n  End-game: no win-completer in candidate set (full win cost $${fwc.toFixed(0)}M), falling back to velocity ranking.`;
+    }
+    if (winCompleterKeptByPrune > 0) {
+      endGameNote += ` Win-completers kept past prune: ${winCompleterKeptByPrune}.`;
+    }
+  }
+
+  // JIRA-255 Diagnostics: log end-game fields per turn.
+  console.log(
+    `[JIRA-255] endGameLocked=${endGameLocked} fullWinCost=${fullWinCost(unconnectedMajors, cmcCount).toFixed(0)}M winCompleterCount=${winCompleterCount} winCompleterKeptByPrune=${winCompleterKeptByPrune}`,
+  );
+
+  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, supplyDiffLines, enumerationMs) + upgradeNote + endGameNote;
   const route = buildStrategicRoute(top1, snapshot.turnNumber, reasoning, upgradeOnRoute);
 
   return {
@@ -1838,5 +1964,8 @@ export function planTripDeterministic(
     outcome: 'success',
     synthesizedAttempt: synthesizeLlmAttempt(top1, latencyMs),
     candidateRejections: candidateRejections.length > 0 ? candidateRejections : undefined,
+    endGameLocked,
+    fullWinCostM: fullWinCost(unconnectedMajors, cmcCount),
+    winCompleterCount,
   };
 }

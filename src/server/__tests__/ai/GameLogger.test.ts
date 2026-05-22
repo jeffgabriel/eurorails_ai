@@ -76,3 +76,39 @@ describe('GameLogger — AC4: gameState field in per-turn record', () => {
     expect(parsed.gameState).toBeUndefined();
   });
 });
+
+describe('GameLogger — JIRA-255: endGameLocked, fullWinCost, winCompleterCount fields', () => {
+  beforeEach(() => {
+    appendFileMock.mockClear();
+    mkdirSyncMock.mockClear();
+  });
+
+  it('JIRA-255(a): GameTurnLogEntry schema accepts endGameLocked field', () => {
+    const entry: GameTurnLogEntry = makeEntry({ endGameLocked: true });
+    expect(entry.endGameLocked).toBe(true);
+  });
+
+  it('JIRA-255(b): appendTurn emits endGameLocked=true in the record', () => {
+    appendTurn(TEST_GAME_ID, makeEntry({ endGameLocked: true }));
+    const parsed = JSON.parse(lastWrittenLine());
+    expect(parsed.endGameLocked).toBe(true);
+  });
+
+  it('JIRA-255(c): appendTurn emits fullWinCost field when set', () => {
+    appendTurn(TEST_GAME_ID, makeEntry({ fullWinCost: 280 }));
+    const parsed = JSON.parse(lastWrittenLine());
+    expect(parsed.fullWinCost).toBe(280);
+  });
+
+  it('JIRA-255(d): appendTurn emits winCompleterCount field when set', () => {
+    appendTurn(TEST_GAME_ID, makeEntry({ winCompleterCount: 3 }));
+    const parsed = JSON.parse(lastWrittenLine());
+    expect(parsed.winCompleterCount).toBe(3);
+  });
+
+  it('JIRA-255(e): endGameLocked is omitted when not set (optional field)', () => {
+    appendTurn(TEST_GAME_ID, makeEntry());
+    const parsed = JSON.parse(lastWrittenLine());
+    expect(parsed.endGameLocked).toBeUndefined();
+  });
+});

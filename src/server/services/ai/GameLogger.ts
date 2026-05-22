@@ -176,6 +176,14 @@ export interface GameTurnLogEntry {
   // Populated on every bot turn that runs checkBotVictory; omitted when check was skipped.
   victoryCheck?: VictoryCheckResult;
 
+  // JIRA-255: End-game state diagnostics
+  /** Whether the bot is in the sticky end-game-locked state for this turn. */
+  endGameLocked?: boolean;
+  /** Full win cost (ECU M) computed by planTripDeterministic this turn. */
+  fullWinCost?: number;
+  /** Number of win-completing candidates in the feasible set this turn. */
+  winCompleterCount?: number;
+
   // Execution Results
   success: boolean;
   error?: string;
