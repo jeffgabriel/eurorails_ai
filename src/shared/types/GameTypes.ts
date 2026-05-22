@@ -582,6 +582,13 @@ export interface BotMemoryState {
      * Format: Array<{ key: string; abandonedAtTurn: number }>
      */
     recentlyAbandonedRouteKeys?: Array<{ key: string; abandonedAtTurn: number }>;
+    /**
+     * JIRA-255 Layer A: Sticky end-game lock. Once set to true (cash > 200M or
+     * classifyGamePhase returns 'late'), stays true for the rest of the game —
+     * even if cash temporarily dips below 200M after a build. Controls whether
+     * win-completer carve-out and fewest-turns-to-victory ranking are active.
+     */
+    endGameLocked?: boolean;
 }
 
 /** Simplified option summary for decision logging */

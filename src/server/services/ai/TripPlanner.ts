@@ -34,6 +34,7 @@ import { build as buildStrategicContext } from './StrategicContextBuilder';
 import { simulateTrip } from './RouteDetourEstimator';
 import { PROPOSE_MIN_SCORE_DELTA } from './StrategicConstants';
 import { planTripDeterministic, AFFORDABILITY_FLOOR_M } from './DeterministicTripPlanner';
+import { updateMemory } from './BotMemory';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -223,6 +224,12 @@ export class TripPlanner {
           ? { excludeRouteSignatures }
           : undefined,
       );
+
+      // JIRA-255 Layer A: Persist the end-game lock when it transitions from false to true.
+      // The lock is one-way — once set, it stays for the rest of the game.
+      if (detResult.endGameLocked && !memory.endGameLocked) {
+        await updateMemory(snapshot.gameId, snapshot.bot.playerId, { endGameLocked: true });
+      }
 
       if (detResult.outcome === 'success' && detResult.route !== null) {
         const latencyMs = detResult.synthesizedAttempt.latencyMs;
