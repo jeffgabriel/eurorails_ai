@@ -884,7 +884,17 @@ export class AIStrategyEngine {
       const loadsPickedUp: Array<{ loadType: string; city: string }> = [];
       const allSteps = finalPlan.type === 'MultiAction' ? finalPlan.steps : [finalPlan];
       const majorCityLookupForLog = getMajorCityLookup();
-      for (const step of allSteps) {
+      // JIRA-258: walk only steps that actually executed. When result.success
+      // is false, result.failedStepIndex marks the step that the rule layer
+      // rejected; steps before it committed normally and stay in the log,
+      // and steps at-or-after it are skipped from the success-claim fields
+      // (loadsDelivered / loadsPickedUp / milepostsMoved / movementPath).
+      const failedStepIndex = result.failedStepIndex;
+      const lastExecutedIndex = !result.success && failedStepIndex !== undefined
+        ? failedStepIndex - 1
+        : allSteps.length - 1;
+      for (let i = 0; i <= lastExecutedIndex; i++) {
+        const step = allSteps[i];
         if (step.type === AIActionType.MoveTrain) {
           milepostsMoved = (milepostsMoved ?? 0) + (step.path.length > 0 ? computeEffectivePathLength(step.path, majorCityLookupForLog) : 0);
           trackUsageFee = (trackUsageFee ?? 0) + step.totalFee;
@@ -911,8 +921,14 @@ export class AIStrategyEngine {
         }
       }
 
-      // Build structured action timeline for animated partial turn movements
-      const actionTimeline = AIStrategyEngine.buildActionTimeline(allSteps);
+      // Build structured action timeline for animated partial turn movements.
+      // JIRA-258: pass execution outcome so the failed step is marked rejected
+      // and unattempted later steps are dropped from the timeline.
+      const actionTimeline = AIStrategyEngine.buildActionTimeline(
+        allSteps,
+        result.success ? undefined : failedStepIndex,
+        result.success ? undefined : result.rejectionReason?.code,
+      );
 
       // JIRA-143: Map model → actor metadata
       const actorMeta = AIStrategyEngine.mapActorMetadata(decision.model, guardrailResult.overridden);
@@ -1144,14 +1160,34 @@ export class AIStrategyEngine {
     }
   }
 
-  /** Build a structured action timeline from composed plan steps. */
-  static buildActionTimeline(allSteps: TurnPlan[]): TimelineStep[] {
+  /**
+   * Build a structured action timeline from composed plan steps.
+   *
+   * JIRA-258: when an execution failure is reported, the step at
+   * `failedStepIndex` is annotated with `outcome: 'rejected'` (and the
+   * provided `rejectionCode`); steps at indices > failedStepIndex are
+   * dropped because executeMultiAction stops at the first failure and
+   * those steps were never attempted.
+   */
+  static buildActionTimeline(
+    allSteps: TurnPlan[],
+    failedStepIndex?: number,
+    rejectionCode?: string,
+  ): TimelineStep[] {
     const timeline: TimelineStep[] = [];
-    for (const step of allSteps) {
+    const lastIncludedIndex = failedStepIndex !== undefined
+      ? failedStepIndex
+      : allSteps.length - 1;
+    for (let i = 0; i <= lastIncludedIndex && i < allSteps.length; i++) {
+      const step = allSteps[i];
+      const rejected = failedStepIndex !== undefined && i === failedStepIndex;
+      const annotation = rejected
+        ? { outcome: 'rejected' as const, rejectionCode }
+        : {};
       switch (step.type) {
         case AIActionType.MoveTrain:
           if (step.path && step.path.length > 0) {
-            timeline.push({ type: 'move', path: step.path.map(p => ({ row: p.row, col: p.col })) });
+            timeline.push({ type: 'move', path: step.path.map(p => ({ row: p.row, col: p.col })), ...annotation });
           }
           break;
         case AIActionType.DeliverLoad:
@@ -1161,6 +1197,7 @@ export class AIStrategyEngine {
             city: (step as any).city ?? '',
             payment: (step as any).payout ?? 0,
             cardId: (step as any).cardId ?? 0,
+            ...annotation,
           });
           break;
         case AIActionType.PickupLoad:
@@ -1168,6 +1205,7 @@ export class AIStrategyEngine {
             type: 'pickup',
             loadType: (step as any).load ?? '',
             city: (step as any).city ?? '',
+            ...annotation,
           });
           break;
         case AIActionType.BuildTrack:
@@ -1175,6 +1213,7 @@ export class AIStrategyEngine {
             type: 'build',
             segmentsBuilt: (step as any).segments?.length ?? 0,
             cost: (step as any).cost ?? 0,
+            ...annotation,
           });
           break;
         case AIActionType.UpgradeTrain:
