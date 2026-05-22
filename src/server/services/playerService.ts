@@ -5,7 +5,7 @@ import { LoadService } from "./loadService";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
-import { TrackService, getRiverEdgeKeys, segmentCrossesRiver } from "./trackService";
+import { TrackService, getRiverEdgeKeys, segmentCrossesRiver, areSegmentsEqual } from "./trackService";
 import { DemandCard } from "../../shared/types/DemandCard";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
@@ -2828,13 +2828,29 @@ export class PlayerService {
       }
       // ── End restriction checks ────────────────────────────────────────────
 
-      // 1. UPSERT player_tracks
+      // 1. Compute updated pending_flood_rebuilds: remove any segments that match the newly built ones.
+      //    We read the current value inside the already-locked transaction (the player_tracks row
+      //    was locked by the FOR UPDATE on the players table above, and the UPSERT will re-lock it).
+      const pendingRow = await client.query(
+        `SELECT COALESCE(pending_flood_rebuilds, '[]'::jsonb) AS pending_flood_rebuilds
+         FROM player_tracks
+         WHERE game_id = $1 AND player_id = $2`,
+        [gameId, playerId],
+      );
+      const rawPending: TrackSegment[] = pendingRow.rows.length > 0
+        ? (pendingRow.rows[0].pending_flood_rebuilds as TrackSegment[])
+        : [];
+      const updatedPendingRebuilds = rawPending.filter(
+        pending => !newSegments.some(built => areSegmentsEqual(pending, built)),
+      );
+
+      // 2. UPSERT player_tracks — also persist the updated pending_flood_rebuilds
       await client.query(
-        `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
-         VALUES ($1, $2, $3, $4, $5, NOW())
+        `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp, pending_flood_rebuilds)
+         VALUES ($1, $2, $3, $4, $5, NOW(), $6)
          ON CONFLICT (game_id, player_id)
-         DO UPDATE SET segments = $3, total_cost = $4, turn_build_cost = $5, last_build_timestamp = NOW()`,
-        [gameId, playerId, JSON.stringify(allSegments), totalCost, cost],
+         DO UPDATE SET segments = $3, total_cost = $4, turn_build_cost = $5, last_build_timestamp = NOW(), pending_flood_rebuilds = $6`,
+        [gameId, playerId, JSON.stringify(allSegments), totalCost, cost, JSON.stringify(updatedPendingRebuilds)],
       );
 
       // 2. Deduct money
