@@ -15,7 +15,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { LoadType } from '../../../shared/types/LoadTypes';
 import { emitToGame, emitStatePatch } from '../socketService';
-import { PlayerService } from '../playerService';
+import { PlayerService, ActionRestrictionError, ActionRestrictionErrorCode } from '../playerService';
 import { LoadService } from '../loadService';
 import { DemandDeckService } from '../demandDeckService';
 import { gridToPixel, loadGridPoints } from '../MapTopology';
@@ -33,6 +33,8 @@ export interface ExecutionResult {
   payment?: number;
   newCardId?: number;
   movementPath?: { row: number; col: number }[];
+  /** Populated when an ActionRestrictionError was caught — provides typed rejection info for logging */
+  rejectionReason?: { code: ActionRestrictionErrorCode; message: string };
 }
 
 export class TurnExecutor {
@@ -310,13 +312,34 @@ export class TurnExecutor {
     const cost = plan.estimatedCost ?? newSegments.reduce((s, seg) => s + seg.cost, 0);
 
     // Delegate to PlayerService — handles UPSERT + money deduction in a transaction
-    const { remainingMoney } = await PlayerService.buildTrackForPlayer(
-      snapshot.gameId,
-      snapshot.bot.playerId,
-      newSegments,
-      snapshot.bot.existingSegments,
-      cost,
-    );
+    let buildResult: Awaited<ReturnType<typeof PlayerService.buildTrackForPlayer>>;
+    try {
+      buildResult = await PlayerService.buildTrackForPlayer(
+        snapshot.gameId,
+        snapshot.bot.playerId,
+        newSegments,
+        snapshot.bot.existingSegments,
+        cost,
+      );
+    } catch (buildError) {
+      if (buildError instanceof ActionRestrictionError) {
+        console.warn(
+          `[TurnExecutor] BuildTrack rejected by event card restriction: code=${buildError.code} message=${buildError.message}`,
+        );
+        return {
+          success: false,
+          action: AIActionType.BuildTrack,
+          cost: 0,
+          segmentsBuilt: 0,
+          remainingMoney: snapshot.bot.money,
+          durationMs: Date.now() - startTime,
+          error: buildError.message,
+          rejectionReason: { code: buildError.code, message: buildError.message },
+        };
+      }
+      throw buildError;
+    }
+    const { remainingMoney } = buildResult;
 
     // 3. Post-commit: audit record (best-effort — don't let a missing table
     //    undo a successful track build)
@@ -395,11 +418,31 @@ export class TurnExecutor {
     const pixel = gridToPixel(destination.row, destination.col);
 
     // Call PlayerService.moveTrainForUser (handles track usage fees in its own transaction)
-    const moveResult = await PlayerService.moveTrainForUser({
-      gameId: snapshot.gameId,
-      userId: snapshot.bot.userId,
-      to: { row: destination.row, col: destination.col, x: pixel.x, y: pixel.y },
-    });
+    let moveResult: Awaited<ReturnType<typeof PlayerService.moveTrainForUser>>;
+    try {
+      moveResult = await PlayerService.moveTrainForUser({
+        gameId: snapshot.gameId,
+        userId: snapshot.bot.userId,
+        to: { row: destination.row, col: destination.col, x: pixel.x, y: pixel.y },
+      });
+    } catch (moveError) {
+      if (moveError instanceof ActionRestrictionError) {
+        console.warn(
+          `[TurnExecutor] MoveTrain rejected by event card restriction: code=${moveError.code} message=${moveError.message}`,
+        );
+        return {
+          success: false,
+          action: AIActionType.MoveTrain,
+          cost: 0,
+          segmentsBuilt: 0,
+          remainingMoney: snapshot.bot.money,
+          durationMs: Date.now() - startTime,
+          error: moveError.message,
+          rejectionReason: { code: moveError.code, message: moveError.message },
+        };
+      }
+      throw moveError;
+    }
 
     const cost = moveResult?.feeTotal ?? 0;
     const remainingMoney = moveResult?.updatedMoney ?? 0;
@@ -477,12 +520,33 @@ export class TurnExecutor {
       : '';
 
     // Delegate to PlayerService — handles capacity check, array_append, dropped-load clear
-    const { updatedLoads } = await PlayerService.pickupLoadForPlayer(
-      snapshot.gameId,
-      snapshot.bot.playerId,
-      loadType as LoadType,
-      cityName,
-    );
+    let pickupResult: Awaited<ReturnType<typeof PlayerService.pickupLoadForPlayer>>;
+    try {
+      pickupResult = await PlayerService.pickupLoadForPlayer(
+        snapshot.gameId,
+        snapshot.bot.playerId,
+        loadType as LoadType,
+        cityName,
+      );
+    } catch (pickupError) {
+      if (pickupError instanceof ActionRestrictionError) {
+        console.warn(
+          `[TurnExecutor] PickupLoad rejected by event card restriction: code=${pickupError.code} message=${pickupError.message}`,
+        );
+        return {
+          success: false,
+          action: AIActionType.PickupLoad,
+          cost: 0,
+          segmentsBuilt: 0,
+          remainingMoney: snapshot.bot.money,
+          durationMs: Date.now() - startTime,
+          error: pickupError.message,
+          rejectionReason: { code: pickupError.code, message: pickupError.message },
+        };
+      }
+      throw pickupError;
+    }
+    const { updatedLoads } = pickupResult;
 
     // Update snapshot so subsequent steps see the correct loads (JIRA-220 follow-up
     // game e437ce9b — keep snapshot in sync with DB for mid-turn consumers like
@@ -588,6 +652,21 @@ export class TurnExecutor {
         cardId,
       );
     } catch (deliverError) {
+      if (deliverError instanceof ActionRestrictionError) {
+        console.warn(
+          `[TurnExecutor] DeliverLoad rejected by event card restriction: code=${deliverError.code} message=${deliverError.message}`,
+        );
+        return {
+          success: false,
+          action: AIActionType.DeliverLoad,
+          cost: 0,
+          segmentsBuilt: 0,
+          remainingMoney: snapshot.bot.money,
+          durationMs: Date.now() - startTime,
+          error: deliverError.message,
+          rejectionReason: { code: deliverError.code, message: deliverError.message },
+        };
+      }
       console.error(
         `[TurnExecutor.handleDeliverLoad] JIRA-188 delivery error:`,
         JSON.stringify({

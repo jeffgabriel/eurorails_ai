@@ -187,6 +187,8 @@ export interface GameTurnLogEntry {
   loadsDelivered?: Array<{ loadType: string; city: string; payment: number; cardId: number }>;
   milepostsMoved?: number;
   trackUsageFee?: number;
+  /** Populated when an action was rejected by an event card restriction */
+  rejectionReason?: { code: string; message: string };
 }
 
 /**
