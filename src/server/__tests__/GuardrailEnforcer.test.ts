@@ -463,4 +463,69 @@ describe('GuardrailEnforcer.checkPlan — broke-and-stuck guardrail (JIRA-177, J
       expect(result.violationCode).toBe('PICKUP_DELIVERY_RESTRICTION_VIOLATION');
     });
   });
+
+  // JIRA-257: G1 (force deliver) must consult pickup/delivery restriction predicate
+  // before constructing the override, otherwise it forces a delivery the rule layer
+  // will reject and the bot loops every turn until the Strike expires.
+  describe('Event card: G1 force-deliver suppression (JIRA-257)', () => {
+    it('suppresses forced DELIVER when best canDeliver target is in active Strike zone — original PassTurn passes through', async () => {
+      const snapshot = makeSnapshot();
+      snapshot.activeEffects = [
+        makeActiveEffect({
+          pickupDelivery: [{ type: 'no_pickup_delivery_in_zone', zone: ['20,47'] }], // Hamburg key
+        }),
+      ];
+      const canDeliver = [{ loadType: 'Coal', deliveryCity: 'Hamburg', payout: 31, cardIndex: 43 }];
+      const context = makeContext({
+        canDeliver,
+        demands: [makeDemand({ isAffordable: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true })],
+      } as any);
+
+      const result = await GuardrailEnforcer.checkPlan(passTurnPlan, context, snapshot, true);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.overridden).toBe(false);
+    });
+
+    it('still forces DELIVER when no Strike is active (regression guard)', async () => {
+      const snapshot = makeSnapshot();
+      snapshot.activeEffects = [];
+      const canDeliver = [{ loadType: 'Coal', deliveryCity: 'Hamburg', payout: 31, cardIndex: 43 }];
+      const context = makeContext({
+        canDeliver,
+        demands: [makeDemand({ isAffordable: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true })],
+      } as any);
+
+      const result = await GuardrailEnforcer.checkPlan(passTurnPlan, context, snapshot, true);
+
+      expect(result.plan.type).toBe(AIActionType.DeliverLoad);
+      expect(result.overridden).toBe(true);
+    });
+
+    it('suppresses forced DELIVER when bestDelivery picks blocked candidate, even if non-blocked alternative exists (documented first-pass limitation)', async () => {
+      // Best by payout = Hamburg-blocked at 31M. Paris alternative at 12M not blocked.
+      // The simple fix suppresses the override entirely because bestDelivery picks Hamburg.
+      // Iterating canDeliver for a non-blocked alternative is intentionally out of scope —
+      // documented in the JIRA-257 technical ticket as a follow-up if observed in production.
+      const snapshot = makeSnapshot();
+      snapshot.activeEffects = [
+        makeActiveEffect({
+          pickupDelivery: [{ type: 'no_pickup_delivery_in_zone', zone: ['20,47'] }], // Hamburg
+        }),
+      ];
+      const canDeliver = [
+        { loadType: 'Coal', deliveryCity: 'Hamburg', payout: 31, cardIndex: 43 },
+        { loadType: 'Iron', deliveryCity: 'Paris', payout: 12, cardIndex: 44 },
+      ];
+      const context = makeContext({
+        canDeliver,
+        demands: [makeDemand({ isAffordable: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true })],
+      } as any);
+
+      const result = await GuardrailEnforcer.checkPlan(passTurnPlan, context, snapshot, true);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.overridden).toBe(false);
+    });
+  });
 });
