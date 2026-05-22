@@ -69,20 +69,38 @@ export class GuardrailEnforcer {
 
     // Guardrail 1: Force DELIVER when canDeliver has opportunities
     // Checked FIRST — delivery opportunities must never be blocked by stuck detection (JIRA-47)
+    //
+    // JIRA-257: Before forcing the override, consult the active pickup/delivery
+    // restrictions. If the candidate's delivery city is blocked by an active
+    // event (e.g., Coastal Strike), suppress the override and fall through —
+    // forcing a delivery the rule layer will reject just produces a wasted-turn
+    // loop. The downstream PICKUP_DELIVERY_RESTRICTION gate would catch it on
+    // an LLM-issued plan but never runs once G1 short-circuits with `overridden`.
     if (context.canDeliver.length > 0 && planType !== AIActionType.DeliverLoad) {
       const best = GuardrailEnforcer.bestDelivery(context);
-      console.warn(`[Guardrail 1] Forced DELIVER: ${best.loadType} at ${best.deliveryCity} for ${best.payout}M (LLM chose ${planType})`);
-      return {
-        plan: {
-          type: AIActionType.DeliverLoad,
-          load: best.loadType,
-          city: best.deliveryCity,
-          cardId: best.cardIndex,
-          payout: best.payout,
-        },
-        overridden: true,
-        reason: `Forced DELIVER: ${best.loadType} at ${best.deliveryCity} for ${best.payout}M (LLM chose ${planType})`,
-      };
+      const g1ActiveEffects = snapshot.activeEffects ?? [];
+      const g1PickupDeliveryRestrictions = g1ActiveEffects.flatMap(e => e.restrictions.pickupDelivery);
+      let g1Blocked = false;
+      if (g1PickupDeliveryRestrictions.length > 0) {
+        const cityKey = getCityMilepointKey(best.deliveryCity) ?? '';
+        g1Blocked = isPickupDeliveryBlocked(g1PickupDeliveryRestrictions, cityKey).blocked;
+      }
+      if (g1Blocked) {
+        console.warn(`[Guardrail 1] Suppressed forced DELIVER: ${best.loadType} at ${best.deliveryCity} is blocked by active event card (pickup/delivery restriction) — falling through`);
+      } else {
+        console.warn(`[Guardrail 1] Forced DELIVER: ${best.loadType} at ${best.deliveryCity} for ${best.payout}M (LLM chose ${planType})`);
+        return {
+          plan: {
+            type: AIActionType.DeliverLoad,
+            load: best.loadType,
+            city: best.deliveryCity,
+            cardId: best.cardIndex,
+            payout: best.payout,
+          },
+          overridden: true,
+          reason: `Forced DELIVER: ${best.loadType} at ${best.deliveryCity} for ${best.payout}M (LLM chose ${planType})`,
+        };
+      }
     }
 
     // Stuck / Unaffordable-and-stuck guardrail: force DiscardHand when the bot has no active
