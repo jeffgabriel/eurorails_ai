@@ -30,6 +30,15 @@ import {
   getMajorCityLookup,
 } from '../../../shared/services/majorCityGroups';
 import { hasCarriedDeliverableOnNetwork } from './routeHelpers';
+import {
+  isPickupDeliveryBlocked,
+  isMovementBlockedAtDest,
+  isBuildBlockedAtMilepost,
+  isFloodRebuildBlocked,
+  isBotInPendingLostTurns,
+  getCityMilepointKey,
+} from '../restrictionPredicates';
+import type { MovementRestriction, BuildRestriction, PickupDeliveryRestriction } from '../../../shared/types/EventCard';
 
 export class GuardrailEnforcer {
   /**
@@ -55,6 +64,104 @@ export class GuardrailEnforcer {
     stuckWithCarryTurns: number = 0,
   ): Promise<GuardrailPlanResult> {
     const planType = plan.type === 'MultiAction' ? GuardrailEnforcer.primaryActionType(plan) : plan.type;
+
+    // ── Event-card restriction gates (backstop, JIRA-256 Phase 4) ─────────────
+    // These run BEFORE strategic guardrails because event-card restrictions are
+    // hard game-rule violations that must take precedence over strategic decisions.
+    const activeEffects = snapshot.activeEffects;
+    if (activeEffects && activeEffects.length > 0) {
+      const allMovementRestrictions: MovementRestriction[] = activeEffects.flatMap(e => e.restrictions.movement);
+      const allBuildRestrictions: BuildRestriction[] = activeEffects.flatMap(e => e.restrictions.build);
+      const allPickupDeliveryRestrictions: PickupDeliveryRestriction[] = activeEffects.flatMap(e => e.restrictions.pickupDelivery);
+      const botPlayerId = snapshot.bot.playerId;
+
+      // Derailment: pending lost turn — the only legal action is PassTurn
+      if (
+        plan.type !== AIActionType.PassTurn &&
+        isBotInPendingLostTurns(activeEffects, botPlayerId)
+      ) {
+        console.warn(`[Guardrail Event-Card] LOST_TURN_PENDING: bot has pending lost turn from Derailment — forcing PassTurn`);
+        return {
+          plan: { type: AIActionType.PassTurn },
+          overridden: true,
+          reason: 'LOST_TURN_PENDING: bot has a pending lost turn from a Derailment event',
+        };
+      }
+
+      // Check plans for restriction violations
+      const stepsToCheck: TurnPlan[] = plan.type === 'MultiAction'
+        ? plan.steps
+        : [plan];
+
+      for (const step of stepsToCheck) {
+        // Movement: blocked_terrain (Snow) and rail-strike are checked planner-side;
+        // here we backstop blocked_terrain at destination.
+        if (step.type === AIActionType.MoveTrain) {
+          const movePlan = step as TurnPlanMoveTrain;
+          if (movePlan.path && movePlan.path.length > 0) {
+            for (const point of movePlan.path.slice(1)) { // skip starting position
+              const destKey = `${point.row},${point.col}`;
+              const movVerdict = isMovementBlockedAtDest(allMovementRestrictions, destKey);
+              if (movVerdict.blocked) {
+                console.warn(`[Guardrail Event-Card] MOVEMENT_RESTRICTION_VIOLATION: destKey=${destKey} blocked by ${movVerdict.restriction.type}`);
+                return {
+                  plan: { type: AIActionType.PassTurn },
+                  overridden: true,
+                  reason: `MOVEMENT_RESTRICTION_VIOLATION: destination ${destKey} is blocked by active event-card restriction (${movVerdict.restriction.type})`,
+                };
+              }
+            }
+          }
+        }
+
+        // Build: blocked_terrain (Snow) and no_build_for_player (Rail Strike)
+        if (step.type === AIActionType.BuildTrack) {
+          const buildPlan = step as import('../../../shared/types/GameTypes').TurnPlanBuildTrack;
+          if (buildPlan.segments) {
+            for (const seg of buildPlan.segments) {
+              const segDestKey = `${seg.to.row},${seg.to.col}`;
+              const buildVerdict = isBuildBlockedAtMilepost(allBuildRestrictions, segDestKey, botPlayerId);
+              if (buildVerdict.blocked) {
+                console.warn(`[Guardrail Event-Card] BUILD_RESTRICTION_VIOLATION: seg destKey=${segDestKey} blocked by ${buildVerdict.reason}`);
+                return {
+                  plan: { type: AIActionType.PassTurn },
+                  overridden: true,
+                  reason: `BUILD_RESTRICTION_VIOLATION: build to ${segDestKey} is blocked by active event-card restriction (${buildVerdict.reason})`,
+                };
+              }
+              const floodVerdict = isFloodRebuildBlocked(activeEffects, seg);
+              if (floodVerdict.blocked) {
+                console.warn(`[Guardrail Event-Card] BUILD_RESTRICTION_VIOLATION: flood rebuild blocked for river=${floodVerdict.river}`);
+                return {
+                  plan: { type: AIActionType.PassTurn },
+                  overridden: true,
+                  reason: `BUILD_RESTRICTION_VIOLATION: cannot rebuild bridge across ${floodVerdict.river} while Flood event is active`,
+                };
+              }
+            }
+          }
+        }
+
+        // Pickup/Delivery: no_pickup_delivery_in_zone (Coastal Strike)
+        if (
+          step.type === AIActionType.PickupLoad ||
+          step.type === AIActionType.DeliverLoad
+        ) {
+          const cityPlan = step as { city: string };
+          const cityKey = getCityMilepointKey(cityPlan.city);
+          const pdVerdict = isPickupDeliveryBlocked(allPickupDeliveryRestrictions, cityKey);
+          if (pdVerdict.blocked) {
+            console.warn(`[Guardrail Event-Card] PICKUP_DELIVERY_RESTRICTION_VIOLATION: city=${cityPlan.city} cityKey=${cityKey} blocked by coastal strike`);
+            return {
+              plan: { type: AIActionType.PassTurn },
+              overridden: true,
+              reason: `PICKUP_DELIVERY_RESTRICTION_VIOLATION: city ${cityPlan.city} is within the coastal strike zone`,
+            };
+          }
+        }
+      }
+    }
+    // ── End event-card restriction gates ─────────────────────────────────────
 
     // Guardrail 1: Force DELIVER when canDeliver has opportunities
     // Checked FIRST — delivery opportunities must never be blocked by stuck detection (JIRA-47)
