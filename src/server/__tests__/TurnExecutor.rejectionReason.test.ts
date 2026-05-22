@@ -246,4 +246,84 @@ describe('TurnExecutor — rejection plumbing (ActionRestrictionError)', () => {
       await expect(TurnExecutor.executePlan(plan as any, makeSnapshot())).rejects.toThrow('Demand card not in hand');
     });
   });
+
+  // JIRA-258: failedStepIndex plumbing so the log builder can distinguish
+  // executed steps from rejected/unattempted steps.
+  describe('JIRA-258 failedStepIndex', () => {
+    it('single-action rejection populates failedStepIndex = 0', async () => {
+      const error = makeRestrictionError('COASTAL_STRIKE_BLOCKED', 'Delivery blocked by Strike');
+      mockDeliverLoadForUser.mockRejectedValue(error);
+
+      const plan = {
+        type: AIActionType.DeliverLoad,
+        load: 'Coal',
+        city: 'Hamburg',
+        cardId: 1,
+        payout: 20,
+      };
+
+      const result = await TurnExecutor.executePlan(plan as any, makeSnapshot());
+
+      expect(result.success).toBe(false);
+      expect(result.failedStepIndex).toBe(0);
+    });
+
+    it('successful single-action leaves failedStepIndex undefined', async () => {
+      mockDeliverLoadForUser.mockResolvedValue({
+        payment: 20,
+        newCard: { id: 99 },
+        updatedMoney: 70,
+      } as any);
+
+      const plan = {
+        type: AIActionType.DeliverLoad,
+        load: 'Coal',
+        city: 'Hamburg',
+        cardId: 1,
+        payout: 20,
+      };
+
+      const result = await TurnExecutor.executePlan(plan as any, makeSnapshot());
+
+      expect(result.success).toBe(true);
+      expect(result.failedStepIndex).toBeUndefined();
+    });
+
+    it('MultiAction rejection at step 1 populates failedStepIndex = 1 (step 0 already committed)', async () => {
+      // Step 0: MoveTrain succeeds. Step 1: DeliverLoad rejected.
+      // Configure the MapTopology mock so the post-move position '10,11' has a
+      // named city — otherwise executeMultiAction's JIRA-83 skip drops the
+      // DeliverLoad step before it can fail.
+      const mapTopology = jest.requireMock('../services/MapTopology') as any;
+      mapTopology.loadGridPoints.mockReturnValueOnce(new Map([
+        ['10,11', { name: 'Hamburg', terrain: 2 }],
+      ]));
+      mockMoveTrainForUser.mockResolvedValue({ ok: true, updatedMoney: 50 } as any);
+      const error = makeRestrictionError('COASTAL_STRIKE_BLOCKED', 'Delivery blocked by Strike');
+      mockDeliverLoadForUser.mockRejectedValue(error);
+
+      const multiPlan = {
+        type: 'MultiAction',
+        steps: [
+          {
+            type: AIActionType.MoveTrain,
+            path: [{ row: 10, col: 10 }, { row: 10, col: 11 }],
+          },
+          {
+            type: AIActionType.DeliverLoad,
+            load: 'Coal',
+            city: 'Hamburg',
+            cardId: 1,
+            payout: 20,
+          },
+        ],
+      };
+
+      const result = await TurnExecutor.executePlan(multiPlan as any, makeSnapshot());
+
+      expect(result.success).toBe(false);
+      expect(result.failedStepIndex).toBe(1);
+      expect(result.rejectionReason?.code).toBe('COASTAL_STRIKE_BLOCKED');
+    });
+  });
 });

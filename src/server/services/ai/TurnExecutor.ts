@@ -42,6 +42,15 @@ export interface ExecutionResult {
    * cards drawn during card replacement.
    */
   cardsDrawnDuringAction?: number;
+  /**
+   * JIRA-258: Index of the step that failed within the executed plan's step list.
+   * For single-action plans this is always 0 when success === false; for
+   * MultiAction plans it points to the first failing step (subsequent steps were
+   * not attempted). Undefined when success === true.
+   * Consumed by AIStrategyEngine's log builder to avoid stamping a "delivery
+   * happened" log line for an action the rule layer rejected.
+   */
+  failedStepIndex?: number;
 }
 
 export class TurnExecutor {
@@ -114,6 +123,13 @@ export class TurnExecutor {
 
     const option = TurnExecutor.planToOption(plan);
     const result = await TurnExecutor.execute(option, snapshot);
+
+    // JIRA-258: tag single-action failures with the (only) step's index so the
+    // log builder can tell apart "delivery happened" from "delivery attempted
+    // and rejected." MultiAction sets failedStepIndex in executeMultiAction.
+    if (!result.success && result.failedStepIndex === undefined) {
+      result.failedStepIndex = 0;
+    }
 
     // Mid-turn re-snapshot: when an action draws new cards (e.g., a delivery), the
     // active event effects may have changed because event cards can be drawn as part
@@ -238,7 +254,8 @@ export class TurnExecutor {
     let lastResult: ExecutionResult | null = null;
     const concatenatedPath: { row: number; col: number }[] = [];
 
-    for (const step of steps) {
+    for (let stepIndex = 0; stepIndex < steps.length; stepIndex++) {
+      const step = steps[stepIndex];
       // JIRA-173: Skip plans that were already executed during TurnExecutorPlanner's
       // early delivery path. The delivery has already been committed to DB and the
       // plan carries preExecuted=true to prevent double-execution here.
@@ -279,6 +296,8 @@ export class TurnExecutor {
           remainingMoney: snapshot.bot.money,
           durationMs: Date.now() - startTime,
           error: stepError instanceof Error ? stepError.message : String(stepError),
+          // JIRA-258: report which step in the MultiAction list failed.
+          failedStepIndex: stepIndex,
         };
       }
 
@@ -288,6 +307,8 @@ export class TurnExecutor {
           cost: totalCost + result.cost,
           segmentsBuilt: totalSegments + result.segmentsBuilt,
           durationMs: Date.now() - startTime,
+          // JIRA-258: report which step in the MultiAction list failed.
+          failedStepIndex: stepIndex,
         };
       }
 
