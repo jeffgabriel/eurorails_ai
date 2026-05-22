@@ -358,6 +358,12 @@ export interface WorldSnapshot {
     gameId: string;
     gameStatus: GameStatus;
     turnNumber: number;
+    /**
+     * All currently active event card effects for this game.
+     * Populated by WorldSnapshotService from ActiveEffectManager.
+     * Defaults to empty array when no effects are active.
+     */
+    activeEffects?: import('./EventCard').ActiveEffect[];
     bot: {
         playerId: string;
         userId: string;
@@ -385,6 +391,12 @@ export interface WorldSnapshot {
          * JIRA-207A.
          */
         deliveriesCompleted?: number;
+        /**
+         * Track segments that need to be rebuilt after a Flood event cleared them.
+         * Populated from player_tracks.pending_flood_rebuilds.
+         * Defaults to empty array when no rebuilds are pending.
+         */
+        pendingFloodRebuilds?: TrackSegment[];
     };
     allPlayerTracks: Array<{
         playerId: string;
