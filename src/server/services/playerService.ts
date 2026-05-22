@@ -15,6 +15,47 @@ import { TrackSegment } from "../../shared/types/TrackTypes";
 import { EventCardService } from "./EventCardService";
 import { activeEffectManager } from "./ActiveEffectManager";
 import { EventCardType, EventCardResult, EventCard } from "../../shared/types/EventCard";
+import {
+  getCityMilepointKey,
+  isBuildBlockedAtMilepost,
+  isFloodRebuildBlocked,
+  isMovementBlockedAtDest,
+  isMovementOnOwnRailBlocked,
+  isPickupDeliveryBlocked,
+} from "./restrictionPredicates";
+
+// ── Event-card restriction errors ────────────────────────────────────────────
+
+/**
+ * Closed union of machine-readable error codes for event card restriction
+ * violations.  Using a union type (not a plain string) catches typos at
+ * compile time and prevents stringly-typed bugs at call sites.
+ */
+export type ActionRestrictionErrorCode =
+  | 'RAIL_STRIKE_BLOCKED'
+  | 'COASTAL_STRIKE_BLOCKED'
+  | 'SNOW_BLOCKED_TERRAIN'
+  | 'SNOW_HALF_RATE_EXCEEDED'
+  | 'BUILD_BLOCKED'
+  | 'LOST_TURN'
+  | 'FLOOD_BRIDGE_REBUILD_BLOCKED'
+  | 'OTHER';
+
+/**
+ * Thrown by PlayerService action methods when an active event card restriction
+ * prevents the requested action.  Carries a machine-readable `code` so callers
+ * (routes, bot planners, guardrails) can branch on the specific restriction type
+ * without parsing the user-facing message string.
+ */
+export class ActionRestrictionError extends Error {
+  constructor(
+    public readonly code: ActionRestrictionErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ActionRestrictionError';
+  }
+}
 
 type TurnActionDeliver = {
   kind: "deliver";
@@ -1083,7 +1124,7 @@ export class PlayerService {
     city: string,
     loadType: LoadType,
     cardId: number
-  ): Promise<{ payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: DemandCard }> {
+  ): Promise<{ payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: DemandCard; cardsDrawnDuringAction: number }> {
     const client = await db.connect();
     let drewCardId: number | null = null;
     let discardedCardId: number | null = null;
@@ -1144,21 +1185,16 @@ export class PlayerService {
       // ── Event card restriction checks ─────────────────────────────────────
       // Check pickup/delivery restrictions from active event effects (coastal Strike)
       const deliveryRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId);
-      if (deliveryRestrictions.length > 0) {
-        const cityKey = PlayerService.getCityMilepointKey(city);
-        for (const restriction of deliveryRestrictions) {
-          if (restriction.type === 'no_pickup_delivery_in_zone') {
-            const zoneSet = new Set(restriction.zone);
-            if (cityKey && zoneSet.has(cityKey)) {
-              console.warn(
-                `[PlayerService] Delivery rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${city} cityKey=${cityKey}`,
-              );
-              throw new Error(
-                `Delivery blocked by active event (Strike): city ${city} is within the coastal strike zone`,
-              );
-            }
-          }
-        }
+      const deliveryCityKey = getCityMilepointKey(city) ?? '';
+      const deliveryBlocked = isPickupDeliveryBlocked(deliveryRestrictions, deliveryCityKey);
+      if (deliveryBlocked.blocked) {
+        console.warn(
+          `[PlayerService] Delivery rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${city} cityKey=${deliveryCityKey}`,
+        );
+        throw new ActionRestrictionError(
+          'COASTAL_STRIKE_BLOCKED',
+          `Delivery blocked by active event (Strike): city ${city} is within the coastal strike zone`,
+        );
       }
       // ── End restriction checks ────────────────────────────────────────────
 
@@ -1250,7 +1286,9 @@ export class PlayerService {
 
       await client.query("COMMIT");
       await PlayerService.flushEventEmissions();
-      return { payment, repayment, updatedMoney, updatedDebtOwed, updatedLoads, newCard };
+      // cardsDrawnDuringAction = 1 demand card drawn + any event cards processed along the way
+      const cardsDrawnDuringAction = 1 + discardedEventCardIds.length;
+      return { payment, repayment, updatedMoney, updatedDebtOwed, updatedLoads, newCard, cardsDrawnDuringAction };
     } catch (error) {
       PlayerService.pendingEmissions.length = 0;
       await client.query("ROLLBACK");
@@ -1414,6 +1452,7 @@ export class PlayerService {
     affectedPlayerIds: string[];
     updatedPosition: { row: number; col: number; x?: number; y?: number };
     updatedMoney: number;
+    cardsDrawnDuringAction: number;
   }> {
     const { gameId, userId, to, movementCost } = args;
     const client = await db.connect();
@@ -1479,24 +1518,19 @@ export class PlayerService {
       // Check movement restrictions from active event effects (Snow, Rail Strike)
       const movementRestrictions = await activeEffectManager.getMovementRestrictions(gameId);
       const destKey = `${to.row},${to.col}`;
-      for (const restriction of movementRestrictions) {
-        if (restriction.type === 'blocked_terrain' && restriction.zone) {
-          // The zone is pre-filtered to only include blocked terrain mileposts (blockedTerrainZone).
-          // Zone membership alone is sufficient — no need to re-check terrain type.
-          const zoneSet = new Set(restriction.zone);
-          if (zoneSet.has(destKey)) {
-            console.warn(
-              `[PlayerService] Movement rejected by event restriction: type=blocked_terrain gameId=${gameId} playerId=${playerId} destKey=${destKey}`,
-            );
-            throw new Error(
-              `Movement blocked by active event (Snow): destination ${destKey} is in the blocked terrain zone`,
-            );
-          }
-        }
-        // no_movement_on_player_rail: checked after track usage is computed (below)
-        // half_rate: does not block movement, only caps speed — enforcement is client-side movement cap
-        // The server does not re-validate movement distance, so no throw needed here.
+      const destBlocked = isMovementBlockedAtDest(movementRestrictions, destKey);
+      if (destBlocked.blocked) {
+        console.warn(
+          `[PlayerService] Movement rejected by event restriction: type=blocked_terrain gameId=${gameId} playerId=${playerId} destKey=${destKey}`,
+        );
+        throw new ActionRestrictionError(
+          'SNOW_BLOCKED_TERRAIN',
+          `Movement blocked by active event (Snow): destination ${destKey} is in the blocked terrain zone`,
+        );
       }
+      // no_movement_on_player_rail: checked after track usage is computed (below)
+      // half_rate: does not block movement, only caps speed — enforcement is client-side movement cap
+      // The server does not re-validate movement distance, so no throw needed here.
       // ── End restriction checks ────────────────────────────────────────────
 
       // Lock action log row for this turn (if it exists) so we can safely compute already-paid opponents.
@@ -1595,17 +1629,14 @@ export class PlayerService {
       // This check must happen after track usage is computed so we know which
       // track edges are involved. The player can still move on opponent or
       // public track; only movement on their own rail is blocked.
-      if (usesOwnTrack) {
-        for (const restriction of movementRestrictions) {
-          if (restriction.type === 'no_movement_on_player_rail' && restriction.targetPlayerId === playerId) {
-            console.warn(
-              `[PlayerService] Movement rejected by event restriction: type=no_movement_on_player_rail gameId=${gameId} playerId=${playerId}`,
-            );
-            throw new Error(
-              `Movement blocked by active event (Rail Strike): player ${playerId} cannot move on their own track this turn`,
-            );
-          }
-        }
+      if (usesOwnTrack && isMovementOnOwnRailBlocked(movementRestrictions, playerId, playerId)) {
+        console.warn(
+          `[PlayerService] Movement rejected by event restriction: type=no_movement_on_player_rail gameId=${gameId} playerId=${playerId}`,
+        );
+        throw new ActionRestrictionError(
+          'RAIL_STRIKE_BLOCKED',
+          `Movement blocked by active event (Rail Strike): player ${playerId} cannot move on their own track this turn`,
+        );
       }
 
       const newlyPayable = ownersUsed.filter((pid) => !alreadyPaid.has(pid));
@@ -1718,6 +1749,8 @@ export class PlayerService {
         affectedPlayerIds,
         updatedPosition: { row: to.row, col: to.col, x: to.x, y: to.y },
         updatedMoney: currentMoney - feeTotal,
+        // Movement never draws cards directly
+        cardsDrawnDuringAction: 0,
       };
     } catch (err) {
       await client.query("ROLLBACK");
@@ -2615,7 +2648,7 @@ export class PlayerService {
     playerId: string,
     loadType: LoadType,
     cityName: string,
-  ): Promise<{ updatedLoads: LoadType[] }> {
+  ): Promise<{ updatedLoads: LoadType[]; cardsDrawnDuringAction: number }> {
     const client = await db.connect();
     try {
       await client.query("BEGIN");
@@ -2645,21 +2678,16 @@ export class PlayerService {
       // ── Event card restriction checks ─────────────────────────────────────
       // Check pickup/delivery restrictions from active event effects (coastal Strike)
       const pickupRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId);
-      if (pickupRestrictions.length > 0 && cityName) {
-        const cityKey = PlayerService.getCityMilepointKey(cityName);
-        for (const restriction of pickupRestrictions) {
-          if (restriction.type === 'no_pickup_delivery_in_zone') {
-            const zoneSet = new Set(restriction.zone);
-            if (cityKey && zoneSet.has(cityKey)) {
-              console.warn(
-                `[PlayerService] Pickup rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${cityName} cityKey=${cityKey}`,
-              );
-              throw new Error(
-                `Pickup blocked by active event (Strike): city ${cityName} is within the coastal strike zone`,
-              );
-            }
-          }
-        }
+      const pickupCityKey = getCityMilepointKey(cityName) ?? '';
+      const pickupBlocked = isPickupDeliveryBlocked(pickupRestrictions, pickupCityKey);
+      if (pickupBlocked.blocked) {
+        console.warn(
+          `[PlayerService] Pickup rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${cityName} cityKey=${pickupCityKey}`,
+        );
+        throw new ActionRestrictionError(
+          'COASTAL_STRIKE_BLOCKED',
+          `Pickup blocked by active event (Strike): city ${cityName} is within the coastal strike zone`,
+        );
       }
       // ── End restriction checks ────────────────────────────────────────────
 
@@ -2688,7 +2716,7 @@ export class PlayerService {
         }
       }
 
-      return { updatedLoads };
+      return { updatedLoads, cardsDrawnDuringAction: 0 };
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
@@ -2776,7 +2804,7 @@ export class PlayerService {
     newSegments: TrackSegment[],
     existingSegments: TrackSegment[],
     cost: number,
-  ): Promise<{ remainingMoney: number }> {
+  ): Promise<{ remainingMoney: number; cardsDrawnDuringAction: number }> {
     const allSegments = [...existingSegments, ...newSegments];
     const totalCost = allSegments.reduce((s, seg) => s + seg.cost, 0);
 
@@ -2802,51 +2830,36 @@ export class PlayerService {
       // ── Event card restriction checks ─────────────────────────────────────
       // Check build restrictions from active event effects (Snow blocked_terrain, Rail Strike)
       const buildRestrictions = await activeEffectManager.getBuildRestrictions(gameId);
-      for (const restriction of buildRestrictions) {
-        if (restriction.type === 'blocked_terrain' && restriction.zone) {
-          // The zone is pre-filtered to only include blocked terrain mileposts (blockedTerrainZone).
-          // Zone membership alone is sufficient — no need to re-check terrain type.
-          const zoneSet = new Set(restriction.zone);
-          for (const seg of newSegments) {
-            const destKey = `${seg.to.row},${seg.to.col}`;
-            if (zoneSet.has(destKey)) {
-              console.warn(
-                `[PlayerService] Build rejected by event restriction: type=blocked_terrain gameId=${gameId} playerId=${playerId} destKey=${destKey}`,
-              );
-              throw new Error(
-                `Build blocked by active event (Snow): destination milepost ${destKey} is in the blocked terrain zone`,
-              );
-            }
-          }
-        }
-        if (restriction.type === 'no_build_for_player' && restriction.targetPlayerId === playerId) {
+      for (const seg of newSegments) {
+        const segDestKey = `${seg.to.row},${seg.to.col}`;
+        const buildBlockResult = isBuildBlockedAtMilepost(buildRestrictions, segDestKey, playerId);
+        if (buildBlockResult.blocked) {
           console.warn(
-            `[PlayerService] Build rejected by event restriction: type=no_build_for_player gameId=${gameId} playerId=${playerId}`,
+            `[PlayerService] Build rejected by event restriction: reason=${buildBlockResult.reason} gameId=${gameId} playerId=${playerId} destKey=${segDestKey}`,
           );
-          throw new Error(
-            `Build blocked by active event (Rail Strike): player ${playerId} cannot build track this turn`,
-          );
+          const errorCode: ActionRestrictionErrorCode =
+            buildBlockResult.reason === 'blocked_terrain' ? 'SNOW_BLOCKED_TERRAIN' : 'BUILD_BLOCKED';
+          const message =
+            buildBlockResult.reason === 'blocked_terrain'
+              ? `Build blocked by active event (Snow): destination milepost ${segDestKey} is in the blocked terrain zone`
+              : `Build blocked by active event (Rail Strike): player ${playerId} cannot build track this turn`;
+          throw new ActionRestrictionError(errorCode, message);
         }
       }
 
       // Check for active Flood effects blocking river rebuild
       // (Product Decision 2: Flood does NOT emit a BuildRestriction — we check floodedRiver directly)
       const activeEffects = await activeEffectManager.getActiveEffects(gameId);
-      for (const effect of activeEffects) {
-        if (effect.cardType === EventCardType.Flood && effect.floodedRiver) {
-          const riverEdgeKeys = getRiverEdgeKeys(effect.floodedRiver);
-          if (riverEdgeKeys) {
-            for (const seg of newSegments) {
-              if (segmentCrossesRiver(seg, riverEdgeKeys)) {
-                console.warn(
-                  `[PlayerService] Build rejected by event restriction: type=flood_rebuild gameId=${gameId} playerId=${playerId} river=${effect.floodedRiver}`,
-                );
-                throw new Error(
-                  `Build blocked: cannot rebuild track across the ${effect.floodedRiver} river while Flood event is active`,
-                );
-              }
-            }
-          }
+      for (const seg of newSegments) {
+        const floodResult = isFloodRebuildBlocked(activeEffects, seg);
+        if (floodResult.blocked) {
+          console.warn(
+            `[PlayerService] Build rejected by event restriction: type=flood_rebuild gameId=${gameId} playerId=${playerId} river=${floodResult.river}`,
+          );
+          throw new ActionRestrictionError(
+            'FLOOD_BRIDGE_REBUILD_BLOCKED',
+            `Build blocked: cannot rebuild track across the ${floodResult.river} river while Flood event is active`,
+          );
         }
       }
       // ── End restriction checks ────────────────────────────────────────────
@@ -2869,7 +2882,7 @@ export class PlayerService {
       await client.query("COMMIT");
 
       const remainingMoney = moneyResult.rows[0]?.money as number;
-      return { remainingMoney };
+      return { remainingMoney, cardsDrawnDuringAction: 0 };
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
