@@ -175,6 +175,8 @@ export interface BotTurnResult {
   initialBuildOptions?: InitialBuildPlan['evaluatedOptions'];
   // Double delivery pairings evaluated during initial build
   initialBuildPairings?: InitialBuildPlan['evaluatedPairings'];
+  /** Populated when a PlayerService action was rejected by an event card restriction */
+  rejectionReason?: { code: string; message: string };
 }
 
 export class AIStrategyEngine {
@@ -1050,6 +1052,7 @@ export class AIStrategyEngine {
           phaseBStripped: phaseBWasStripped,
           lockupTerminationReason,
         },
+        rejectionReason: result.rejectionReason,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

@@ -339,6 +339,8 @@ export async function onTurnChange(
         tripPlanning: result.tripPlanning,
         // JIRA-212: Victory check diagnostic breadcrumb (R4, R5)
         victoryCheck: victoryCheckResult,
+        // Event card restriction rejection reason (if applicable)
+        rejectionReason: result.rejectionReason,
       });
     } catch (logError) {
       console.error(`[BotTurnTrigger] NDJSON log failed for game ${gameId}:`, logError instanceof Error ? logError.message : logError);
