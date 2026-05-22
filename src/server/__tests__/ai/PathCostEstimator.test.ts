@@ -400,13 +400,16 @@ describe('estimateGraphPathCost', () => {
   });
 
   it('BE-001: GridCoord same-point returns trivial result without calling estimateRouteSegment', () => {
+    // JIRA-255 Layer 0: same-point returns estimatedTurns=0, pathLength=0.
+    // Pickups/deliveries do not consume movement — a same-city leg costs zero turns,
+    // not one (pre-fix returned pathLength:1, estimatedTurns:1 — AC0 regression test).
     const coord: GridCoord = { row: 5, col: 5 };
     const result = estimateGraphPathCost(coord, coord, makeSnapshot(), 9);
 
     expect(result.reachable).toBe(true);
     expect(result.buildCost).toBe(0);
-    expect(result.pathLength).toBe(1);
-    expect(result.estimatedTurns).toBe(1);
+    expect(result.pathLength).toBe(0);
+    expect(result.estimatedTurns).toBe(0);
     expect(mockEstimateRouteSegment).not.toHaveBeenCalled();
   });
 

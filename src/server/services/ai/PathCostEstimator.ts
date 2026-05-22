@@ -183,9 +183,12 @@ function computePathCost(
 
   for (const fromCoord of fromCoords) {
     for (const toCoord of toCoords) {
-      // Skip trivial same-point case early
+      // Skip trivial same-point case early.
+      // JIRA-255 Layer 0: pickups/deliveries do not consume movement, so a
+      // same-city leg costs zero turns — not one. This prevents phantom turn
+      // inflation on multi-pickup-at-same-city candidates (e.g. triple-Hops-Cardiff).
       if (fromCoord.row === toCoord.row && fromCoord.col === toCoord.col) {
-        const trivial: PathCost = { buildCost: 0, pathLength: 1, estimatedTurns: 1, reachable: true, newSegments: [] };
+        const trivial: PathCost = { buildCost: 0, pathLength: 0, estimatedTurns: 0, reachable: true, newSegments: [] };
         if (bestResult === null || trivial.pathLength < bestResult.pathLength) {
           bestResult = trivial;
         }
