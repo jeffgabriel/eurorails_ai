@@ -23,28 +23,32 @@ jest.mock('../../db/index', () => ({
 }));
 
 jest.mock('../../services/socketService', () => ({
-  emitToGame: jest.fn(),
-  emitStatePatch: jest.fn().mockResolvedValue(undefined),
+  emitToGame: jest.fn<() => void>(),
+  emitStatePatch: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
 }));
 
-jest.mock('../../services/playerService', () => {
-  const { ActionRestrictionError } = jest.requireActual<
-    typeof import('../../services/playerService')
-  >('../../services/playerService');
-  return {
-    PlayerService: {
-      buildTrackForPlayer: jest.fn(),
-      moveTrainForUser: jest.fn(),
-      pickupLoadForPlayer: jest.fn(),
-      deliverLoadForUser: jest.fn(),
-      dropLoadForPlayer: jest.fn(),
-      upgradeTrainForPlayer: jest.fn(),
-      discardHandForPlayer: jest.fn(),
-      getPlayers: jest.fn().mockResolvedValue([]),
-    },
-    ActionRestrictionError,
-  };
-});
+jest.mock('../../services/playerService', () => ({
+  PlayerService: {
+    buildTrackForPlayer: jest.fn<() => Promise<any>>(),
+    moveTrainForUser: jest.fn<() => Promise<any>>(),
+    pickupLoadForPlayer: jest.fn<() => Promise<any>>(),
+    deliverLoadForUser: jest.fn<() => Promise<any>>(),
+    dropLoadForPlayer: jest.fn<() => Promise<any>>(),
+    upgradeTrainForPlayer: jest.fn<() => Promise<any>>(),
+    discardHandForPlayer: jest.fn<() => Promise<any>>(),
+    getPlayers: jest.fn<() => Promise<any[]>>().mockResolvedValue([]),
+  },
+  // Re-export the real ActionRestrictionError class so instanceof checks work in TurnExecutor
+  ActionRestrictionError: class ActionRestrictionError extends Error {
+    constructor(
+      public readonly code: string,
+      message: string,
+    ) {
+      super(message);
+      this.name = 'ActionRestrictionError';
+    }
+  },
+}));
 
 jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
@@ -108,7 +112,7 @@ describe('TurnExecutor — rejection reason plumbing (JIRA-256)', () => {
 
   describe('BuildTrack', () => {
     it('returns rejectionReason when PlayerService throws ActionRestrictionError', async () => {
-      (PlayerService.buildTrackForPlayer as jest.Mock).mockRejectedValueOnce(
+      (PlayerService.buildTrackForPlayer as jest.Mock<any>).mockRejectedValueOnce(
         new ActionRestrictionError('RAIL_STRIKE_BLOCKED', 'Build blocked by Rail Strike'),
       );
 
@@ -130,7 +134,7 @@ describe('TurnExecutor — rejection reason plumbing (JIRA-256)', () => {
     });
 
     it('does NOT catch non-ActionRestrictionError errors', async () => {
-      (PlayerService.buildTrackForPlayer as jest.Mock).mockRejectedValueOnce(
+      (PlayerService.buildTrackForPlayer as jest.Mock<any>).mockRejectedValueOnce(
         new Error('Insufficient funds'),
       );
 
@@ -148,7 +152,7 @@ describe('TurnExecutor — rejection reason plumbing (JIRA-256)', () => {
 
   describe('MoveTrain', () => {
     it('returns rejectionReason when PlayerService throws ActionRestrictionError', async () => {
-      (PlayerService.moveTrainForUser as jest.Mock).mockRejectedValueOnce(
+      (PlayerService.moveTrainForUser as jest.Mock<any>).mockRejectedValueOnce(
         new ActionRestrictionError('SNOW_BLOCKED_TERRAIN', 'Movement blocked by Snow'),
       );
 
@@ -170,7 +174,7 @@ describe('TurnExecutor — rejection reason plumbing (JIRA-256)', () => {
 
   describe('PickupLoad', () => {
     it('returns rejectionReason when PlayerService throws ActionRestrictionError', async () => {
-      (PlayerService.pickupLoadForPlayer as jest.Mock).mockRejectedValueOnce(
+      (PlayerService.pickupLoadForPlayer as jest.Mock<any>).mockRejectedValueOnce(
         new ActionRestrictionError('COASTAL_STRIKE_BLOCKED', 'Pickup blocked by Coastal Strike'),
       );
 
@@ -195,7 +199,7 @@ describe('TurnExecutor — rejection reason plumbing (JIRA-256)', () => {
 
   describe('DeliverLoad', () => {
     it('returns rejectionReason when PlayerService throws ActionRestrictionError', async () => {
-      (PlayerService.deliverLoadForUser as jest.Mock).mockRejectedValueOnce(
+      (PlayerService.deliverLoadForUser as jest.Mock<any>).mockRejectedValueOnce(
         new ActionRestrictionError('COASTAL_STRIKE_BLOCKED', 'Delivery blocked by Coastal Strike'),
       );
 

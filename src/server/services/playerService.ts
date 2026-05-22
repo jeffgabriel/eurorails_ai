@@ -2841,6 +2841,43 @@ export class PlayerService {
         [gameId, playerId, JSON.stringify(allSegments), totalCost, cost],
       );
 
+      // 1b. Clear any pending_flood_rebuilds entries that match newly built segments.
+      //     Matching key: (from.row, from.col, to.row, to.col) in either direction.
+      //     This allows the bot to track progress of its eager Flood-rebuild policy.
+      //     Best-effort: column may not exist in older schemas (pre-migration-039).
+      if (newSegments.length > 0) {
+        try {
+          const pendingResult = await client.query(
+            `SELECT COALESCE(pending_flood_rebuilds, '[]'::jsonb) AS pending_flood_rebuilds
+             FROM player_tracks
+             WHERE game_id = $1 AND player_id = $2`,
+            [gameId, playerId],
+          );
+          const pending: Array<{ from: { row: number; col: number }; to: { row: number; col: number } }> =
+            pendingResult.rows[0]?.pending_flood_rebuilds ?? [];
+          if (pending.length > 0) {
+            const builtKeys = new Set(
+              newSegments.flatMap(seg => [
+                `${seg.from.row},${seg.from.col}|${seg.to.row},${seg.to.col}`,
+                `${seg.to.row},${seg.to.col}|${seg.from.row},${seg.from.col}`,
+              ]),
+            );
+            const remaining = pending.filter(
+              p => !builtKeys.has(`${p.from.row},${p.from.col}|${p.to.row},${p.to.col}`),
+            );
+            if (remaining.length !== pending.length) {
+              await client.query(
+                `UPDATE player_tracks SET pending_flood_rebuilds = $1 WHERE game_id = $2 AND player_id = $3`,
+                [JSON.stringify(remaining), gameId, playerId],
+              );
+            }
+          }
+        } catch (pendingErr) {
+          // Column may not exist in older schemas — non-fatal
+          console.debug(`[PlayerService] pending_flood_rebuilds update skipped: ${pendingErr instanceof Error ? pendingErr.message : pendingErr}`);
+        }
+      }
+
       // 2. Deduct money
       const moneyResult = await client.query(
         `UPDATE players SET money = money - $1 WHERE id = $2 RETURNING money`,

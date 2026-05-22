@@ -260,12 +260,23 @@ export class TrackService {
             }
 
             const newTotalCost = remaining.reduce((sum, seg) => sum + seg.cost, 0);
+            const removed = segments.filter(seg => segmentCrossesRiver(seg, riverEdgeKeys));
+
+            // Read current pending_flood_rebuilds and append newly removed segments
+            const pendingResult = await client.query(
+                `SELECT COALESCE(pending_flood_rebuilds, '[]'::jsonb) AS pending_flood_rebuilds
+                 FROM player_tracks
+                 WHERE game_id = $1 AND player_id = $2`,
+                [gameId, playerId]
+            );
+            const existingPending: TrackSegment[] = pendingResult.rows[0]?.pending_flood_rebuilds ?? [];
+            const updatedPending = [...existingPending, ...removed];
 
             await client.query(
                 `UPDATE player_tracks
-                 SET segments = $1, total_cost = $2
-                 WHERE game_id = $3 AND player_id = $4`,
-                [JSON.stringify(remaining), newTotalCost, gameId, playerId]
+                 SET segments = $1, total_cost = $2, pending_flood_rebuilds = $3
+                 WHERE game_id = $4 AND player_id = $5`,
+                [JSON.stringify(remaining), newTotalCost, JSON.stringify(updatedPending), gameId, playerId]
             );
 
             results.push({ playerId, removedCount, newTotalCost });

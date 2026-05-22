@@ -13,6 +13,7 @@
 
 import { db } from '../db/index';
 import { PoolClient } from 'pg';
+import { emitToGame } from './socketService';
 import {
   EventCard,
   EventCardType,
@@ -383,6 +384,22 @@ export class EventCardService {
       gameId,
       effect.river,
     );
+
+    // Emit track:updated so the client UI refreshes erased bridges immediately
+    // (JIRA-256 Phase 4.5 — Flood visualization fix).
+    // Best-effort: runs after the transaction lock is still held but before COMMIT.
+    for (const result of removalResults) {
+      try {
+        emitToGame(gameId, 'track:updated', {
+          gameId,
+          playerId: result.playerId,
+          reason: 'flood',
+          timestamp: Date.now(),
+        });
+      } catch (emitErr) {
+        console.warn(`[EventCardService] track:updated emit failed for flood: ${emitErr}`);
+      }
+    }
 
     const perPlayerEffects: PerPlayerEffect[] = removalResults.map(r => ({
       playerId: r.playerId,
