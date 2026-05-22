@@ -1,5 +1,5 @@
 #!/bin/bash
-# compounds-hooks v3 — installed by 'compounds init-hooks'
+# compounds-hooks v5 — installed by 'compounds init-hooks'
 # Do not edit manually — re-run 'compounds init-hooks' to update
 
 # Detect change-related keywords in the user prompt and:
@@ -20,6 +20,14 @@ if command -v jq >/dev/null 2>&1; then
 fi
 
 if [ -z "$PROMPT" ]; then
+    exit 0
+fi
+
+# Carve-out: prompts starting with "compounds," (case-insensitive, leading
+# whitespace allowed) are Compounds workflow handoff commands — they must NOT
+# trigger the change-intent advisory even if they contain action verbs like
+# "implement". Example: "Compounds, create tasks and then implement project ..."
+if echo "$PROMPT" | grep -qiE '^[[:space:]]*compounds,'; then
     exit 0
 fi
 

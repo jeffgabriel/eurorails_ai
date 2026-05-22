@@ -1,5 +1,5 @@
 #!/bin/bash
-# compounds-hooks v3 — installed by 'compounds init-hooks'
+# compounds-hooks v5 — installed by 'compounds init-hooks'
 # Do not edit manually — re-run 'compounds init-hooks' to update
 
 # Gate Glob/Grep/Agent until the agent has called plan_change() or compounds search.
