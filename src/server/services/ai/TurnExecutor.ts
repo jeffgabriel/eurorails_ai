@@ -15,7 +15,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { LoadType } from '../../../shared/types/LoadTypes';
 import { emitToGame, emitStatePatch } from '../socketService';
-import { PlayerService } from '../playerService';
+import { PlayerService, ActionRestrictionError, ActionRestrictionErrorCode } from '../playerService';
 import { LoadService } from '../loadService';
 import { DemandDeckService } from '../demandDeckService';
 import { gridToPixel, loadGridPoints } from '../MapTopology';
@@ -33,6 +33,20 @@ export interface ExecutionResult {
   payment?: number;
   newCardId?: number;
   movementPath?: { row: number; col: number }[];
+  /**
+   * Number of event cards drawn during this action's execution.
+   * Non-zero when a delivery triggered a card draw. Used by the bot's
+   * TurnExecutor to decide whether to re-snapshot and re-plan.
+   * Defaults to 0 when not set.
+   * JIRA-256 Phase 4.
+   */
+  cardsDrawnDuringAction?: number;
+  /**
+   * Populated when the action was rejected due to an active event-card restriction.
+   * Carries the typed error code and human-readable message for the turn log.
+   * JIRA-256 Phase 4.
+   */
+  rejectionReason?: { code: ActionRestrictionErrorCode; message: string };
 }
 
 export class TurnExecutor {
@@ -46,15 +60,54 @@ export class TurnExecutor {
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
 
+    // Wrap restricted-action handlers to catch ActionRestrictionError and return
+    // a structured rejection result. Other errors propagate normally.
+    const withRestrictionRejection = async (
+      handler: () => Promise<ExecutionResult>,
+      action: AIActionType,
+    ): Promise<ExecutionResult> => {
+      try {
+        return await handler();
+      } catch (err) {
+        if (err instanceof ActionRestrictionError) {
+          console.warn(`[TurnExecutor] Action ${action} rejected by restriction: ${err.code} — ${err.message}`);
+          return {
+            success: false,
+            action,
+            cost: 0,
+            segmentsBuilt: 0,
+            remainingMoney: snapshot.bot.money,
+            durationMs: Date.now() - startTime,
+            error: err.message,
+            cardsDrawnDuringAction: 0,
+            rejectionReason: { code: err.code, message: err.message },
+          };
+        }
+        throw err;
+      }
+    };
+
     switch (plan.action) {
       case AIActionType.BuildTrack:
-        return TurnExecutor.handleBuildTrack(plan, snapshot, startTime);
+        return withRestrictionRejection(
+          () => TurnExecutor.handleBuildTrack(plan, snapshot, startTime),
+          AIActionType.BuildTrack,
+        );
       case AIActionType.MoveTrain:
-        return TurnExecutor.handleMoveTrain(plan, snapshot, startTime);
+        return withRestrictionRejection(
+          () => TurnExecutor.handleMoveTrain(plan, snapshot, startTime),
+          AIActionType.MoveTrain,
+        );
       case AIActionType.PickupLoad:
-        return TurnExecutor.handlePickupLoad(plan, snapshot, startTime);
+        return withRestrictionRejection(
+          () => TurnExecutor.handlePickupLoad(plan, snapshot, startTime),
+          AIActionType.PickupLoad,
+        );
       case AIActionType.DeliverLoad:
-        return TurnExecutor.handleDeliverLoad(plan, snapshot, startTime);
+        return withRestrictionRejection(
+          () => TurnExecutor.handleDeliverLoad(plan, snapshot, startTime),
+          AIActionType.DeliverLoad,
+        );
       case AIActionType.DropLoad:
         return TurnExecutor.handleDropLoad(plan, snapshot, startTime);
       case AIActionType.UpgradeTrain:
@@ -71,6 +124,7 @@ export class TurnExecutor {
           segmentsBuilt: 0,
           remainingMoney: snapshot.bot.money,
           durationMs: Date.now() - startTime,
+          cardsDrawnDuringAction: 0,
         };
     }
   }
