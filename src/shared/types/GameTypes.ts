@@ -706,11 +706,23 @@ export interface GuardrailResult {
     reason?: string;
 }
 
+/**
+ * Machine-readable code for a guardrail violation.
+ * Typed union prevents stringly-typed bugs at call sites.
+ */
+export type GateViolationCode =
+  | 'MOVEMENT_RESTRICTION_VIOLATION'
+  | 'BUILD_RESTRICTION_VIOLATION'
+  | 'PICKUP_DELIVERY_RESTRICTION_VIOLATION'
+  | 'LOST_TURN_PENDING';
+
 /** Result from GuardrailEnforcer.checkPlan() — v6.3 intent-based guardrail */
 export interface GuardrailPlanResult {
     plan: TurnPlan;
     overridden: boolean;
     reason?: string;
+    /** Typed violation code when the plan was rejected by a restriction gate */
+    violationCode?: GateViolationCode;
 }
 
 /** Normalized response from any LLM provider adapter */
