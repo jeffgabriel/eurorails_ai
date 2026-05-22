@@ -261,11 +261,13 @@ function makeSnapshot(): WorldSnapshot {
       loads: [],
       botConfig: { skillLevel: 'medium' },
       connectedMajorCityCount: 3,
+   pendingFloodRebuilds: [],
     } as WorldSnapshot['bot'],
     allPlayerTracks: [
       { playerId: 'bot-jira198', segments: [] },
     ],
     loadAvailability: {},
+    activeEffects: [],
   };
 }
 

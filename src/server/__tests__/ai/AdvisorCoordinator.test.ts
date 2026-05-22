@@ -74,9 +74,11 @@ function makeSnapshot(): WorldSnapshot {
       loads: [],
       botConfig: { skillLevel: 'medium' },
       connectedMajorCityCount: 1,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [{ playerId: 'bot-1', segments: [] }],
     loadAvailability: {},
+    activeEffects: [],
   };
 }
 

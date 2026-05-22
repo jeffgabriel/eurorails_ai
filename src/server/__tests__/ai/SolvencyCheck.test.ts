@@ -23,9 +23,11 @@ function makeSnapshot(overrides: {
       loads: overrides.loads ?? [],
       botConfig: { skillLevel: 'medium' },
       connectedMajorCityCount: 2,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+    activeEffects: [],
   };
 }
 

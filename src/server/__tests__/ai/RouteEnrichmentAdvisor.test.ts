@@ -93,10 +93,12 @@ function makeSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnapshot 
       loads: [],
       botConfig: null,
       connectedMajorCityCount: 1,
+     pendingFloodRebuilds: [],
       ...overrides,
     },
     allPlayerTracks: [{ playerId: 'bot-1', segments: [] }],
     loadAvailability: {},
+    activeEffects: [],
   };
 }
 

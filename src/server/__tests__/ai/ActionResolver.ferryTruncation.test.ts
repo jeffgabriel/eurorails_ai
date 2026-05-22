@@ -209,11 +209,13 @@ function makeSnapshot(position: { row: number; col: number }, opts: {
       botConfig: { skillLevel: 'medium' },
       ferryHalfSpeed: opts.ferryHalfSpeed ?? false,
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [
       { playerId: BOT_PLAYER_ID, segments },
     ],
     loadAvailability: {},
+    activeEffects: [],
     ferryEdges,
   };
 }

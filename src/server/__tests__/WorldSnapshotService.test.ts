@@ -7,6 +7,13 @@ jest.mock('../db/index', () => ({
   },
 }));
 
+// Mock ActiveEffectManager — returns empty active effects
+jest.mock('../services/ActiveEffectManager', () => ({
+  activeEffectManager: {
+    getActiveEffects: jest.fn().mockResolvedValue([]),
+  },
+}));
+
 import { db } from '../db/index';
 const mockQuery = db.query as jest.Mock;
 
@@ -34,6 +41,7 @@ describe('WorldSnapshotService.capture', () => {
         cost: 1,
       },
     ],
+    pending_flood_rebuilds: [],
   };
 
   const baseHumanRow = {
@@ -49,6 +57,7 @@ describe('WorldSnapshotService.capture', () => {
     bot_config: null,
     current_turn_number: 3,
     segments: [],
+    pending_flood_rebuilds: [],
   };
 
   afterEach(() => jest.clearAllMocks());

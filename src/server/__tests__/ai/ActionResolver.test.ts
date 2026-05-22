@@ -97,12 +97,14 @@ function makeWorldSnapshot(overrides: Partial<WorldSnapshot> = {}): WorldSnapsho
       botConfig: { skillLevel: 'medium' },
       ferryHalfSpeed: false,
       connectedMajorCityCount: 0,
+     pendingFloodRebuilds: [],
       ...(overrides.bot ?? {}),
     } as WorldSnapshot['bot'],
     allPlayerTracks: overrides.allPlayerTracks ?? [
       { playerId: 'bot-1', segments: [makeSegment(5, 5, 5, 6)] },
     ],
     loadAvailability: overrides.loadAvailability ?? {},
+    activeEffects: [],
     opponents: overrides.opponents,
     ferryEdges: overrides.ferryEdges,
   };
@@ -1578,6 +1580,7 @@ describe('ActionResolver', () => {
       const snapshot = makeWorldSnapshot({
         bot: { position: { row: 5, col: 5 }, loads: [], trainType: TrainType.Freight } as any,
         loadAvailability: { Ruhr: ['Steel', 'Coal'] },
+      activeEffects: [],
       });
 
       const result = await ActionResolver.resolve(
@@ -1613,6 +1616,7 @@ describe('ActionResolver', () => {
       ]);
       const snapshot = makeWorldSnapshot({
         loadAvailability: { Essen: ['Steel'] },
+      activeEffects: [],
       });
 
       const result = await ActionResolver.resolve(
@@ -1633,6 +1637,7 @@ describe('ActionResolver', () => {
           trainType: TrainType.Freight,
         } as any,
         loadAvailability: { Ruhr: ['Steel'] },
+      activeEffects: [],
       });
 
       const result = await ActionResolver.resolve(
@@ -1653,6 +1658,7 @@ describe('ActionResolver', () => {
           trainType: TrainType.HeavyFreight,
         } as any,
         loadAvailability: { Ruhr: ['Steel'] },
+      activeEffects: [],
       });
 
       const result = await ActionResolver.resolve(
@@ -1700,6 +1706,7 @@ describe('ActionResolver', () => {
       const snapshot = makeWorldSnapshot({
         bot: { position: { row: 5, col: 5 }, loads: [] } as any,
         loadAvailability: { Ruhr: ['Steel'] },
+      activeEffects: [],
       });
 
       const intent: LLMActionIntent = {
@@ -1716,6 +1723,7 @@ describe('ActionResolver', () => {
       const snapshot = makeWorldSnapshot({
         bot: { position: { row: 5, col: 5 }, loads: [] } as any,
         loadAvailability: { Ruhr: ['Steel'] },
+      activeEffects: [],
       });
 
       const intent1: LLMActionIntent = {
@@ -1745,6 +1753,7 @@ describe('ActionResolver', () => {
           ],
         } as any,
         loadAvailability: { Ruhr: ['Steel'] },
+      activeEffects: [],
       });
 
       const result = await ActionResolver.resolve(
@@ -1767,6 +1776,7 @@ describe('ActionResolver', () => {
           ],
         } as any,
         loadAvailability: { Ruhr: ['Steel'] },
+      activeEffects: [],
       });
 
       const context = makeGameContext({
@@ -1815,6 +1825,7 @@ describe('ActionResolver', () => {
           ],
         } as any,
         loadAvailability: { Ruhr: ['Steel'] },
+      activeEffects: [],
       });
 
       const context = makeGameContext({
@@ -1872,6 +1883,7 @@ describe('ActionResolver', () => {
           ],
         } as any,
         loadAvailability: { Ruhr: ['Steel'] },
+      activeEffects: [],
       });
 
       const context = makeGameContext({
@@ -1922,6 +1934,7 @@ describe('ActionResolver', () => {
           ],
         } as any,
         loadAvailability: { Ruhr: ['Steel'] },
+      activeEffects: [],
       });
 
       const context = makeGameContext({
@@ -2142,6 +2155,7 @@ describe('ActionResolver', () => {
           ],
         } as any,
         loadAvailability: { Bordeaux: ['Wine'] },
+      activeEffects: [],
       });
 
       const context = makeGameContext({
@@ -2226,8 +2240,10 @@ describe('ActionResolver', () => {
           botConfig: null,
           ferryHalfSpeed: false,
           connectedMajorCityCount: 0,
+       pendingFloodRebuilds: [],
         } as WorldSnapshot['bot'],
         loadAvailability: { Wien: ['Wine'] },
+      activeEffects: [],
       });
 
       // Mock move path from Wien to Praha
@@ -3155,6 +3171,7 @@ describe('ActionResolver', () => {
         } as any,
         // Ham is available at Warszawa in the load availability map
         loadAvailability: { Warszawa: ['Ham'] },
+      activeEffects: [],
       });
 
       const context = makeGameContext({
@@ -3472,6 +3489,7 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
         });
 
@@ -3555,8 +3573,10 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
           loadAvailability: { Berlin: ['Coal'] },
+        activeEffects: [],
         });
 
         const intent = makeMultiIntent(
@@ -3612,6 +3632,7 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
         });
 
@@ -3656,8 +3677,10 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
           loadAvailability: { Berlin: ['Coal'] },
+        activeEffects: [],
         });
 
         const intent = makeMultiIntent(
@@ -3704,6 +3727,7 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
         });
 
@@ -3744,8 +3768,10 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
           loadAvailability: { Berlin: ['Coal'] },
+        activeEffects: [],
         });
 
         const originalMoney = snapshot.bot.money;
@@ -3848,6 +3874,7 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as unknown as WorldSnapshot['bot'],
         });
 
@@ -3885,6 +3912,7 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
         });
 
@@ -3921,8 +3949,10 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
           loadAvailability: { Berlin: ['Coal'] },
+        activeEffects: [],
         });
 
         const intent = makeMultiIntent(
@@ -4077,6 +4107,7 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
         });
 
@@ -4132,8 +4163,10 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
           loadAvailability: { CityC: ['Coal'] },
+        activeEffects: [],
         });
 
         const context = makeGameContext({
@@ -4222,6 +4255,7 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
         });
 
@@ -4273,6 +4307,7 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
         });
 
@@ -4331,6 +4366,7 @@ describe('ActionResolver', () => {
             botConfig: null,
             ferryHalfSpeed: false,
             connectedMajorCityCount: 0,
+         pendingFloodRebuilds: [],
           } as WorldSnapshot['bot'],
         });
 

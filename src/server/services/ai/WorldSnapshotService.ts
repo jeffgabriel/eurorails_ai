@@ -12,6 +12,8 @@ import { LoadService } from '../loadService';
 import { getConnectedMajorCityCount } from './connectedMajorCities';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { loadGridPoints, gridToPixel } from '../MapTopology';
+import { activeEffectManager } from '../ActiveEffectManager';
+import type { ActiveEffect } from '../../../shared/types/EventCard';
 
 /**
  * Capture a frozen snapshot of the game world for AI evaluation.
@@ -22,6 +24,7 @@ import { loadGridPoints, gridToPixel } from '../MapTopology';
  */
 export async function capture(gameId: string, botPlayerId: string): Promise<WorldSnapshot> {
   // Single query joining games, players, and player_tracks
+  // Also fetches pending_flood_rebuilds for the bot's Flood rebuild policy (JIRA-256)
   const result = await db.query(
     `
     SELECT
@@ -37,7 +40,8 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
       p.is_bot,
       p.bot_config,
       p.current_turn_number,
-      COALESCE(pt.segments, '[]'::jsonb) AS segments
+      COALESCE(pt.segments, '[]'::jsonb) AS segments,
+      COALESCE(pt.pending_flood_rebuilds, '[]'::jsonb) AS pending_flood_rebuilds
     FROM games g
     JOIN players p ON p.game_id = g.id
     LEFT JOIN player_tracks pt ON pt.game_id = g.id AND pt.player_id = p.id
@@ -61,6 +65,9 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
 
   // Parse bot segments
   const botSegments = parseSegments(botRow.segments);
+
+  // Parse bot pending flood rebuilds (JIRA-256)
+  const botPendingFloodRebuilds = parseSegments(botRow.pending_flood_rebuilds);
 
   // Parse bot config
   const rawConfig = typeof botRow.bot_config === 'string'
@@ -148,6 +155,11 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
   const majorCityGroupsData = getMajorCityGroups();
   const ferryEdgesData = getFerryEdges();
 
+  // Fetch all active event-card effects for this game (JIRA-256 Phase 4).
+  // Returns [] when no effects are active — never null.
+  const activeEffects: ActiveEffect[] = await activeEffectManager.getActiveEffects(gameId);
+  console.debug(`[WorldSnapshotService] snapshot.activeEffects count=${activeEffects.length} gameId=${gameId}`);
+
   // Check if bot is currently at a ferry port — means previous turn ended there,
   // so this turn should be at half speed (game rule: ferry crossing penalty).
   let ferryHalfSpeed = false;
@@ -181,9 +193,11 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
       botConfig,
       connectedMajorCityCount: getConnectedMajorCityCount(botSegments),
       ferryHalfSpeed,
+      pendingFloodRebuilds: botPendingFloodRebuilds,
     },
     allPlayerTracks,
     loadAvailability,
+    activeEffects,
     opponents,
     hexGrid,
     majorCityGroups: majorCityGroupsData,

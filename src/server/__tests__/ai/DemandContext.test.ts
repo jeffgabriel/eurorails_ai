@@ -104,9 +104,11 @@ function makeSnapshot(overrides: {
       loads: overrides.loads ?? [],
       botConfig: { skillLevel: BotSkillLevel.Medium },
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: overrides.loadAvailability ?? { Ruhr: ['Steel'] },
+    activeEffects: [],
   };
 }
 
@@ -183,8 +185,7 @@ describe('DemandContext.computeCanPickup', () => {
       position: { row: 0, col: 0 },
       loads: ['Coal', 'Steel'], // 2/2 capacity for Freight
       trainType: TrainType.Freight,
-      loadAvailability: { Ruhr: ['Iron'] },
-    });
+      loadAvailability: { Ruhr: ['Iron'] },    });
     const gridPoints = [makeCityPoint(0, 0, 'Ruhr', ['Iron'])];
     const result = DemandContext.computeCanPickup(snapshot, gridPoints);
     expect(result).toEqual([]);
@@ -195,8 +196,7 @@ describe('DemandContext.computeCanPickup', () => {
       position: { row: 0, col: 0 },
       loads: [],
       resolvedDemands: [{ cardId: 1, demands: [{ city: 'Wien', loadType: 'Steel', payment: 22 }] }],
-      loadAvailability: { Ruhr: ['Steel'] },
-    });
+      loadAvailability: { Ruhr: ['Steel'] },    });
     const gridPoints = [makeCityPoint(0, 0, 'Ruhr', ['Steel'])];
     const result = DemandContext.computeCanPickup(snapshot, gridPoints);
     expect(result).toHaveLength(1);
@@ -236,8 +236,7 @@ describe('DemandContext.compute', () => {
   it('enRoutePickups is defined when memory has activeRoute.stops', () => {
     const snapshot = makeSnapshot({
       resolvedDemands: [{ cardId: 1, demands: [{ city: 'Wien', loadType: 'Steel', payment: 22 }] }],
-      loadAvailability: { Ruhr: ['Steel'] },
-    });
+      loadAvailability: { Ruhr: ['Steel'] },    });
     const memory = makeMemoryWithRoute([{ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }]);
     const gridPoints = [
       makeCityPoint(0, 0, 'Ruhr', ['Steel']),

@@ -670,9 +670,11 @@ const EMPTY_SNAPSHOT: WorldSnapshot = {
     loads: [],
     botConfig: null,
     connectedMajorCityCount: 0,
+    pendingFloodRebuilds: [],
   },
   allPlayerTracks: [],
   loadAvailability: {},
+  activeEffects: [],
 };
 
 /**

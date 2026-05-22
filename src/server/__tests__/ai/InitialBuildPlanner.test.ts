@@ -56,9 +56,11 @@ function makeWorldSnapshot(overrides?: {
       loads: [],
       botConfig: { skillLevel: 'medium' },
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: overrides?.loadAvailability ?? {},
+    activeEffects: [],
   };
 }
 
@@ -186,8 +188,7 @@ describe('InitialBuildPlanner', () => {
           cardId: 1,
           demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 12 }],
         }],
-        loadAvailability: { 'Essen': ['Coal'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'] },      });
 
       // Madrid is no longer in BLOCKED_STARTING_CITIES; it can be a starting city
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
@@ -205,8 +206,7 @@ describe('InitialBuildPlanner', () => {
             { city: 'Frankfurt', loadType: 'Coal', payment: 12 },
           ],
         }],
-        loadAvailability: { 'Essen': ['Coal'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'] },      });
 
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
 
@@ -227,8 +227,7 @@ describe('InitialBuildPlanner', () => {
             { city: 'Madrid', loadType: 'Coal', payment: 20 },
           ],
         }],
-        loadAvailability: { 'Essen': ['Coal'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'] },      });
 
       // expandDemandOptions should return empty (Madrid is remote)
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
@@ -250,8 +249,7 @@ describe('InitialBuildPlanner', () => {
           cardId: 1,
           demands: [{ city: 'Frankfurt', loadType: 'Fish', payment: 10 }],
         }],
-        loadAvailability: { 'London': ['Fish'] },
-      });
+        loadAvailability: { 'London': ['Fish'] },      });
 
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
       // London → Frankfurt crosses the channel — should be filtered
@@ -267,8 +265,7 @@ describe('InitialBuildPlanner', () => {
           cardId: 1,
           demands: [{ city: 'Wien', loadType: 'Steel', payment: 15 }],
         }],
-        loadAvailability: { 'Hamburg': ['Steel'] },
-      });
+        loadAvailability: { 'Hamburg': ['Steel'] },      });
 
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
       // startCity→Hamburg (25) + Hamburg→Wien (25) = 50 > 40
@@ -401,8 +398,7 @@ describe('InitialBuildPlanner', () => {
           cardId: 1,
           demands: [{ city: 'Frankfurt', loadType: 'Cheese', payment: 20 }],
         }],
-        loadAvailability: { 'Essen': ['Cheese'] },
-      });
+        loadAvailability: { 'Essen': ['Cheese'] },      });
 
       const contextScore = 1.0;
       const demandScores = new Map([['Cheese:Frankfurt', contextScore]]);
@@ -446,8 +442,7 @@ describe('InitialBuildPlanner', () => {
           cardId: 1,
           demands: [{ city: 'Praha', loadType: 'Cheese', payment: 20 }],
         }],
-        loadAvailability: { 'Milano': ['Cheese'] },
-      });
+        loadAvailability: { 'Milano': ['Cheese'] },      });
 
       const demandScores = new Map([['Cheese:Praha', 1.0]]);
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, extendedGrid, demandScores);
@@ -503,8 +498,7 @@ describe('InitialBuildPlanner', () => {
           cardId: 1,
           demands: [{ city: 'Southampton', loadType: 'Cloth', payment: 15 }],
         }],
-        loadAvailability: { 'London': ['Cloth'] },
-      });
+        loadAvailability: { 'London': ['Cloth'] },      });
 
       const contextScore = 1.0;
       const demandScores = new Map([['Cloth:Southampton', contextScore]]);
@@ -785,8 +779,7 @@ describe('InitialBuildPlanner', () => {
           { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 12 }] },
           { cardId: 2, demands: [{ city: 'Zürich', loadType: 'Wine', payment: 10 }] },
         ],
-        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },      });
 
       const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
 
@@ -813,8 +806,7 @@ describe('InitialBuildPlanner', () => {
           { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 15 }] },
           { cardId: 2, demands: [{ city: 'Zürich', loadType: 'Wine', payment: 12 }] },
         ],
-        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },      });
 
       const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
 
@@ -845,8 +837,7 @@ describe('InitialBuildPlanner', () => {
           { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 20 }] },
           { cardId: 2, demands: [{ city: 'Hamburg', loadType: 'Wine', payment: 5 }] },
         ],
-        loadAvailability: { 'Essen': ['Coal'], 'Wien': ['Wine'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'], 'Wien': ['Wine'] },      });
 
       const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
 
@@ -863,8 +854,7 @@ describe('InitialBuildPlanner', () => {
         resolvedDemands: [
           { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Fish', payment: 10 }] },
         ],
-        loadAvailability: { 'London': ['Fish'] },
-      });
+        loadAvailability: { 'London': ['Fish'] },      });
 
       const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
 
@@ -910,8 +900,7 @@ describe('InitialBuildPlanner', () => {
           { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Steel', payment: 12 }] },
           { cardId: 2, demands: [{ city: 'Wien', loadType: 'Potatoes', payment: 29 }] },
         ],
-        loadAvailability: { 'Essen': ['Steel'], 'Wroclaw': ['Potatoes'] },
-      });
+        loadAvailability: { 'Essen': ['Steel'], 'Wroclaw': ['Potatoes'] },      });
 
       const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
 
@@ -928,8 +917,7 @@ describe('InitialBuildPlanner', () => {
           cardId: 1,
           demands: [{ city: 'Wien', loadType: 'Steel', payment: 40 }],
         }],
-        loadAvailability: { 'Hamburg': ['Steel'] },
-      });
+        loadAvailability: { 'Hamburg': ['Steel'] },      });
 
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
       // Efficiency should be raw formula with no penalty multiplier
@@ -957,8 +945,7 @@ describe('InitialBuildPlanner', () => {
           { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 12 }] },
           { cardId: 2, demands: [{ city: 'Wien', loadType: 'Wine', payment: 14 }] },
         ],
-        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },      });
 
       const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
       // Should produce a single delivery plan or a double — both are valid.
@@ -1195,8 +1182,7 @@ describe('InitialBuildPlanner', () => {
           { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 12 }] },
           { cardId: 2, demands: [{ city: 'Wien', loadType: 'Wine', payment: 18 }] },
         ],
-        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },      });
 
       // Coal→Frankfurt: delivery city is on-network (high corridor score)
       // Wine→Wien: higher payout but no corridor bonus
@@ -1227,8 +1213,7 @@ describe('InitialBuildPlanner', () => {
           { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 10 }] },
           { cardId: 2, demands: [{ city: 'Wien', loadType: 'Wine', payment: 14 }] },
         ],
-        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },      });
 
       // Wine→Wien has victory bonus (connects toward 7th major city)
       const demandScores = new Map([
@@ -1256,8 +1241,7 @@ describe('InitialBuildPlanner', () => {
           cardId: 1,
           demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 12 }],
         }],
-        loadAvailability: { 'Essen': ['Coal'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'] },      });
 
       // No demandScores param — should still produce options using local formula
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
@@ -1317,8 +1301,7 @@ describe('InitialBuildPlanner', () => {
           cardId: 1,
           demands: [{ city: 'Frankfurt', loadType: 'Steel', payment: 12 }],
         }],
-        loadAvailability: { 'Essen': ['Steel'], 'Wroclaw': ['Steel'] },
-      });
+        loadAvailability: { 'Essen': ['Steel'], 'Wroclaw': ['Steel'] },      });
 
       // Negative contextScore simulates a below-average demand ranking
       const demandScores = new Map([
@@ -1498,8 +1481,7 @@ describe('InitialBuildPlanner', () => {
           { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 8 }] },
           { cardId: 2, demands: [{ city: 'Zürich', loadType: 'Wine', payment: 6 }] },
         ],
-        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },      });
 
       const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
 
@@ -1522,8 +1504,7 @@ describe('InitialBuildPlanner', () => {
           { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 20 }] },
           { cardId: 2, demands: [{ city: 'Zürich', loadType: 'Wine', payment: 18 }] },
         ],
-        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },      });
 
       const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
 
@@ -1668,8 +1649,7 @@ describe('InitialBuildPlanner', () => {
           cardId: 1,
           demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 20 }],
         }],
-        loadAvailability: { 'Essen': ['Coal'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'] },      });
 
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
       expect(options.length).toBeGreaterThan(0);
@@ -1698,16 +1678,14 @@ describe('InitialBuildPlanner', () => {
           cardId: 1,
           demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 20 }],
         }],
-        loadAvailability: { 'Essen': ['Coal'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'] },      });
 
       const snapshotWien = makeWorldSnapshot({
         resolvedDemands: [{
           cardId: 1,
           demands: [{ city: 'Wien', loadType: 'Coal', payment: 20 }],
         }],
-        loadAvailability: { 'Essen': ['Coal'] },
-      });
+        loadAvailability: { 'Essen': ['Coal'] },      });
 
       const optsFrankfurt = InitialBuildPlanner.expandDemandOptions(snapshotFrankfurt, grid);
       const optsWien = InitialBuildPlanner.expandDemandOptions(snapshotWien, grid);
@@ -1759,8 +1737,7 @@ describe('InitialBuildPlanner', () => {
             { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Potatoes', payment: 21 }] },
             { cardId: 2, demands: [{ city: 'Wien', loadType: 'Potatoes', payment: 21 }] },
           ],
-          loadAvailability: { 'Wroclaw': ['Potatoes'] },
-        });
+          loadAvailability: { 'Wroclaw': ['Potatoes'] },        });
 
         const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
 
@@ -1878,8 +1855,7 @@ describe('InitialBuildPlanner', () => {
             { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Potatoes', payment: 21 }] },
             { cardId: 2, demands: [{ city: 'Wien', loadType: 'Potatoes', payment: 21 }] },
           ],
-          loadAvailability: { 'Wroclaw': ['Potatoes'] },
-        });
+          loadAvailability: { 'Wroclaw': ['Potatoes'] },        });
 
         const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
 
@@ -1917,8 +1893,7 @@ describe('InitialBuildPlanner', () => {
             { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 15 }] },
             { cardId: 2, demands: [{ city: 'Zürich', loadType: 'Wine', payment: 12 }] },
           ],
-          loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
-        });
+          loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },        });
 
         const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
 

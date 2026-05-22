@@ -348,12 +348,14 @@ function makeSnapshot(
       loads: [],
       botConfig: null,
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [
       { playerId: 'bot1', segments: botTrack },
       { playerId: 'opp1', segments: opponentTrack },
     ],
     loadAvailability: {},
+    activeEffects: [],
   };
 }
 

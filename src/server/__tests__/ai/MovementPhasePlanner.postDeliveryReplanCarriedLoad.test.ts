@@ -260,9 +260,11 @@ function makeSnapshot(): WorldSnapshot {
       loads: [],
       botConfig: null,
       connectedMajorCityCount: 2,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+  activeEffects: [],
   } as WorldSnapshot;
 }
 
@@ -333,9 +335,11 @@ beforeEach(() => {
       loads: [], // DB shows empty after delivery (lag)
       botConfig: null,
       connectedMajorCityCount: 2,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+  activeEffects: [],
   });
 
   // PostDeliveryReplanner returns a new route after replan

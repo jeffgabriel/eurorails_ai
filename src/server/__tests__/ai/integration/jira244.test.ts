@@ -243,9 +243,11 @@ function makeS1Snapshot(segments: TrackSegment[]): WorldSnapshot {
       loads: ['Cheese'],
       botConfig: { skillLevel: 'medium' as const },
       connectedMajorCityCount: 2,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+  activeEffects: [],
   } as unknown as WorldSnapshot;
 }
 

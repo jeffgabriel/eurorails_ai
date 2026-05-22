@@ -64,9 +64,11 @@ function makeWorldSnapshot(overrides?: {
       loads: overrides?.botLoads ?? [],
       botConfig: { skillLevel: 'medium' },
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: overrides?.loadAvailability ?? {},
+    activeEffects: [],
   };
 }
 
@@ -96,8 +98,7 @@ describe('ContextBuilder.computeEnRoutePickups', () => {
           { city: 'København', loadType: 'Bauxite', payment: 30 },
         ],
       }],
-      loadAvailability: { 'Budapest': ['Bauxite'] },
-    });
+      loadAvailability: { 'Budapest': ['Bauxite'] },    });
 
     const result = ContextBuilder.computeEnRoutePickups(snapshot, routeStops, gridPoints);
 
@@ -132,8 +133,7 @@ describe('ContextBuilder.computeEnRoutePickups', () => {
         ],
       }],
       // NearbyCity has Coal but no demand card for Coal
-      loadAvailability: { 'NearbyCity': ['Coal'] },
-    });
+      loadAvailability: { 'NearbyCity': ['Coal'] },    });
 
     const result = ContextBuilder.computeEnRoutePickups(snapshot, routeStops, gridPoints);
     expect(result).toHaveLength(0);
@@ -149,8 +149,7 @@ describe('ContextBuilder.computeEnRoutePickups', () => {
         cardId: 1,
         demands: [{ city: 'Wien', loadType: 'Wine', payment: 15 }],
       }],
-      loadAvailability: { 'Zagreb': ['Wine'] },
-    });
+      loadAvailability: { 'Zagreb': ['Wine'] },    });
 
     const result = ContextBuilder.computeEnRoutePickups(snapshot, [], gridPoints);
     expect(result).toHaveLength(0);
@@ -176,8 +175,7 @@ describe('ContextBuilder.computeEnRoutePickups', () => {
         ],
       }],
       // Zagreb (a route stop) also has Steel
-      loadAvailability: { 'Zagreb': ['Steel'] },
-    });
+      loadAvailability: { 'Zagreb': ['Steel'] },    });
 
     const result = ContextBuilder.computeEnRoutePickups(snapshot, routeStops, gridPoints);
     expect(result).toHaveLength(1);
@@ -209,8 +207,7 @@ describe('ContextBuilder.computeEnRoutePickups', () => {
         cardId: 1,
         demands: [{ city: 'Berlin', loadType: 'Steel', payment: 25 }],
       }],
-      loadAvailability: { 'NearbyCity': ['Steel'] },
-    });
+      loadAvailability: { 'NearbyCity': ['Steel'] },    });
 
     const result = ContextBuilder.computeEnRoutePickups(snapshot, routeStops, gridPoints);
     // Steel is available and demanded — should still appear (capacity not checked here)
@@ -233,8 +230,7 @@ describe('ContextBuilder.computeEnRoutePickups', () => {
         cardId: 1,
         demands: [{ city: 'Berlin', loadType: 'Steel', payment: 25 }],
       }],
-      loadAvailability: { 'FarCity': ['Steel'] },
-    });
+      loadAvailability: { 'FarCity': ['Steel'] },    });
 
     const result = ContextBuilder.computeEnRoutePickups(snapshot, routeStops, gridPoints);
     expect(result).toHaveLength(0);
@@ -256,8 +252,7 @@ describe('ContextBuilder.computeEnRoutePickups', () => {
         cardId: 1,
         demands: [{ city: 'Wien', loadType: 'Steel', payment: 20 }],
       }],
-      loadAvailability: { 'NearbyCity': ['Steel'] },
-    });
+      loadAvailability: { 'NearbyCity': ['Steel'] },    });
 
     const result = ContextBuilder.computeEnRoutePickups(snapshot, routeStops, gridPoints);
     expect(result).toHaveLength(0);
@@ -327,8 +322,7 @@ describe('ContextBuilder.computeEnRoutePickups', () => {
         cardId: 1,
         demands: [{ city: 'Berlin', loadType: 'Steel', payment: 25 }],
       }],
-      loadAvailability: { 'NearbyCity': ['Steel'] },
-    });
+      loadAvailability: { 'NearbyCity': ['Steel'] },    });
 
     const result = ContextBuilder.computeEnRoutePickups(snapshot, routeStops, gridPoints);
     expect(result).toHaveLength(0);

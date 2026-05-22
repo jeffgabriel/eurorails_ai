@@ -165,10 +165,12 @@ function makeSnapshot(overrides: Partial<WorldSnapshot['bot']> = {}): WorldSnaps
       loads: [],
       botConfig: { skillLevel: 'medium' },
       connectedMajorCityCount: 0,
+     pendingFloodRebuilds: [],
       ...overrides,
     },
     allPlayerTracks: [],
     loadAvailability: {},
+    activeEffects: [],
   };
 }
 

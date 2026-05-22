@@ -123,9 +123,11 @@ function makeSnapshot(money: number = 50): WorldSnapshot {
       loads: [],
       botConfig: null,
       connectedMajorCityCount: 2,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+    activeEffects: [],
   };
 }
 

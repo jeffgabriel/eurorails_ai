@@ -131,10 +131,12 @@ function makeWorldSnapshot(
       botConfig: { skillLevel: 'medium' },
       ferryHalfSpeed: false,
       connectedMajorCityCount: 0,
+     pendingFloodRebuilds: [],
       ...(overrides.bot ?? {}),
     },
     allPlayerTracks: [{ playerId: BOT_PLAYER_ID, segments }],
     loadAvailability: {},
+    activeEffects: [],
     ferryEdges: [],
     ...overrides,
   };

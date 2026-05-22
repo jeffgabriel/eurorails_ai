@@ -84,9 +84,11 @@ function makeWorldSnapshot(overrides?: {
       loads: overrides?.botLoads ?? [],
       botConfig: { skillLevel: 'medium' },
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+    activeEffects: [],
     opponents: overrides?.opponents,
   };
 }

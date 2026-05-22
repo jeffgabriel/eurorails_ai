@@ -142,10 +142,10 @@ describe('AC2: Legend entries for ferry port and water', () => {
         loads: [],
         botConfig: null,
         connectedMajorCityCount: 0,
+     pendingFloodRebuilds: [],
       },
       allPlayerTracks: [],
-      loadAvailability: {},
-    };
+      loadAvailability: {},    };
     const result = MapRenderer.renderRouteCorridor(route, snapshot as any, smallGrid, []);
     expect(result.rendered).toContain('F=ferry port');
     expect(result.rendered).toContain('~=water(impassable)');

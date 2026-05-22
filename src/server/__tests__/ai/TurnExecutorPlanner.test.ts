@@ -160,9 +160,11 @@ jest.mock('../../services/ai/WorldSnapshotService', () => ({
       loads: [],
       botConfig: null,
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+  activeEffects: [],
   }),
 }));
 
@@ -254,10 +256,12 @@ function makeSnapshotWithTracks(
       trainType: 'Freight',
       loads: [],
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks,
     players: [],
     loadAvailability: {},
+  activeEffects: [],
   } as unknown as WorldSnapshot;
 }
 
@@ -323,6 +327,7 @@ function makeSnapshot(): WorldSnapshot {
     },
     players: [],
     loadAvailability: {},
+  activeEffects: [],
   } as unknown as WorldSnapshot;
 }
 
@@ -1599,9 +1604,11 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
         loads: [],
         botConfig: null,
         connectedMajorCityCount: 0,
+     pendingFloodRebuilds: [],
       },
       allPlayerTracks: [],
       loadAvailability: {},
+    activeEffects: [],
     });
 
     let capturedSnapshot: WorldSnapshot | undefined;
@@ -2891,10 +2898,10 @@ describe('TurnExecutorPlanner.execute — JIRA-165 post-delivery demand refresh'
         loads: [],
         botConfig: null,
         connectedMajorCityCount: 0,
+     pendingFloodRebuilds: [],
       },
       allPlayerTracks: [],
-      loadAvailability: {},
-    };
+      loadAvailability: {},    };
     mockCapture.mockResolvedValue(freshSnapshot);
 
     const route = makeRoute({
@@ -2991,9 +2998,11 @@ describe('TurnExecutorPlanner.execute — JIRA-165 post-delivery canDeliver refr
         loads: [],
         botConfig: null,
         connectedMajorCityCount: 0,
+     pendingFloodRebuilds: [],
       },
       allPlayerTracks: [],
       loadAvailability: {},
+    activeEffects: [],
     });
     // Reset rebuildCanDeliver to default implementation so earlier tests that set
     // mockImplementation (e.g., "does not crash when throws") do not bleed across.

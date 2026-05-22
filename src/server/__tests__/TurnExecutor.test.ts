@@ -66,11 +66,13 @@ function makeSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnapshot 
       loads: [],
       botConfig: null,
       connectedMajorCityCount: 0,
+    pendingFloodRebuilds: [],
+
       ...overrides,
     },
     allPlayerTracks: [],
     loadAvailability: {},
-  };
+   activeEffects: [],  };
 }
 
 function makeBuildOption(segments: TrackSegment[]): FeasibleOption {
@@ -320,11 +322,13 @@ function makeMoveSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnaps
       loads: [],
       botConfig: null,
       connectedMajorCityCount: 0,
+    pendingFloodRebuilds: [],
+
       ...overrides,
     },
     allPlayerTracks: [],
     loadAvailability: {},
-  };
+   activeEffects: [],  };
 }
 
 const mockGetPlayers = PlayerService.getPlayers as jest.Mock;
@@ -547,11 +551,13 @@ function makePickupSnapshot2(overrides?: Partial<WorldSnapshot['bot']>): WorldSn
       loads: ['Coal'],
       botConfig: null,
       connectedMajorCityCount: 0,
+    pendingFloodRebuilds: [],
+
       ...overrides,
     },
     allPlayerTracks: [],
     loadAvailability: { Berlin: ['Coal'] },
-  };
+   activeEffects: [],  };
 }
 
 describe('TurnExecutor — handlePickupLoad', () => {

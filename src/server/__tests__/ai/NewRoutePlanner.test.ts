@@ -177,6 +177,7 @@ function makeSnapshot(overrides: Partial<WorldSnapshot['bot']> = {}): WorldSnaps
       trainType: TrainType.Freight,
       loads: [],
       connectedMajorCityCount: 0,
+     pendingFloodRebuilds: [],
       resolvedDemands: [],
       botConfig: null,
     gameState: GameState.Mid,
@@ -184,6 +185,7 @@ function makeSnapshot(overrides: Partial<WorldSnapshot['bot']> = {}): WorldSnaps
     },
     players: [],
     loadAvailability: {},
+  activeEffects: [],
   } as unknown as WorldSnapshot;
 }
 

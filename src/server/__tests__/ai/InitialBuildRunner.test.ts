@@ -106,9 +106,11 @@ function makeSnapshot(): WorldSnapshot {
       trainType: 'Freight',
       loads: [],
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     players: [],
     loadAvailability: {},
+    activeEffects: [],
     turnNumber: 1,
   } as unknown as WorldSnapshot;
 }

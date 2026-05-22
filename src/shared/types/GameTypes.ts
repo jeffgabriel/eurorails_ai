@@ -1,5 +1,7 @@
 import { DemandCard } from './DemandCard';
 import { LoadType } from './LoadTypes';
+import type { ActiveEffect } from './EventCard';
+import type { TrackSegment as TrackSegmentFromTrackTypes } from './TrackTypes';
 export enum PlayerColor {
     YELLOW = '#FFD700',  // Using a golden yellow for better visibility
     RED = '#FF0000',
@@ -385,12 +387,25 @@ export interface WorldSnapshot {
          * JIRA-207A.
          */
         deliveriesCompleted?: number;
+        /**
+         * Track segments lost to a Flood event that the bot must eagerly rebuild
+         * once the Flood card discards. Empty array when none pending.
+         * JIRA-256 Phase 4.
+         */
+        pendingFloodRebuilds: TrackSegmentFromTrackTypes[];
     };
     allPlayerTracks: Array<{
         playerId: string;
         segments: TrackSegment[];
     }>;
     loadAvailability: Record<string, string[]>;  // city name → available load types
+    /**
+     * All currently active event-card effects for this game.
+     * Empty array when no effects are active. Never null.
+     * Populated by WorldSnapshotService from ActiveEffectManager.
+     * JIRA-256 Phase 4.
+     */
+    activeEffects: ActiveEffect[];
     /** Opponent player data for LLM serialization (populated for Medium/Hard skill) */
     opponents?: OpponentSnapshot[];
     /** Full hex grid point data for pathfinding and context building (v6.3) */

@@ -46,6 +46,7 @@ function makeSnapshot(overrides: {
     loads: [],
     botConfig: { skillLevel: BotSkillLevel.Medium },
     connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     deliveriesCompleted: overrides.deliveriesCompleted ?? 5,
   };
   if (overrides.turnBuildCost !== undefined) {
@@ -58,6 +59,7 @@ function makeSnapshot(overrides: {
     bot,
     allPlayerTracks: [],
     loadAvailability: {},
+    activeEffects: [],
   };
 }
 

@@ -47,6 +47,13 @@ jest.mock('../../services/loadService', () => ({
   },
 }));
 
+// Mock ActiveEffectManager — returns empty active effects for all snapshot tests
+jest.mock('../../services/ActiveEffectManager', () => ({
+  activeEffectManager: {
+    getActiveEffects: jest.fn().mockResolvedValue([]),
+  },
+}));
+
 import { capture } from '../../services/ai/WorldSnapshotService';
 import { db } from '../../db/index';
 import { loadGridPoints } from '../../services/MapTopology';

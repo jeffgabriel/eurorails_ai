@@ -76,9 +76,11 @@ function makeSnapshot(overrides?: Partial<WorldSnapshot>): WorldSnapshot {
       loads: [],
       botConfig: null,
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+    activeEffects: [],
     ...overrides,
   } as WorldSnapshot;
 }
@@ -186,6 +188,7 @@ describe('TurnValidator.computeSaturatedCityKeys', () => {
         loads: [],
         botConfig: null,
         connectedMajorCityCount: 0,
+     pendingFloodRebuilds: [],
       },
       allPlayerTracks: [
         { playerId: 'bot-1', segments: [botSeg] },

@@ -376,9 +376,11 @@ function makeGameSnapshot(): WorldSnapshot {
       loads: [],
       botConfig: { skillLevel: 'hard' },
       connectedMajorCityCount: 7,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: { Frankfurt: ['Beer'] },
+    activeEffects: [],
   };
 }
 

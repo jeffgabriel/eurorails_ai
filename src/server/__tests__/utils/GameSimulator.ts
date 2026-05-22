@@ -77,11 +77,13 @@ export function createMockSnapshot(config: SimulatorConfig = {}): WorldSnapshot 
         name: 'TestBot',
       },
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: config.allPlayerTracks ?? [
       { playerId: botPlayerId, segments: config.initialSegments ?? [] },
     ],
     loadAvailability: config.loadAvailability ?? {},
+    activeEffects: [],
   };
 }
 

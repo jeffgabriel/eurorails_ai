@@ -27,9 +27,11 @@ function makeSnapshot(overrides: { money?: number; loads?: string[] } = {}): Wor
       loads: overrides.loads ?? [],
       botConfig: null,
       connectedMajorCityCount: 2,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+  activeEffects: [],
   } as any;
 }
 

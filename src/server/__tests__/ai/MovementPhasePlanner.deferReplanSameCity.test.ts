@@ -192,8 +192,10 @@ function makeSnapshot(): WorldSnapshot {
       resolvedDemands: [], trainType: 'Freight',
       loads: ['Wheat', 'Coal'],
       botConfig: null, connectedMajorCityCount: 1,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [], loadAvailability: {},
+  activeEffects: [],
   } as WorldSnapshot;
 }
 
@@ -230,8 +232,10 @@ beforeEach(() => {
       existingSegments: [], demandCards: [], resolvedDemands: [],
       trainType: 'Freight', loads: [], botConfig: null,
       connectedMajorCityCount: 1,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [], loadAvailability: {},
+  activeEffects: [],
   });
 
   mockPostDeliveryReplan.mockResolvedValue({

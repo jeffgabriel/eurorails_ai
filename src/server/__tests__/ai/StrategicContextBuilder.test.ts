@@ -58,9 +58,11 @@ function makeSnapshot(overrides: Partial<WorldSnapshot> = {}): WorldSnapshot {
       loads: [],
       botConfig: { skillLevel: BotSkillLevel.Medium },
       connectedMajorCityCount: 3,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+    activeEffects: [],
     ...overrides,
   };
 }

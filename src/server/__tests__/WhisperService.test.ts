@@ -38,9 +38,11 @@ const makeSnapshot = (overrides?: Partial<WorldSnapshot>): WorldSnapshot => ({
       model: 'claude-sonnet-4-20250514',
     },
     connectedMajorCityCount: 3,
+ pendingFloodRebuilds: [],
   },
   allPlayerTracks: [],
   loadAvailability: {},
+  activeEffects: [],
   ...overrides,
 });
 

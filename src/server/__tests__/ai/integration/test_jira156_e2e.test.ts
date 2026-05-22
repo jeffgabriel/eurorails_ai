@@ -187,6 +187,7 @@ function makeSnapshot(overrides: Partial<{ botCity: string; botRow: number; botC
     },
     players: [],
     loadAvailability: {},
+  activeEffects: [],
   } as unknown as WorldSnapshot;
 }
 

@@ -146,6 +146,7 @@ export function makeMovementSnapshot(
       loads: [],
       botConfig: null,
       connectedMajorCityCount: 0,
+      pendingFloodRebuilds: [],
       ...overrides,
     },
     allPlayerTracks: [
@@ -155,6 +156,7 @@ export function makeMovementSnapshot(
       },
     ],
     loadAvailability: {},
+    activeEffects: [],
     ...topOverrides,
   };
 }

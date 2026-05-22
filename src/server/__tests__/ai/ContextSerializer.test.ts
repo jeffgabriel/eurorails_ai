@@ -78,9 +78,11 @@ function makeSnapshot(overrides: {
       loads: overrides.loads ?? [],
       botConfig: { skillLevel: BotSkillLevel.Medium },
       connectedMajorCityCount: 1,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: { Ruhr: ['Steel'] },
+    activeEffects: [],
   };
 }
 

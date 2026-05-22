@@ -71,9 +71,11 @@ function makeSnapshot(overrides: {
       loads: [],
       botConfig: { skillLevel: 'medium' },
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+    activeEffects: [],
   };
 }
 

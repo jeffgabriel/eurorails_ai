@@ -151,9 +151,11 @@ jest.mock('../../services/ai/WorldSnapshotService', () => ({
       loads: [],
       botConfig: null,
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     allPlayerTracks: [],
     loadAvailability: {},
+  activeEffects: [],
   }),
 }));
 
@@ -258,9 +260,11 @@ function makeSnapshot(): WorldSnapshot {
       trainType: 'Freight',
       loads: [],
       connectedMajorCityCount: 0,
+   pendingFloodRebuilds: [],
     },
     players: [],
     loadAvailability: {},
+  activeEffects: [],
   } as unknown as WorldSnapshot;
 }
 
