@@ -21,6 +21,7 @@ import { DemandDeckService } from '../demandDeckService';
 import { gridToPixel, loadGridPoints } from '../MapTopology';
 import { getTrainCapacity, getTrainSpeed } from '../../../shared/services/trainProperties';
 import { getCityNameAtPosition } from '../../../shared/services/cityPositionResolver';
+import { capture as captureSnapshot } from './WorldSnapshotService';
 
 export interface ExecutionResult {
   success: boolean;
@@ -35,6 +36,12 @@ export interface ExecutionResult {
   movementPath?: { row: number; col: number }[];
   /** Populated when an ActionRestrictionError was caught — provides typed rejection info for logging */
   rejectionReason?: { code: ActionRestrictionErrorCode; message: string };
+  /**
+   * Number of demand cards drawn as a result of this action.
+   * Non-zero values trigger a mid-turn re-snapshot so the bot sees any event
+   * cards drawn during card replacement.
+   */
+  cardsDrawnDuringAction?: number;
 }
 
 export class TurnExecutor {
@@ -106,7 +113,33 @@ export class TurnExecutor {
     }
 
     const option = TurnExecutor.planToOption(plan);
-    return TurnExecutor.execute(option, snapshot);
+    const result = await TurnExecutor.execute(option, snapshot);
+
+    // Mid-turn re-snapshot: when an action draws new cards (e.g., a delivery), the
+    // active event effects may have changed because event cards can be drawn as part
+    // of the card replacement.  Re-capture the snapshot so subsequent planner
+    // invocations (MovementPhasePlanner, BuildPhasePlanner) see the updated
+    // restriction state.  Hard guard: only once per executePlan call.
+    if (result.success && (result as { cardsDrawnDuringAction?: number }).cardsDrawnDuringAction) {
+      try {
+        const freshSnapshot = await captureSnapshot(snapshot.gameId, snapshot.bot.playerId);
+        // Mutate the caller's snapshot reference so downstream consumers within
+        // the same turn see the refreshed activeEffects and pendingFloodRebuilds.
+        snapshot.activeEffects = freshSnapshot.activeEffects;
+        snapshot.bot.pendingFloodRebuilds = freshSnapshot.bot.pendingFloodRebuilds;
+        console.info(
+          `[TurnExecutor] Mid-turn re-snapshot after ${plan.type} (cardsDrawn=${(result as any).cardsDrawnDuringAction}): refreshed activeEffects count=${freshSnapshot.activeEffects?.length ?? 0}`,
+        );
+      } catch (snapshotError) {
+        // Best-effort: a failed re-snapshot does not undo the executed action
+        console.warn(
+          `[TurnExecutor] Mid-turn re-snapshot failed (non-fatal):`,
+          snapshotError instanceof Error ? snapshotError.message : snapshotError,
+        );
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -779,6 +812,8 @@ export class TurnExecutor {
       durationMs: Date.now() - startTime,
       payment,
       newCardId,
+      // Delivery always draws exactly one demand card (plus any event cards processed)
+      cardsDrawnDuringAction: deliverResult.cardsDrawnDuringAction,
     };
   }
 
