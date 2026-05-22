@@ -66,8 +66,15 @@ function makeActiveEffect(overrides: Partial<ActiveEffect> = {}): ActiveEffect {
   };
 }
 
-function makeSegment(from: { row: number; col: number }, to: { row: number; col: number }): TrackSegment {
-  return { from, to, cost: 1 };
+function makeSegment(
+  from: { row: number; col: number },
+  to: { row: number; col: number },
+): TrackSegment {
+  return {
+    from: { x: 0, y: 0, row: from.row, col: from.col, terrain: 0 as any },
+    to:   { x: 0, y: 0, row: to.row,   col: to.col,   terrain: 0 as any },
+    cost: 1,
+  };
 }
 
 // ── isPickupDeliveryBlocked ────────────────────────────────────────────────────
