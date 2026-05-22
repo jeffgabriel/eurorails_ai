@@ -32,6 +32,8 @@ import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
 import type { PhaseAResult } from './schemas';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
+import { isFloodRebuildBlocked, isBuildBlockedAtMilepost } from '../restrictionPredicates';
+import type { BuildRestriction } from '../../../shared/types/EventCard';
 
 // ── PhaseBResult ──────────────────────────────────────────────────────────
 
@@ -165,6 +167,81 @@ export class BuildPhasePlanner {
           };
         }
       }
+    }
+
+    // ── JIRA-256: Eager Flood rebuild pre-step ────────────────────────────
+    // When bot has pending Flood rebuilds, block all other building until the
+    // rebuild list is empty. This preserves network shape across Flood events.
+    const pendingRebuilds = snapshot.bot.pendingFloodRebuilds ?? [];
+    const activeEffects = snapshot.activeEffects ?? [];
+    if (pendingRebuilds.length > 0) {
+      // Filter to segments that are NOT currently Flood-blocked (i.e., actionable rebuilds)
+      const rebuildable = pendingRebuilds.filter(
+        seg => !isFloodRebuildBlocked(activeEffects, seg).blocked,
+      );
+      if (rebuildable.length > 0) {
+        // Block all other building — emit BuildTrack actions for pending rebuilds up to budget
+        const rebuildSegments: typeof rebuildable = [];
+        let budgetRemaining = TURN_BUILD_BUDGET;
+        for (const seg of rebuildable) {
+          if (seg.cost > budgetRemaining) break;
+          rebuildSegments.push(seg);
+          budgetRemaining -= seg.cost;
+        }
+        if (rebuildSegments.length > 0) {
+          console.info(`[BuildPhasePlanner] Eager Flood rebuild: ${rebuildSegments.length} of ${rebuildable.length} rebuildable segments this turn`);
+          const rebuildPlan: TurnPlan = {
+            type: AIActionType.BuildTrack,
+            segments: rebuildSegments,
+            targetCity: 'flood_rebuild',
+          };
+          trace.outputPlan = ['BuildTrack'];
+          return {
+            plans: [...plans, rebuildPlan],
+            updatedRoute: activeRoute,
+            hasDelivery,
+            routeComplete: false,
+            routeAbandoned: false,
+            replanLlmLog: phaseAResult.replanLlmLog,
+            replanSystemPrompt: phaseAResult.replanSystemPrompt,
+            replanUserPrompt: phaseAResult.replanUserPrompt,
+            pendingUpgradeAction: phaseAResult.pendingUpgradeAction,
+            upgradeSuppressionReason: phaseAResult.upgradeSuppressionReason,
+          };
+        }
+        // All actionable rebuilds fit in 0 budget (shouldn't happen) — fall through
+      }
+      // All pending rebuilds are still Flood-blocked — proceed with normal Phase B
+      // (spec option b: allow normal building when nothing is rebuildable yet)
+    }
+
+    // ── JIRA-256: Phase B restriction check ──────────────────────────────
+    // If Rail Strike targets the bot, skip Phase B entirely (no_build_for_player)
+    const allBuildRestrictions: BuildRestriction[] = activeEffects.flatMap(
+      e => e.restrictions.build,
+    );
+    const railStrikeBlocked = allBuildRestrictions.some(
+      r => r.type === 'no_build_for_player' && r.targetPlayerId === snapshot.bot.playerId,
+    );
+    if (railStrikeBlocked) {
+      console.info(`[BuildPhasePlanner] Rail Strike: skipping Phase B for player ${snapshot.bot.playerId}`);
+      trace.build.skipped = true;
+      trace.build.target = null;
+      if (plans.length === 0) {
+        plans.push({ type: AIActionType.PassTurn });
+      }
+      return {
+        plans,
+        updatedRoute: activeRoute,
+        hasDelivery,
+        routeComplete: false,
+        routeAbandoned: false,
+        replanLlmLog: phaseAResult.replanLlmLog,
+        replanSystemPrompt: phaseAResult.replanSystemPrompt,
+        replanUserPrompt: phaseAResult.replanUserPrompt,
+        pendingUpgradeAction: phaseAResult.pendingUpgradeAction,
+        upgradeSuppressionReason: phaseAResult.upgradeSuppressionReason,
+      };
     }
 
     // ── Phase B: Build ────────────────────────────────────────────────────

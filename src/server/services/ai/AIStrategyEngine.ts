@@ -61,6 +61,8 @@ import { NewRoutePlanner } from './NewRoutePlanner';
 import { UPGRADE_DELIVERY_THRESHOLD } from './context/UpgradeGatingConstants';
 import { RECENT_DELIVERIES_WINDOW } from './StrategicConstants';
 import { detectVictoryClinch, findFinalVictoryRoute } from './victoryRules';
+import { isBotInPendingLostTurns } from '../restrictionPredicates';
+import { activeEffectManager } from '../ActiveEffectManager';
 
 /**
  * @deprecated Use UPGRADE_DELIVERY_THRESHOLD from UpgradeGatingConstants instead.
@@ -204,6 +206,34 @@ export class AIStrategyEngine {
       // Auto-place bot if no position and has track (skip during initialBuild — no train placement yet)
       if (!snapshot.bot.position && snapshot.bot.existingSegments.length > 0 && snapshot.gameStatus !== 'initialBuild') {
         await AIStrategyEngine.autoPlaceBot(snapshot, memory.activeRoute);
+      }
+
+      // ── JIRA-256: Lost-turn pre-empt (Derailment event card) ──
+      // If the bot has a pending lost turn from a Derailment event card, the only
+      // legal action is PassTurn. Check this BEFORE any planning or LLM consultation.
+      if (isBotInPendingLostTurns(snapshot.activeEffects, botPlayerId)) {
+        console.info(`${tag} Pending lost turn from Derailment — emitting PassTurn`);
+        // Consume the lost turn so subsequent turns are normal
+        const lostTurnClient = await db.connect();
+        try {
+          await lostTurnClient.query('BEGIN');
+          await activeEffectManager.consumeLostTurn(gameId, botPlayerId, lostTurnClient);
+          await lostTurnClient.query('COMMIT');
+        } catch (consumeErr) {
+          await lostTurnClient.query('ROLLBACK');
+          console.error(`${tag} Failed to consume lost turn:`, consumeErr);
+        } finally {
+          lostTurnClient.release();
+        }
+        return {
+          action: AIActionType.PassTurn,
+          segmentsBuilt: 0,
+          cost: 0,
+          durationMs: Date.now() - startTime,
+          success: true,
+          movedTo: undefined,
+          milepostsMoved: 0,
+        };
       }
 
       const botConfig = snapshot.bot.botConfig as BotConfig | null;
