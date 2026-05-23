@@ -15208,6 +15208,14 @@
     "Ocean": "Baltic Sea"
   },
   {
+    "Id": "3141c21b-09e3-4329-99f1-914098b438c7",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 61,
+    "GridY": 5,
+    "Ocean": "Baltic Sea"
+  },
+  {
     "Id": "3141b21b-09e3-4329-99f1-914098b438c7",
     "Type": "Milepost",
     "Name": null,
