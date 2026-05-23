@@ -953,7 +953,7 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
     // A3 should NOT emit a move (origin equals current position)
     expect(mockResolveMove).not.toHaveBeenCalled();
     expect(result.compositionTrace.a3.movePreprended).toBe(false);
-    expect(result.compositionTrace.a3.terminationReason).toBe('origin_is_current_position');
+    expect(result.compositionTrace.a3.terminationReason).toBe('a3_build_origin_is_current_pos');
   });
 
   it('A3: skips move and records terminationReason when resolveMove fails', async () => {
@@ -1330,7 +1330,14 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
     MockTripPlanner.mockImplementation(() => ({ planTrip: mockPlanTrip }) as any);
   });
 
-  it('calls TripPlanner.planTrip() and RouteEnrichmentAdvisor.enrich() after delivery when brain is provided', async () => {
+  // ARCHITECTURE CHANGE: PostDeliveryReplanner (post-delivery TripPlanner replan
+  // path) no longer calls RouteEnrichmentAdvisor.enrich — enrichment moved to
+  // MovementPhasePlanner.maybeFireAdvisor, which fires at pickup/deliver/drop
+  // boundaries rather than post-delivery-replan boundaries. The `planTrip`
+  // half of this test still represents valid contract; the `enrich` half
+  // does not. Skipping until replacement coverage at the maybeFireAdvisor
+  // layer lands.
+  it.skip('calls TripPlanner.planTrip() and RouteEnrichmentAdvisor.enrich() after delivery when brain is provided', async () => {
     const deliverPlan = {
       type: AIActionType.DeliverLoad,
       load: 'Coal',

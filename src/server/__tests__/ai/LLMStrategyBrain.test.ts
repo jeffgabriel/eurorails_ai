@@ -1253,7 +1253,11 @@ describe('LLMStrategyBrain', () => {
       expect(result!.targetTrain).toBeUndefined();
     });
 
-    it('should treat upgrade without targetTrain as skip', async () => {
+    it('should retry on upgrade without targetTrain and return null after attempts exhausted', async () => {
+      // Contract: when the LLM emits action=upgrade without targetTrain, the brain
+      // retries with an error hint (LLMStrategyBrain.ts:408-411). If every retry
+      // returns the same missing-targetTrain response, the brain returns null —
+      // same as the "retry on invalid action" path below.
       mockChat.mockResolvedValue({
         text: JSON.stringify({
           action: 'upgrade',
@@ -1265,8 +1269,7 @@ describe('LLMStrategyBrain', () => {
       const brain = createBrain();
       const result = await brain.evaluateUpgradeBeforeDrop('test prompt', makeSnapshot(50), makeContext());
 
-      expect(result).not.toBeNull();
-      expect(result!.action).toBe('skip');
+      expect(result).toBeNull();
     });
 
     it('should retry on invalid action then return null', async () => {
