@@ -424,6 +424,13 @@ export async function onHumanReconnect(gameId: string): Promise<void> {
 /**
  * Phase-aware turn advancement after a bot completes its turn.
  * Routes to the correct service based on game status.
+ *
+ * JIRA-260: the `active` branch uses the transactional path of
+ * `updateCurrentPlayerIndex` so `cleanupExpiredEffects` (event cards expiring
+ * at end of drawing player's next turn) and `consumeLostTurn` (Derailment
+ * single-turn skip) fire. Without this, all-bot games never run the effect
+ * lifecycle and a Derailment pending-lost-turn entry persists indefinitely,
+ * trapping the affected bot in repeated PassTurn outputs.
  */
 export async function advanceTurnAfterBot(gameId: string): Promise<void> {
   const result = await db.query(
@@ -442,8 +449,19 @@ export async function advanceTurnAfterBot(gameId: string): Promise<void> {
     );
     const playerCount = countResult.rows[0]?.count || 0;
     if (playerCount > 0) {
-      const nextIndex = (game.current_player_index + 1) % playerCount;
-      await PlayerService.updateCurrentPlayerIndex(gameId, nextIndex);
+      const prevIndex: number = game.current_player_index;
+      const nextIndex = (prevIndex + 1) % playerCount;
+      const client = await db.connect();
+      try {
+        await client.query('BEGIN');
+        await PlayerService.updateCurrentPlayerIndex(gameId, nextIndex, client, prevIndex);
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
     }
   }
   // completed/abandoned: do nothing

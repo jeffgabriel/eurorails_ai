@@ -337,19 +337,57 @@ describe('Bot Turn + Initial Build Flow (Integration)', () => {
   });
 
   describe('advanceTurnAfterBot routing', () => {
-    it('should route to PlayerService for active games', async () => {
+    it('should route to PlayerService for active games via the transactional path (JIRA-260)', async () => {
       mockQuery.mockResolvedValueOnce(mockResult([{
         status: 'active',
         current_player_index: 1,
       }]));
       mockQuery.mockResolvedValueOnce(mockResult([{ count: 3 }]));
 
+      // JIRA-260: advanceTurnAfterBot now opens a transaction and routes through
+      // updateCurrentPlayerIndex's transactional form so cleanupExpiredEffects +
+      // consumeLostTurn fire for the next player.
+      const txClient = {
+        query: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(mockResult([])),
+        release: jest.fn<() => void>(),
+      };
+      mockConnect.mockResolvedValueOnce(txClient);
+
       const { PlayerService } = await import('../../services/playerService');
       (PlayerService.updateCurrentPlayerIndex as jest.Mock<() => Promise<void>>).mockResolvedValue(undefined);
 
       await advanceTurnAfterBot(gameId);
 
-      expect(PlayerService.updateCurrentPlayerIndex).toHaveBeenCalledWith(gameId, 2);
+      // 4-arg transactional form: gameId, nextIndex, client, prevPlayerIndex
+      expect(PlayerService.updateCurrentPlayerIndex).toHaveBeenCalledWith(gameId, 2, txClient as any, 1);
+      // Transaction was committed (not rolled back)
+      expect(txClient.query).toHaveBeenCalledWith('BEGIN');
+      expect(txClient.query).toHaveBeenCalledWith('COMMIT');
+      expect(txClient.release).toHaveBeenCalled();
+    });
+
+    it('rolls back the transaction and releases the client when updateCurrentPlayerIndex throws (JIRA-260)', async () => {
+      mockQuery.mockResolvedValueOnce(mockResult([{
+        status: 'active',
+        current_player_index: 1,
+      }]));
+      mockQuery.mockResolvedValueOnce(mockResult([{ count: 3 }]));
+
+      const txClient = {
+        query: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(mockResult([])),
+        release: jest.fn<() => void>(),
+      };
+      mockConnect.mockResolvedValueOnce(txClient);
+
+      const { PlayerService } = await import('../../services/playerService');
+      (PlayerService.updateCurrentPlayerIndex as jest.Mock<() => Promise<void>>)
+        .mockRejectedValueOnce(new Error('simulated effect-lifecycle failure'));
+
+      await expect(advanceTurnAfterBot(gameId)).rejects.toThrow('simulated effect-lifecycle failure');
+
+      expect(txClient.query).toHaveBeenCalledWith('ROLLBACK');
+      expect(txClient.query).not.toHaveBeenCalledWith('COMMIT');
+      expect(txClient.release).toHaveBeenCalled();
     });
 
     it('should call InitialBuildService.advanceTurn for initialBuild games', async () => {
