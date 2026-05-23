@@ -8,7 +8,7 @@
 -- Shape (when populated by Project 3):
 --   { "cardId": 131, "drawingPlayerId": "uuid", "drawingPlayerIndex": 2, "expiresAfterTurnNumber": 17 }
 
-ALTER TABLE games ADD COLUMN active_event JSONB NULL;
+ALTER TABLE games ADD COLUMN IF NOT EXISTS active_event JSONB NULL;
 
 -- DOWN
 -- ALTER TABLE games DROP COLUMN active_event;
