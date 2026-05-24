@@ -406,7 +406,8 @@ describe('estimateGraphPathCost', () => {
     expect(result.reachable).toBe(true);
     expect(result.buildCost).toBe(0);
     expect(result.pathLength).toBe(1);
-    expect(result.estimatedTurns).toBe(1);
+    // JIRA-255 Layer 0 fix: same-city pickups consume 0 turns (train is already there)
+    expect(result.estimatedTurns).toBe(0);
     expect(mockEstimateRouteSegment).not.toHaveBeenCalled();
   });
 

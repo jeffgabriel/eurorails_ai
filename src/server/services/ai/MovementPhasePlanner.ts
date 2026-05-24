@@ -33,11 +33,12 @@ import {
   applyStopEffectToLocalState,
   isRouteImpossible,
   hasCarriedDeliverableOnNetwork,
+  isStructurallyReachable,
 } from './routeHelpers';
 import { computeBuildSegments } from './computeBuildSegments';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
-import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
+import { TurnExecutorPlanner, CompositionTrace, RouteAbandonRecord, AbandonReason } from './TurnExecutorPlanner';
 import { TurnExecutor } from './TurnExecutor';
 import { PostDeliveryReplanner } from './PostDeliveryReplanner';
 import { computeEffectivePathLength, getMajorCityLookup, getFerryEdges } from '../../../shared/services/majorCityGroups';
@@ -141,6 +142,31 @@ export class MovementPhasePlanner {
 
       // ── Already at the stop city? Execute the action ─────────────────
       if (TurnExecutorPlanner.isBotAtCity(context, targetCity)) {
+        // JIRA-249 Layer 3: Runtime arrival guard — verify load is present before deliver.
+        // If the bot arrived at a delivery city but the load is not in context.loads,
+        // the route is stale/malformed. Abandon the current stop and trigger a replan
+        // rather than emitting PassTurn or a failed deliver action.
+        if (
+          currentStop.action === 'deliver' &&
+          !context.loads.includes(currentStop.loadType)
+        ) {
+          console.warn(
+            `${tag} arrived_for_deliver_but_load_not_carried: ` +
+            `loadType=${currentStop.loadType} city=${targetCity} ` +
+            `context.loads=[${context.loads.join(',')}] — abandoning stop, triggering replan.`,
+          );
+          trace.a2.terminationReason = 'arrived_for_deliver_but_load_not_carried';
+          trace.outputPlan = plans.map(p => p.type);
+          // Advance past the malformed stop so the route does not loop on it.
+          activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
+          return MovementPhasePlanner.makeResult(
+            activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn,
+            snapshot, context, false, false,
+            replanLlmLog, replanSystemPrompt, replanUserPrompt,
+            pendingUpgradeAction, upgradeSuppressionReason,
+          );
+        }
+
         const _stopActionStart = Date.now();
         const actionResult = await TurnExecutorPlanner.executeStopAction(
           currentStop,
@@ -487,8 +513,21 @@ export class MovementPhasePlanner {
               // on-network right now → abandon this route so the next turn produces
               // a fresh carry-deliver plan instead of retrying a doomed build.
               if (hasCarriedDeliverableOnNetwork(context)) {
-                console.warn(`${tag} a3_abandon_for_carry_deliver — empty build path, carry-deliverable on-network`);
                 trace.a3.terminationReason = 'a3_abandon_for_carry_deliver';
+                // JIRA-253: structured abandon record replaces console.warn
+                const abandonRecord: RouteAbandonRecord = {
+                  reason: 'empty_path_carry_deliver_on_network' as AbandonReason,
+                  atStopIndex: activeRoute.currentStopIndex,
+                  buildTargetCity: a3BuildTarget.targetCity,
+                  partialPathLength: 0,
+                  partialPathReachedTarget: false,
+                  structurallyReachableUnbounded: null,
+                  carryDeliverableLoadTypes: context.loads.filter(l =>
+                    context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork && d.loadType === l),
+                  ),
+                };
+                if (!trace.abandonReasons) trace.abandonReasons = [];
+                trace.abandonReasons.push(abandonRecord);
                 routeAbandonedByImpossibility = true;
                 break;
               }
@@ -498,18 +537,63 @@ export class MovementPhasePlanner {
               const currentPos = context.position;
               const lastSeg = a3OriginResult[a3OriginResult.length - 1];
 
-              // computeBuildSegments returned segments but the path does not reach
-              // the build target (partial path) AND bot carries a deliverable
-              // on-network load → abandon so the next turn produces a carry-deliver
-              // plan instead of committing budget to a partial route.
-              if (
-                (lastSeg.to.row !== a3TargetCoord.row || lastSeg.to.col !== a3TargetCoord.col) &&
-                hasCarriedDeliverableOnNetwork(context)
-              ) {
-                console.warn(`${tag} a3_abandon_for_carry_deliver_partial — partial build path, carry-deliverable on-network`);
-                trace.a3.terminationReason = 'a3_abandon_for_carry_deliver_partial';
-                routeAbandonedByImpossibility = true;
-                break;
+              // JIRA-253 Layer A (main fix): Replace the naive partial-path check with a real
+              // structural reachability check. The old predicate abandoned on EVERY budget-limited
+              // partial path, causing a livelock when the bot carried a deliverable load.
+              //
+              // New logic: only abandon if the target is genuinely structurally blocked
+              // (isStructurallyReachable returns false). Budget-limited partials (where the
+              // unbounded path DOES reach the target) proceed normally to Phase B.
+              const partialPathIsShort =
+                lastSeg.to.row !== a3TargetCoord.row || lastSeg.to.col !== a3TargetCoord.col;
+
+              if (partialPathIsShort && hasCarriedDeliverableOnNetwork(context)) {
+                // Check structural reachability with an effectively infinite budget.
+                // Use the first segment's origin as the build origin for the check.
+                const buildOriginCoord = { row: previewBuildOrigin.row, col: previewBuildOrigin.col };
+                const structurallyReachable = isStructurallyReachable(
+                  buildOriginCoord,
+                  a3TargetCoord,
+                  snapshot.bot.existingSegments,
+                  a3OccupiedEdges,
+                );
+
+                if (!structurallyReachable) {
+                  // Path is genuinely blocked even with infinite budget → abandon is appropriate.
+                  trace.a3.terminationReason = 'a3_abandon_for_carry_deliver_partial';
+                  const abandonRecord: RouteAbandonRecord = {
+                    reason: 'partial_structurally_blocked_carry_deliver_on_network' as AbandonReason,
+                    atStopIndex: activeRoute.currentStopIndex,
+                    buildTargetCity: a3BuildTarget.targetCity,
+                    partialPathLength: a3OriginResult.length,
+                    partialPathReachedTarget: false,
+                    structurallyReachableUnbounded: false,
+                    carryDeliverableLoadTypes: context.loads.filter(l =>
+                      context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork && d.loadType === l),
+                    ),
+                  };
+                  if (!trace.abandonReasons) trace.abandonReasons = [];
+                  trace.abandonReasons.push(abandonRecord);
+                  routeAbandonedByImpossibility = true;
+                  break;
+                }
+                // else: path is budget-limited (reachable with more turns) → do NOT abandon.
+                // Record the non-abandon decision in trace for diagnostics.
+                trace.a3.terminationReason = 'a3_partial_budget_limited_proceeding';
+                const proceedRecord: RouteAbandonRecord = {
+                  reason: 'partial_budget_limited_carry_deliver_not_blocked' as AbandonReason,
+                  atStopIndex: activeRoute.currentStopIndex,
+                  buildTargetCity: a3BuildTarget.targetCity,
+                  partialPathLength: a3OriginResult.length,
+                  partialPathReachedTarget: false,
+                  structurallyReachableUnbounded: true,
+                  carryDeliverableLoadTypes: context.loads.filter(l =>
+                    context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork && d.loadType === l),
+                  ),
+                };
+                if (!trace.abandonReasons) trace.abandonReasons = [];
+                trace.abandonReasons.push(proceedRecord);
+                // Fall through to normal A3 execution (move toward build origin, then Phase B builds)
               }
 
               if (

@@ -35,6 +35,8 @@ import {
   VICTORY_CITY_COUNT,
 } from '../../../shared/types/GameTypes';
 import { cheapestUnconnectedMajorConnectorCost } from './victoryRules';
+import { updateMemory } from './BotMemory';
+import { isWinCompleting, fullWinCost } from './winCompletion';
 
 // ── Tunables ───────────────────────────────────────────────────────────
 
@@ -80,6 +82,15 @@ export const PRUNE_MAX_BUILD_M = 130;
 export const HOP_AVG_COST_M = 1.3;
 
 /**
+ * JIRA-255 Layer B: Hard ceiling on turn count for win-completing candidates
+ * exempted from the standard PRUNE_MAX_TURNS gate when endGameLocked is true.
+ * Guards against pathological estimates (e.g., 50-turn candidates that the
+ * estimator overestimates due to ferry half-rate or alpine rerouting).
+ * Value 25: covers realistic 14-18 turn win-completers with headroom.
+ */
+export const WIN_COMPLETING_MAX_TURNS = 25;
+
+/**
  * Cap on chained-follow-up search per c1 in computeAggregateScore.
  *
  * JIRA-237's aggregate look-ahead re-simulates c2 against the post-c1 network
@@ -118,6 +129,12 @@ export interface DeterministicTripPlannerOptions {
   pruneMaxTurns?: number;
   pruneMaxBuildM?: number;
   hopAvgCostM?: number;
+  /**
+   * JIRA-253 Layer B: Route signatures to exclude from candidate consideration.
+   * Candidates whose id matches an entry here are rejected with reason `excluded_by_caller`
+   * and recorded in the result's `candidateRejections` array for diagnostics.
+   */
+  excludeRouteSignatures?: string[];
 }
 
 export interface DeterministicTripPlanResult {
@@ -125,6 +142,8 @@ export interface DeterministicTripPlanResult {
   reasoning: string;
   outcome: 'success' | 'no_feasible_candidates';
   synthesizedAttempt: LlmAttempt;
+  /** JIRA-249/250: Structured records of candidates rejected by the grammar validator. */
+  candidateRejections?: CandidateRejection[];
 }
 
 // ── Internal types ─────────────────────────────────────────────────────
@@ -184,10 +203,36 @@ interface GridCoord {
   col: number;
 }
 
+// ── Candidate grammar validation types (JIRA-249 Layer 2 / JIRA-250 Layer 3) ──
+
+/**
+ * Reasons a candidate route may fail grammar validation.
+ *
+ * - `deliver_without_pickup`: a deliver stop has no prior pickup and the load
+ *   is not in the bot's carried loads at trip start.
+ * - `deliver_exceeds_carried`: a deliver(L) would consume more L than the bot
+ *   has available (carried + picked up so far in the candidate).
+ */
+export type CandidateRejectionReason = 'deliver_without_pickup' | 'deliver_exceeds_carried' | 'excluded_by_caller';
+
+/** Structured record of a single grammar-rule violation for a rejected candidate. */
+export interface CandidateRejection {
+  candidateId: string;
+  reason: CandidateRejectionReason;
+  offendingStopIndex: number;
+  loadType: string;
+  context: {
+    carriedAtStart: string[];
+    pickupsBeforeOffender: string[];
+  };
+}
+
 interface ResolvedOptions {
   pruneMaxTurns: number;
   pruneMaxBuildM: number;
   hopAvgCostM: number;
+  /** JIRA-253 Layer B: resolved exclude set (empty when caller passes none) */
+  excludeRouteSignatures?: Set<string>;
 }
 
 interface PruneStats {
@@ -675,6 +720,187 @@ const EMPTY_SNAPSHOT: WorldSnapshot = {
   loadAvailability: {},
 };
 
+// ── Grammar validation (JIRA-249 Layer 2 / JIRA-250 Layer 3) ──────────
+
+/**
+ * Validate a candidate's stop sequence against the action grammar rules.
+ *
+ * Each `deliver(L)` stop MUST be preceded by either:
+ *   a) a `pickup(L)` earlier in the same candidate, OR
+ *   b) L present in `carriedAtStart` (bot already carries it at trip start).
+ *
+ * Multiplicity is enforced: each `deliver(L)` consumes one unit from the
+ * running pool (carriedAtStart + pickupsSoFar), so two `deliver(Fish)` stops
+ * require either two Fish in the pool or one carried + one picked up.
+ *
+ * Returns `{ ok: true }` when the candidate is valid.
+ * Returns `{ ok: false, ... }` with structured rejection details when invalid.
+ */
+export function isCandidateGrammaticallyValid(
+  candidate: Candidate,
+  carriedAtStart: string[],
+): { ok: true } | { ok: false; rejection: CandidateRejection } {
+  // Build a mutable count map from carriedAtStart (supports duplicates).
+  const available = new Map<string, number>();
+  for (const load of carriedAtStart) {
+    available.set(load, (available.get(load) ?? 0) + 1);
+  }
+
+  const pickupsBeforeOffender: string[] = [];
+
+  for (let i = 0; i < candidate.stops.length; i++) {
+    const stop = candidate.stops[i];
+    if (stop.action === 'pickup') {
+      // Pickups add to the available pool.
+      available.set(stop.loadType, (available.get(stop.loadType) ?? 0) + 1);
+      pickupsBeforeOffender.push(stop.loadType);
+    } else if (stop.action === 'deliver') {
+      const count = available.get(stop.loadType) ?? 0;
+      if (count <= 0) {
+        // No unit available: either never picked up and not carried, or already consumed.
+        const hadInitialCarry = carriedAtStart.includes(stop.loadType);
+        const hadPickup = candidate.stops.slice(0, i).some(
+          s => s.action === 'pickup' && s.loadType === stop.loadType,
+        );
+        const reason: CandidateRejectionReason = hadInitialCarry || hadPickup
+          ? 'deliver_exceeds_carried'
+          : 'deliver_without_pickup';
+        return {
+          ok: false,
+          rejection: {
+            candidateId: candidate.id,
+            reason,
+            offendingStopIndex: i,
+            loadType: stop.loadType,
+            context: {
+              carriedAtStart: [...carriedAtStart],
+              pickupsBeforeOffender: [...pickupsBeforeOffender],
+            },
+          },
+        };
+      }
+      // Consume one unit.
+      available.set(stop.loadType, count - 1);
+    }
+  }
+
+  return { ok: true };
+}
+
+// ── Carried delivery floor (JIRA-248 Layer 1) ─────────────────────────
+
+/**
+ * Generate a base candidate that delivers ALL currently-carried loads that have
+ * a reachable delivery demand. This is the "floor" of the candidate space —
+ * the bot should always be able to deliver what it's already carrying.
+ *
+ * Returns null when no carried demands are deliverable.
+ */
+export function enumerateCarriedDeliveryFloor(
+  rows: NormalizedDemandRow[],
+): Candidate | null {
+  const carryRows = rows.filter(r => r.isCarry);
+  if (carryRows.length === 0) return null;
+
+  const stops: RouteStop[] = carryRows.map(r => ({
+    action: 'deliver',
+    loadType: r.loadType,
+    city: r.deliveryCity,
+    demandCardId: r.cardIndex,
+    payment: r.payout,
+  }));
+
+  const payout = carryRows.reduce((sum, r) => sum + r.payout, 0);
+  const idParts = carryRows.map(r => `${r.cardIndex}:${r.loadType}`).join('+');
+
+  return {
+    id: `carry-floor:${idParts}`,
+    rows: carryRows,
+    stops,
+    payout,
+  };
+}
+
+// ── Same-supply corridor enumeration (JIRA-250 Layer 2) ───────────────
+
+/**
+ * Generate corridor candidates for groups of demands where:
+ *   - Same `loadType` AND same `supplyCity`
+ *   - Group size ≥ 2
+ *   - `supplyCity !== null` (not a carry — fresh pickup)
+ *   - Picking up (groupSize) units fits within available capacity
+ *
+ * Emits one candidate per group: `[pickup(L@supply), ..., deliver(L@city1), deliver(L@city2), ...]`
+ * The number of pickup stops equals the number of demands in the group (one per unit).
+ * Delivery order is the same as demand array order (network-distance ordering is
+ * applied by the downstream spatial prune / simulator).
+ *
+ * Note: Currently handles exactly 2-demand groups (the observed JIRA-250 case).
+ * N-way (3+) corridor optimization is deferred per the spec ("Not in scope").
+ */
+export function enumerateSameSupplyCorridorCandidates(
+  rows: NormalizedDemandRow[],
+  cap: number,
+  carriedCount: Map<string, number>,
+): Candidate[] {
+  // Group non-carry rows by (loadType, supplyCity).
+  const groups = new Map<string, NormalizedDemandRow[]>();
+  for (const row of rows) {
+    if (row.isCarry || row.supplyCity === null) continue;
+    const key = `${row.loadType}|${row.supplyCity}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(row);
+  }
+
+  const candidates: Candidate[] = [];
+
+  for (const [key, groupRows] of groups) {
+    if (groupRows.length < 2) continue;
+
+    const { loadType, supplyCity } = groupRows[0];
+    if (supplyCity === null) continue;
+
+    // Check capacity: carried of this type + groupSize must not exceed cap.
+    const alreadyCarried = carriedCount.get(loadType) ?? 0;
+    if (alreadyCarried + groupRows.length > cap) continue;
+
+    // Only handle pairs for now (N-way deferred).
+    const pairs = groupRows.slice(0, 2);
+    const [a, b] = pairs;
+
+    // Stops: one pickup per unit, then deliver in demand order.
+    const pickupStop: RouteStop = { action: 'pickup', loadType, city: supplyCity };
+    const deliverA: RouteStop = {
+      action: 'deliver', loadType, city: a.deliveryCity,
+      demandCardId: a.cardIndex, payment: a.payout,
+    };
+    const deliverB: RouteStop = {
+      action: 'deliver', loadType, city: b.deliveryCity,
+      demandCardId: b.cardIndex, payment: b.payout,
+    };
+
+    // Two pickup stops (one per load unit) + two deliver stops.
+    const stopsAB: RouteStop[] = [pickupStop, pickupStop, deliverA, deliverB];
+    const stopsBA: RouteStop[] = [pickupStop, pickupStop, deliverB, deliverA];
+    const supSuffix = `-sup:${supplyCity}`;
+
+    candidates.push({
+      id: `corridor:${a.cardIndex}-${loadType}+${b.cardIndex}-${loadType}:AB${supSuffix}`,
+      rows: pairs,
+      stops: stopsAB,
+      payout: a.payout + b.payout,
+    });
+    candidates.push({
+      id: `corridor:${a.cardIndex}-${loadType}+${b.cardIndex}-${loadType}:BA${supSuffix}`,
+      rows: pairs,
+      stops: stopsBA,
+      payout: a.payout + b.payout,
+    });
+  }
+
+  return candidates;
+}
+
 /**
  * Enumerate all single, pair, and triple demand-fulfillment candidates.
  * JIRA-230 BE-002: supply-aware — one candidate per (route shape × supply choice).
@@ -690,11 +916,32 @@ export function enumerateCandidates(
 ): Candidate[] {
   const snap = snapshot ?? EMPTY_SNAPSHOT;
   const spd = speed ?? 9;
-  return [
+
+  const base = [
     ...genSingles(rows, snap, spd),
     ...genPairs(rows, cap, snap, spd),
     ...genTriples(rows, cap, snap, spd),
   ];
+
+  // JIRA-248 Layer 1: Ensure the "carried delivery floor" candidate is always
+  // present so the planner cannot drop a carried-load delivery.
+  const floor = enumerateCarriedDeliveryFloor(rows);
+  if (floor !== null) {
+    base.push(floor);
+  }
+
+  // JIRA-250 Layer 2: Emit corridor candidates for same-supply, same-load
+  // demand groups (two pickups at same city for different deliveries).
+  const carriedCount = new Map<string, number>();
+  for (const row of rows) {
+    if (row.isCarry) {
+      carriedCount.set(row.loadType, (carriedCount.get(row.loadType) ?? 0) + 1);
+    }
+  }
+  const corridorCandidates = enumerateSameSupplyCorridorCandidates(rows, cap, carriedCount);
+  base.push(...corridorCandidates);
+
+  return base;
 }
 
 // ── Spatial prune (R5) ─────────────────────────────────────────────────
@@ -703,6 +950,11 @@ export function enumerateCandidates(
  * Graph-aware spatial prune: compute turn + build estimates using PathCostEstimator.
  * Returns keep=false if either threshold is exceeded or any leg is unreachable.
  * JIRA-230 BE-003: replaced hex-distance sum with iterated estimateGraphPathCost calls.
+ *
+ * JIRA-255 Layer B: When memory.endGameLocked is true, candidates that exceed
+ * pruneMaxTurns are NOT discarded if they are win-completing and their estimated
+ * turns are within WIN_COMPLETING_MAX_TURNS. This allows the bot to consider
+ * longer routes when a single delivery would lock in a win.
  */
 export function cheapPrune(
   candidate: Candidate,
@@ -710,6 +962,8 @@ export function cheapPrune(
   speed: number,
   opts: ResolvedOptions,
   snapshot: WorldSnapshot,
+  memory?: Pick<BotMemoryState, 'endGameLocked'>,
+  context?: Pick<GameContext, 'unconnectedMajorCities' | 'connectedMajorCities'>,
 ): { keep: boolean; estTurns: number; estBuild: number } {
   let totalBuild = 0;
   let totalTurns = 0;
@@ -734,8 +988,27 @@ export function cheapPrune(
   }
   const estTurns = Math.max(1, totalTurns);
   const estBuild = totalBuild;
-  const keep = estTurns <= opts.pruneMaxTurns && estBuild <= opts.pruneMaxBuildM;
-  return { keep, estTurns, estBuild };
+
+  // Standard gate: drop anything exceeding turn or build threshold.
+  if (estTurns <= opts.pruneMaxTurns && estBuild <= opts.pruneMaxBuildM) {
+    return { keep: true, estTurns, estBuild };
+  }
+
+  // JIRA-255 Layer B: end-game carve-out for win-completing candidates.
+  // Only active when endGameLocked=true and the turn count is under the hard ceiling.
+  if (
+    memory?.endGameLocked &&
+    estTurns <= WIN_COMPLETING_MAX_TURNS
+  ) {
+    const unconnectedMajors = context?.unconnectedMajorCities ?? [];
+    const cmcCount = context?.connectedMajorCities?.length ?? 0;
+    const candidateNet = candidate.payout - estBuild;
+    if (isWinCompleting(snapshot.bot.money, candidateNet, unconnectedMajors, cmcCount)) {
+      return { keep: true, estTurns, estBuild };
+    }
+  }
+
+  return { keep: false, estTurns, estBuild };
 }
 
 // ── Simulation scoring (R6, R7) ────────────────────────────────────────
@@ -1133,6 +1406,13 @@ function synthesizeReasoning(
   opts: ResolvedOptions,
   supplyDiffLines?: string[],
   enumerationMs?: number,
+  endGameContext?: {
+    endGameLocked: boolean;
+    fullWinCostM: number;
+    isTop1WinCompleting: boolean;
+    projectedCash: number;
+    winCompleterCount: number;
+  },
 ): string {
   const pattern = inferPatternLabel(top1);
   const stopsStr = top1.stops
@@ -1158,6 +1438,15 @@ function synthesizeReasoning(
   }
   reasoning += `  Stops: ${stopsStr}\n`;
   reasoning += `  Rationale: ${patternExplanation}\n`;
+
+  // JIRA-255 Layer D: end-game annotation — only emit when active to avoid log noise.
+  if (endGameContext?.endGameLocked) {
+    if (endGameContext.isTop1WinCompleting) {
+      reasoning += `  End-game: win-completer (projected $${endGameContext.projectedCash.toFixed(0)}M cash, full win cost $${endGameContext.fullWinCostM.toFixed(0)}M); ranked by fewest turns.\n`;
+    } else {
+      reasoning += `  End-game: locked (full win cost $${endGameContext.fullWinCostM.toFixed(0)}M); no win-completers in set (${endGameContext.winCompleterCount}); velocity ranking applied.\n`;
+    }
+  }
 
   // JIRA-230 BE-003: chosen-supply surface lines
   if (supplyDiffLines && supplyDiffLines.length > 0) {
@@ -1360,7 +1649,28 @@ export function planTripDeterministic(
     pruneMaxTurns: options?.pruneMaxTurns ?? PRUNE_MAX_TURNS,
     pruneMaxBuildM: dynamicBuildCap,
     hopAvgCostM: options?.hopAvgCostM ?? HOP_AVG_COST_M,
+    excludeRouteSignatures: new Set(options?.excludeRouteSignatures ?? []),
   };
+
+  // JIRA-255 Layer A: End-game lock hook.
+  // Once set, endGameLocked is sticky (one-way) — it never reverts even after
+  // temporary cash dips from track building. Whichever condition fires first
+  // sets the lock for the remainder of the game.
+  if (!memory.endGameLocked) {
+    const cmcCount = context.connectedMajorCities?.length ?? 0;
+    const phase = classifyGamePhase(
+      snapshot.turnNumber,
+      memory.deliveryCount,
+      cmcCount,
+    );
+    if (snapshot.bot.money > 200 || phase === 'late') {
+      memory.endGameLocked = true;
+      // Persist asynchronously — in-memory mutation is authoritative for this turn.
+      updateMemory(snapshot.gameId, snapshot.bot.playerId, { endGameLocked: true }).catch(
+        (err: unknown) => console.warn('[planTripDeterministic] Failed to persist endGameLocked:', err),
+      );
+    }
+  }
 
   // Empty hand check (R8)
   if (!context.demands || context.demands.length === 0) {
@@ -1406,7 +1716,7 @@ export function planTripDeterministic(
   const survivors: Candidate[] = [];
 
   for (const cand of allCandidates) {
-    const { keep, estTurns, estBuild } = cheapPrune(cand, startPos, speed, opts, snapshot);
+    const { keep, estTurns, estBuild } = cheapPrune(cand, startPos, speed, opts, snapshot, memory, context);
     if (keep) {
       survivors.push(cand);
     } else {
@@ -1453,9 +1763,41 @@ export function planTripDeterministic(
     };
   }
 
-  // Simulate survivors (R6)
+  // Simulate survivors (R6), with grammar validation gate (JIRA-249 L2 / JIRA-250 L3)
+  // Build carriedAtStart from the authoritative `carried` map (which merges all
+  // carry-detection signals) rather than raw snapshot.bot.loads — the latter may
+  // be missing isLoadOnTrain-flagged loads in legacy/test contexts.
+  const carriedAtStart: string[] = [];
+  for (const [loadType, count] of carried) {
+    for (let i = 0; i < count; i++) carriedAtStart.push(loadType);
+  }
+  const candidateRejections: CandidateRejection[] = [];
   const feasible: ScoredCandidate[] = [];
   for (const cand of survivors) {
+    // JIRA-253 Layer B: exclude candidates whose signature matches the caller's exclusion set.
+    if (opts.excludeRouteSignatures && opts.excludeRouteSignatures.size > 0 && opts.excludeRouteSignatures.has(cand.id)) {
+      candidateRejections.push({
+        candidateId: cand.id,
+        reason: 'excluded_by_caller',
+        offendingStopIndex: -1,
+        loadType: '',
+        context: { carriedAtStart, pickupsBeforeOffender: [] },
+      });
+      console.warn(
+        `[DeterministicTripPlanner] Excluded by caller — skipping candidate id=${cand.id}`,
+      );
+      continue;
+    }
+    const grammarCheck = isCandidateGrammaticallyValid(cand, carriedAtStart);
+    if (!grammarCheck.ok) {
+      // Log structured rejection to candidateRejections for diagnostics.
+      candidateRejections.push(grammarCheck.rejection);
+      console.warn(
+        `[DeterministicTripPlanner] Grammar violation — rejecting candidate id=${cand.id} ` +
+        `reason=${grammarCheck.rejection.reason} load=${grammarCheck.rejection.loadType}`,
+      );
+      continue;
+    }
     const scored = scoreCandidate(cand, startPos, snapshot, opts, undefined, memory);
     if (scored.feasible) feasible.push(scored);
   }
@@ -1472,6 +1814,7 @@ export function planTripDeterministic(
       reasoning,
       outcome: 'no_feasible_candidates',
       synthesizedAttempt: synthesizeLlmAttempt(null, latencyMs),
+      candidateRejections: candidateRejections.length > 0 ? candidateRejections : undefined,
     };
   }
 
@@ -1510,12 +1853,46 @@ export function planTripDeterministic(
     }
   }
 
-  // Sort by aggregate score (rank key per JIRA-229) and pick top-1
-  const sorted = [...feasible].sort((a, b) => {
-    if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
-    if (b.net !== a.net) return b.net - a.net;
-    return a.id.localeCompare(b.id);
-  });
+  // JIRA-255 Layer C: end-game two-tier ranking override.
+  // When endGameLocked=true, sort win-completing candidates first (by fewest turns),
+  // then non-completers (by velocity). If no completers exist, fall back to the
+  // standard aggregateScore ranking for all candidates.
+  let sorted: ScoredCandidate[];
+  if (memory.endGameLocked) {
+    const unconnectedMajors = context.unconnectedMajorCities ?? [];
+    const cmcCount = context.connectedMajorCities?.length ?? 0;
+    const completers = feasible.filter(
+      (c) => isWinCompleting(snapshot.bot.money, c.net, unconnectedMajors, cmcCount),
+    );
+    const nonCompleters = feasible.filter(
+      (c) => !isWinCompleting(snapshot.bot.money, c.net, unconnectedMajors, cmcCount),
+    );
+    if (completers.length > 0) {
+      // Among win-completers: fewest turns first (game-winning objective).
+      completers.sort((a, b) => a.turns !== b.turns ? a.turns - b.turns : a.id.localeCompare(b.id));
+      // Non-completers follow, ranked by velocity (existing rule).
+      nonCompleters.sort((a, b) => {
+        if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
+        if (b.net !== a.net) return b.net - a.net;
+        return a.id.localeCompare(b.id);
+      });
+      sorted = [...completers, ...nonCompleters];
+    } else {
+      // No win-completers in this candidate set — fall back to velocity ranking.
+      sorted = [...feasible].sort((a, b) => {
+        if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
+        if (b.net !== a.net) return b.net - a.net;
+        return a.id.localeCompare(b.id);
+      });
+    }
+  } else {
+    // Standard sort by aggregate score (rank key per JIRA-229)
+    sorted = [...feasible].sort((a, b) => {
+      if (b.aggregateScore !== a.aggregateScore) return b.aggregateScore - a.aggregateScore;
+      if (b.net !== a.net) return b.net - a.net;
+      return a.id.localeCompare(b.id);
+    });
+  }
   const top1 = pickTop1(sorted)!;
 
   // JIRA-232 Defect B: emit predicted build cost for post-game diff against actual.
@@ -1553,13 +1930,33 @@ export function planTripDeterministic(
     }
   }
 
+  // JIRA-255 Layer D: compute end-game context for diagnostic emit.
+  // Only when endGameLocked to avoid computing fullWinCost on every non-end-game turn.
+  let endGameContext: Parameters<typeof synthesizeReasoning>[6] | undefined;
+  if (memory.endGameLocked) {
+    const egUnconnected = context.unconnectedMajorCities ?? [];
+    const egCmcCount = context.connectedMajorCities?.length ?? 0;
+    const egFullWinCostM = fullWinCost(egUnconnected, egCmcCount);
+    const egWinCompleterCount = feasible.filter(
+      (c) => isWinCompleting(snapshot.bot.money, c.net, egUnconnected, egCmcCount),
+    ).length;
+    const egIsTop1Completing = isWinCompleting(snapshot.bot.money, top1.net, egUnconnected, egCmcCount);
+    endGameContext = {
+      endGameLocked: true,
+      fullWinCostM: egFullWinCostM,
+      isTop1WinCompleting: egIsTop1Completing,
+      projectedCash: snapshot.bot.money + top1.net,
+      winCompleterCount: egWinCompleterCount,
+    };
+  }
+
   const latencyMs = Date.now() - startMs;
   const upgradeNote = upgradeOnRoute
     ? `\n  Upgrade emitted: ${upgradeOnRoute} (cost ${UPGRADE_COST_M}M, cash ${snapshot.bot.money}M, build ${top1.buildCost}M).`
     : upgradeDecision.gateReason
       ? `\n  Upgrade skipped: ${upgradeDecision.gateReason}.`
       : '';
-  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, supplyDiffLines, enumerationMs) + upgradeNote;
+  const reasoning = synthesizeReasoning(top1, sorted, stats, opts, supplyDiffLines, enumerationMs, endGameContext) + upgradeNote;
   const route = buildStrategicRoute(top1, snapshot.turnNumber, reasoning, upgradeOnRoute);
 
   return {
@@ -1567,5 +1964,6 @@ export function planTripDeterministic(
     reasoning,
     outcome: 'success',
     synthesizedAttempt: synthesizeLlmAttempt(top1, latencyMs),
+    candidateRejections: candidateRejections.length > 0 ? candidateRejections : undefined,
   };
 }

@@ -236,4 +236,83 @@ describe('BotMemory', () => {
       await expect(clearMemory(gameId, playerId)).resolves.toBeUndefined();
     });
   });
+
+  describe('recentlyAbandonedRouteKeys TTL eviction (JIRA-253)', () => {
+    it('preserves entries abandoned ≤3 turns ago', async () => {
+      mockDbQuery.mockResolvedValue({ rows: [] });
+      // Set up memory at turn 10 with an entry abandoned at turn 8 (2 turns ago)
+      await updateMemory(gameId, playerId, {
+        turnNumber: 10,
+        recentlyAbandonedRouteKeys: [{ key: 'pair:Coal-Iron', abandonedAtTurn: 8 }],
+      });
+
+      const state = await getMemory(gameId, playerId);
+      expect(state.recentlyAbandonedRouteKeys).toHaveLength(1);
+      expect(state.recentlyAbandonedRouteKeys![0].key).toBe('pair:Coal-Iron');
+    });
+
+    it('evicts entries abandoned >3 turns ago', async () => {
+      mockDbQuery.mockResolvedValue({ rows: [] });
+      // Set up memory at turn 10 with an entry abandoned at turn 6 (4 turns ago — expired)
+      await updateMemory(gameId, playerId, {
+        turnNumber: 10,
+        recentlyAbandonedRouteKeys: [{ key: 'pair:Coal-Iron', abandonedAtTurn: 6 }],
+      });
+
+      const state = await getMemory(gameId, playerId);
+      expect(state.recentlyAbandonedRouteKeys).toHaveLength(0);
+    });
+
+    it('evicts only stale entries, preserving fresh ones', async () => {
+      mockDbQuery.mockResolvedValue({ rows: [] });
+      // At turn 10: entry from turn 6 (4 turns ago — stale) and turn 9 (1 turn ago — fresh)
+      await updateMemory(gameId, playerId, {
+        turnNumber: 10,
+        recentlyAbandonedRouteKeys: [
+          { key: 'stale:route', abandonedAtTurn: 6 },
+          { key: 'fresh:route', abandonedAtTurn: 9 },
+        ],
+      });
+
+      const state = await getMemory(gameId, playerId);
+      expect(state.recentlyAbandonedRouteKeys).toHaveLength(1);
+      expect(state.recentlyAbandonedRouteKeys![0].key).toBe('fresh:route');
+    });
+
+    it('handles empty recentlyAbandonedRouteKeys gracefully', async () => {
+      mockDbQuery.mockResolvedValue({ rows: [] });
+      await updateMemory(gameId, playerId, {
+        turnNumber: 5,
+        recentlyAbandonedRouteKeys: [],
+      });
+
+      const state = await getMemory(gameId, playerId);
+      expect(state.recentlyAbandonedRouteKeys).toHaveLength(0);
+    });
+
+    it('handles missing recentlyAbandonedRouteKeys gracefully (undefined)', async () => {
+      mockDbQuery.mockResolvedValue({ rows: [] });
+      await updateMemory(gameId, playerId, { turnNumber: 5 });
+
+      const state = await getMemory(gameId, playerId);
+      // Field is optional — may be undefined or empty array after eviction
+      expect(
+        state.recentlyAbandonedRouteKeys === undefined ||
+        state.recentlyAbandonedRouteKeys?.length === 0
+      ).toBe(true);
+    });
+
+    it('keeps entries abandoned exactly 3 turns ago (boundary: ≤3)', async () => {
+      mockDbQuery.mockResolvedValue({ rows: [] });
+      // At turn 10: entry from turn 7 (exactly 3 turns ago — should be preserved)
+      await updateMemory(gameId, playerId, {
+        turnNumber: 10,
+        recentlyAbandonedRouteKeys: [{ key: 'boundary:route', abandonedAtTurn: 7 }],
+      });
+
+      const state = await getMemory(gameId, playerId);
+      expect(state.recentlyAbandonedRouteKeys).toHaveLength(1);
+      expect(state.recentlyAbandonedRouteKeys![0].key).toBe('boundary:route');
+    });
+  });
 });

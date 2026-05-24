@@ -16,9 +16,11 @@ import {
   GameContext,
   WorldSnapshot,
   VICTORY_CITY_COUNT,
+  TrackSegment,
 } from '../../../shared/types/GameTypes';
-import { loadGridPoints, hexDistance } from '../MapTopology';
+import { loadGridPoints, hexDistance, GridCoord } from '../MapTopology';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
+import { computeBuildSegments } from './computeBuildSegments';
 
 /**
  * Cash threshold (ECU M) at which the planner shifts to victory-build mode,
@@ -33,6 +35,62 @@ import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
  * 1-2 deliveries during the city-build sprint.
  */
 const VICTORY_BUILD_TRIGGER_M = 230;
+
+/**
+ * Large build budget used by isStructurallyReachable to simulate an effectively
+ * infinite budget. A hex-grid EuroRails board has at most ~2000 nodes; the most
+ * expensive cross-continent route is well under 200M ECU. Using 999_999_999
+ * ensures computeBuildSegments never truncates for cost reasons.
+ */
+const STRUCTURAL_REACHABILITY_BUDGET = 999_999_999;
+
+/**
+ * Determines whether a target coordinate is structurally reachable from the
+ * bot's existing track network by re-running computeBuildSegments with an
+ * effectively infinite budget.
+ *
+ * This distinguishes two cases that look identical from the outside:
+ * - **Budget-limited partial**: computeBuildSegments reached its cost cap before
+ *   arriving at the target. The target IS reachable given more turns.
+ * - **Structurally blocked**: There is no path to the target regardless of budget
+ *   (e.g. saturated city blocks all routes, water with no ferry crossing, full
+ *   Right-of-Way occupation by opponents).
+ *
+ * Returns `true` when the unbounded build path reaches the target.
+ * Returns `false` when the unbounded path is also partial (pathological block).
+ *
+ * Fail-safe: returns `false` for missing/empty inputs (never throws).
+ *
+ * @param buildOrigin  - Starting grid coordinate (typically a bot network frontier node).
+ * @param target       - The grid coordinate the bot is trying to reach.
+ * @param existingSegments - The bot's current track network segments.
+ * @param occupiedEdges    - Edge keys for other players' track (Right-of-Way blocked).
+ * @returns true if the target is structurally reachable; false if genuinely blocked.
+ */
+export function isStructurallyReachable(
+  buildOrigin: GridCoord,
+  target: GridCoord,
+  existingSegments: TrackSegment[],
+  occupiedEdges: Set<string>,
+): boolean {
+  // Fail-safe guards
+  if (!buildOrigin || !target) return false;
+  if (!existingSegments) return false;
+
+  const unboundedResult = computeBuildSegments(
+    [buildOrigin],
+    existingSegments,
+    STRUCTURAL_REACHABILITY_BUDGET,
+    undefined,
+    occupiedEdges,
+    [target],
+  );
+
+  if (unboundedResult.length === 0) return false;
+
+  const lastSeg = unboundedResult[unboundedResult.length - 1];
+  return lastSeg.to.row === target.row && lastSeg.to.col === target.col;
+}
 
 // ── resolveBuildTarget ─────────────────────────────────────────────────────
 
