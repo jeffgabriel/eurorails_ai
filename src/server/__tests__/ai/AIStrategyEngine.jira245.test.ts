@@ -530,3 +530,187 @@ describe('JIRA-245 AIStrategyEngine integration — findFinalVictoryRoute wiring
     expect(routePassedToContinuer).toBe(existingRoute);
   });
 });
+
+// ── JIRA-261: idempotency check now compares full remaining-stops sequence ────
+
+describe('JIRA-261 — findFinalVictoryRoute override idempotency uses full-sequence match', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    MOCK_ACTIVE_ROUTE_STATE.current = null;
+  });
+
+  it('AC1 — divergent routes (matching first stop, divergent later stops) → override fires', async () => {
+    // Game 8350cffa s3 T68 scenario: 4-stop deterministic route vs 6-stop victory
+    // route sharing first stop. Pre-fix the override was suppressed by the
+    // first-stop-only check; post-fix it must fire because the rest diverges.
+    const existingDeterministic = {
+      stops: [
+        { action: 'pickup' as const, loadType: 'Ham', city: 'Warszawa' },
+        { action: 'deliver' as const, loadType: 'Ham', city: 'Glasgow' },
+        { action: 'pickup' as const, loadType: 'Oil', city: 'Beograd' },
+        { action: 'deliver' as const, loadType: 'Oil', city: 'Hamburg' },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel',
+      createdAtTurn: 67,
+      reasoning: '[deterministic-top-1] Ham + Oil chain',
+    };
+    MOCK_ACTIVE_ROUTE_STATE.current = existingDeterministic;
+    const { getMemory } = require('../../services/ai/BotMemory');
+    (getMemory as jest.MockedFunction<any>).mockResolvedValueOnce({
+      turnNumber: 68, consecutiveDiscards: 0, lastAction: null,
+      activeRoute: existingDeterministic, turnsOnRoute: 1, routeHistory: [],
+      gameState: 'End', deliveryCount: 6, totalEarnings: 223, consecutiveLlmFailures: 0,
+    });
+
+    const victoryRoute: FinalVictoryRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Ham', city: 'Warszawa' },       // ← first stop matches
+        { action: 'deliver', loadType: 'Ham', city: 'Glasgow' },
+        { action: 'pickup', loadType: 'Oranges', city: 'Sevilla' },    // ← diverges here
+        { action: 'deliver', loadType: 'Oranges', city: 'London', demandCardId: 3, payment: 34 },
+        { action: 'pickup', loadType: 'Oil', city: 'Beograd' },
+        { action: 'deliver', loadType: 'Oil', city: 'Hamburg', demandCardId: 18, payment: 22 },
+      ],
+      estimatedTurns: 13, buildCost: 66, totalPayout: 99,
+      cashAtVictory: 256, majorsAtVictory: 7, majorConnectors: ['London', 'Paris', 'Hamburg', 'Madrid'],
+      reasoning: '[final-victory] Ham→Glasgow, Oranges→London, Oil→Hamburg',
+    };
+    mockFindFinalVictoryRoute.mockReturnValue(victoryRoute);
+
+    await AIStrategyEngine.takeTurn('game-jira261', 'bot-1');
+
+    const { ActiveRouteContinuer } = require('../../services/ai/ActiveRouteContinuer');
+    expect(ActiveRouteContinuer.run).toHaveBeenCalledTimes(1);
+
+    // Critical assertion: ActiveRouteContinuer received the VICTORY route (6 stops),
+    // not the existing deterministic route (4 stops).
+    const routePassedToContinuer = (ActiveRouteContinuer.run as jest.MockedFunction<any>).mock.calls[0][0];
+    expect(routePassedToContinuer.stops).toHaveLength(6);
+    expect(routePassedToContinuer.stops[2]).toMatchObject({
+      action: 'pickup', loadType: 'Oranges', city: 'Sevilla',
+    });
+    expect(routePassedToContinuer.stops[3]).toMatchObject({
+      action: 'deliver', loadType: 'Oranges', city: 'London',
+    });
+    expect(routePassedToContinuer.reasoning).toContain('[final-victory]');
+  });
+
+  it('AC2 — identical plans (existing == proposed) → override SUPPRESSED (no churn)', async () => {
+    const stops = [
+      { action: 'pickup' as const, loadType: 'Beer', city: 'Frankfurt' },
+      { action: 'deliver' as const, loadType: 'Beer', city: 'Bruxelles', demandCardId: 1, payment: 10 },
+    ];
+    const existing = {
+      stops,
+      currentStopIndex: 0,
+      phase: 'travel',
+      createdAtTurn: 49,
+      reasoning: '[final-victory] existing',
+    };
+    MOCK_ACTIVE_ROUTE_STATE.current = existing;
+    const { getMemory } = require('../../services/ai/BotMemory');
+    (getMemory as jest.MockedFunction<any>).mockResolvedValueOnce({
+      turnNumber: 50, consecutiveDiscards: 0, lastAction: null,
+      activeRoute: existing, turnsOnRoute: 1, routeHistory: [],
+      gameState: 'End', deliveryCount: 10, totalEarnings: 200, consecutiveLlmFailures: 0,
+    });
+
+    const proposed: FinalVictoryRoute = {
+      stops, // same reference, but the check uses structural equality
+      estimatedTurns: 2, buildCost: 0, totalPayout: 10,
+      cashAtVictory: 251, majorsAtVictory: 7, majorConnectors: [],
+      reasoning: '[final-victory] proposed (identical plan, fresh reasoning)',
+    };
+    mockFindFinalVictoryRoute.mockReturnValue(proposed);
+
+    await AIStrategyEngine.takeTurn('game-jira261', 'bot-1');
+
+    const { ActiveRouteContinuer } = require('../../services/ai/ActiveRouteContinuer');
+    const routePassedToContinuer = (ActiveRouteContinuer.run as jest.MockedFunction<any>).mock.calls[0][0];
+    // Existing route preserved (same reference) — no override.
+    expect(routePassedToContinuer).toBe(existing);
+  });
+
+  it('AC3 — currentStopIndex > 0 with remaining-slice equal to proposed → SUPPRESS', async () => {
+    // Bot has completed 2 of 4 stops. Remaining slice is `[pickup B, deliver B]`.
+    // Proposed victory route is `[pickup B, deliver B]`. Same plan from current
+    // position → suppress (no churn).
+    const existing = {
+      stops: [
+        { action: 'pickup' as const, loadType: 'A', city: 'X' }, // completed
+        { action: 'deliver' as const, loadType: 'A', city: 'Y' }, // completed
+        { action: 'pickup' as const, loadType: 'B', city: 'Z' },
+        { action: 'deliver' as const, loadType: 'B', city: 'W' },
+      ],
+      currentStopIndex: 2,
+      phase: 'travel',
+      createdAtTurn: 60,
+      reasoning: 'mid-route',
+    };
+    MOCK_ACTIVE_ROUTE_STATE.current = existing;
+    const { getMemory } = require('../../services/ai/BotMemory');
+    (getMemory as jest.MockedFunction<any>).mockResolvedValueOnce({
+      turnNumber: 65, consecutiveDiscards: 0, lastAction: null,
+      activeRoute: existing, turnsOnRoute: 5, routeHistory: [],
+      gameState: 'End', deliveryCount: 8, totalEarnings: 250, consecutiveLlmFailures: 0,
+    });
+
+    const proposed: FinalVictoryRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'B', city: 'Z' },
+        { action: 'deliver', loadType: 'B', city: 'W' },
+      ],
+      estimatedTurns: 3, buildCost: 5, totalPayout: 30,
+      cashAtVictory: 275, majorsAtVictory: 7, majorConnectors: [],
+      reasoning: '[final-victory] B-only',
+    };
+    mockFindFinalVictoryRoute.mockReturnValue(proposed);
+
+    await AIStrategyEngine.takeTurn('game-jira261', 'bot-1');
+
+    const { ActiveRouteContinuer } = require('../../services/ai/ActiveRouteContinuer');
+    const routePassedToContinuer = (ActiveRouteContinuer.run as jest.MockedFunction<any>).mock.calls[0][0];
+    expect(routePassedToContinuer).toBe(existing);
+  });
+
+  it('AC5 — same load type, different delivery city → override fires', async () => {
+    // First stop matches on (action, loadType) but city differs → still must override.
+    const existing = {
+      stops: [
+        { action: 'pickup' as const, loadType: 'Beer', city: 'Frankfurt' },
+        { action: 'deliver' as const, loadType: 'Beer', city: 'Bruxelles' },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel',
+      createdAtTurn: 49,
+      reasoning: 'existing',
+    };
+    MOCK_ACTIVE_ROUTE_STATE.current = existing;
+    const { getMemory } = require('../../services/ai/BotMemory');
+    (getMemory as jest.MockedFunction<any>).mockResolvedValueOnce({
+      turnNumber: 50, consecutiveDiscards: 0, lastAction: null,
+      activeRoute: existing, turnsOnRoute: 1, routeHistory: [],
+      gameState: 'End', deliveryCount: 10, totalEarnings: 200, consecutiveLlmFailures: 0,
+    });
+
+    const proposed: FinalVictoryRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Beer', city: 'Frankfurt' },     // same
+        { action: 'deliver', loadType: 'Beer', city: 'London' },       // ← different city
+      ],
+      estimatedTurns: 3, buildCost: 0, totalPayout: 10,
+      cashAtVictory: 260, majorsAtVictory: 7, majorConnectors: ['London'],
+      reasoning: '[final-victory] Beer→London (re-routed)',
+    };
+    mockFindFinalVictoryRoute.mockReturnValue(proposed);
+
+    await AIStrategyEngine.takeTurn('game-jira261', 'bot-1');
+
+    const { ActiveRouteContinuer } = require('../../services/ai/ActiveRouteContinuer');
+    const routePassedToContinuer = (ActiveRouteContinuer.run as jest.MockedFunction<any>).mock.calls[0][0];
+    expect(routePassedToContinuer.stops[1]).toMatchObject({
+      action: 'deliver', loadType: 'Beer', city: 'London',
+    });
+  });
+});
