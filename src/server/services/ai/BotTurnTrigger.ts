@@ -353,6 +353,9 @@ export async function onTurnChange(
         victoryCheck: victoryCheckResult,
         // Event card restriction rejection reason (if applicable)
         rejectionReason: result.rejectionReason,
+        // JIRA-262: per-turn event-card observability for post-hoc analysis
+        activeEffects: result.activeEffects,
+        pendingFloodRebuilds: result.pendingFloodRebuilds,
       });
     } catch (logError) {
       console.error(`[BotTurnTrigger] NDJSON log failed for game ${gameId}:`, logError instanceof Error ? logError.message : logError);

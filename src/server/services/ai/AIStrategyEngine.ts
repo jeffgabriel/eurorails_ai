@@ -177,6 +177,20 @@ export interface BotTurnResult {
   initialBuildPairings?: InitialBuildPlan['evaluatedPairings'];
   /** Populated when a PlayerService action was rejected by an event card restriction */
   rejectionReason?: { code: string; message: string };
+  /**
+   * JIRA-262: Per-turn snapshot of active event cards (Strike / Snow / Flood /
+   * Derailment with their restriction zones, pendingLostTurns, expiry turns).
+   * Empty array means no event cards active. Mirrors snapshot.activeEffects at
+   * the moment of turn execution; downstream consumers (NDJSON log, analytics)
+   * use this to correlate bot decisions with which events were in force.
+   */
+  activeEffects?: import('../../../shared/types/EventCard').ActiveEffect[];
+  /**
+   * JIRA-262: Per-turn snapshot of the bot's pending Flood-rebuild segments
+   * (track erased by an active Flood event that the bot has not yet rebuilt).
+   * Empty when no pending rebuilds.
+   */
+  pendingFloodRebuilds?: import('../../../shared/types/GameTypes').TrackSegment[];
 }
 
 export class AIStrategyEngine {
@@ -1053,6 +1067,16 @@ export class AIStrategyEngine {
           lockupTerminationReason,
         },
         rejectionReason: result.rejectionReason,
+        // JIRA-262: per-turn observability for post-hoc event-card impact
+        // analysis. snapshot.activeEffects / pendingFloodRebuilds reflect the
+        // state the planners just consumed; serializing them here lets
+        // analytics correlate bot decisions with active event restrictions.
+        activeEffects: snapshot.activeEffects && snapshot.activeEffects.length > 0
+          ? snapshot.activeEffects
+          : undefined,
+        pendingFloodRebuilds: snapshot.bot.pendingFloodRebuilds && snapshot.bot.pendingFloodRebuilds.length > 0
+          ? snapshot.bot.pendingFloodRebuilds
+          : undefined,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

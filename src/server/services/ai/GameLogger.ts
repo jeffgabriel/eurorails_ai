@@ -189,6 +189,19 @@ export interface GameTurnLogEntry {
   trackUsageFee?: number;
   /** Populated when an action was rejected by an event card restriction */
   rejectionReason?: { code: string; message: string };
+  /**
+   * JIRA-262: Per-turn snapshot of active event cards (Strike / Snow / Flood /
+   * Derailment) at the moment the bot executed this turn. Includes restriction
+   * zones, pendingLostTurns per player, expiry turn, drawing player. Undefined
+   * or omitted when no events are active. Companion to the parallel
+   * `logs/events-<gameId>.ndjson` event-lifecycle log.
+   */
+  activeEffects?: import('../../../shared/types/EventCard').ActiveEffect[];
+  /**
+   * JIRA-262: Per-turn snapshot of the bot's pending Flood-rebuild segments
+   * (track erased by an active Flood event that this bot has not yet rebuilt).
+   */
+  pendingFloodRebuilds?: import('../../../shared/types/GameTypes').TrackSegment[];
 }
 
 /**
