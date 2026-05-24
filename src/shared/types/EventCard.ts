@@ -229,6 +229,58 @@ export interface ActiveEffect {
   floodedRiver?: string;
 }
 
+// ─── Client-side socket payload types ───────────────────────────────────────
+
+/**
+ * Payload for event:card-drawn — broadcast to all players when an event card is drawn.
+ * Mirrors the server-side EventCardDrawnPayload in socketService.ts.
+ */
+export interface EventCardDrawnPayload {
+  gameId: string;
+  card: EventCard;
+  drawingPlayerId: string;
+  drawingPlayerName: string;
+  affectedZone: string[];
+  affectedPlayerIds: string[];
+  effectSummary: string;
+  duration: 'immediate' | 'persistent';
+  timestamp: string;
+}
+
+/**
+ * Payload for event:effect-expired — broadcast when effect expires at turn end.
+ * Mirrors the server-side EventEffectExpiredPayload in socketService.ts.
+ */
+export interface EventEffectExpiredPayload {
+  gameId: string;
+  cardId: number;
+  timestamp: string;
+}
+
+/**
+ * Summary of an active event effect for client-side display.
+ * Serializable form of ActiveEffectRecord (affectedZone as string[]).
+ */
+export interface ActiveEffectSummary {
+  cardId: number;
+  cardType: string;
+  drawingPlayerId: string;
+  drawingPlayerName?: string;
+  expiresAfterTurnNumber: number;
+  affectedZone: string[];
+  effectSummary?: string;
+}
+
+/**
+ * Queued visual update waiting to be applied after the event overlay is dismissed.
+ * Discriminated union keyed on `kind`.
+ */
+export type QueuedUpdate =
+  | { kind: 'track_change'; patch: Record<string, unknown> }
+  | { kind: 'money_change'; patch: Record<string, unknown> }
+  | { kind: 'load_change'; patch: Record<string, unknown> }
+  | { kind: 'generic_patch'; patch: Record<string, unknown> };
+
 /**
  * Structured result returned by `EventCardService.processEventCard`.
  * Describes every state change made (and every persistent descriptor to

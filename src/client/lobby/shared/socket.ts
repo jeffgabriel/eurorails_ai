@@ -1,6 +1,11 @@
 // shared/socket.ts
 import { io, Socket } from 'socket.io-client';
 import type { ID, GameState, ClientToServerEvents, ServerToClientEvents, Player } from './types';
+import type {
+  EventCardDrawnPayload,
+  EventEffectExpiredPayload,
+  ActiveEffectSummary,
+} from '../../../shared/types/EventCard';
 import { config, debug } from './config';
 
 class SocketService {
@@ -459,6 +464,80 @@ class SocketService {
     return () => {
       this.socket?.offAny(callback);
     };
+  }
+
+  /**
+   * Listen for event:card-drawn — fires when an event card is drawn by any player.
+   * The callback receives the full event card payload for overlay display.
+   */
+  onEventCardDrawn(callback: (payload: EventCardDrawnPayload) => void): void {
+    if (!this.socket) return;
+    this.socket.off('event:card-drawn' as any);
+    (this.socket as any).on('event:card-drawn', (payload: unknown) => {
+      // Validate payload shape before dispatching to prevent stringly-typed bugs
+      if (!payload || typeof payload !== 'object') {
+        debug.error('[socketService] Malformed event:card-drawn payload:', payload);
+        return;
+      }
+      const p = payload as Record<string, unknown>;
+      if (!p.gameId || !p.card || !p.drawingPlayerId) {
+        debug.error('[socketService] event:card-drawn missing required fields:', payload);
+        return;
+      }
+      try {
+        callback(payload as EventCardDrawnPayload);
+      } catch (err) {
+        debug.error('[socketService] onEventCardDrawn callback failed:', err);
+      }
+    });
+  }
+
+  /**
+   * Listen for event:effect-expired — fires when a persistent event effect expires.
+   */
+  onEventEffectExpired(callback: (payload: EventEffectExpiredPayload) => void): void {
+    if (!this.socket) return;
+    this.socket.off('event:effect-expired' as any);
+    (this.socket as any).on('event:effect-expired', (payload: unknown) => {
+      if (!payload || typeof payload !== 'object') {
+        debug.error('[socketService] Malformed event:effect-expired payload:', payload);
+        return;
+      }
+      const p = payload as Record<string, unknown>;
+      if (!p.gameId || typeof p.cardId !== 'number') {
+        debug.error('[socketService] event:effect-expired missing required fields:', payload);
+        return;
+      }
+      try {
+        callback(payload as EventEffectExpiredPayload);
+      } catch (err) {
+        debug.error('[socketService] onEventEffectExpired callback failed:', err);
+      }
+    });
+  }
+
+  /**
+   * Listen for event:active-effects — fires on reconnect to restore effect state.
+   */
+  onActiveEffects(callback: (effects: ActiveEffectSummary[]) => void): void {
+    if (!this.socket) return;
+    this.socket.off('event:active-effects' as any);
+    (this.socket as any).on('event:active-effects', (data: unknown) => {
+      if (!data || typeof data !== 'object') {
+        debug.error('[socketService] Malformed event:active-effects payload:', data);
+        return;
+      }
+      const d = data as Record<string, unknown>;
+      if (!Array.isArray(d.activeEffects)) {
+        debug.error('[socketService] event:active-effects missing activeEffects array:', data);
+        return;
+      }
+      try {
+        callback(d.activeEffects as ActiveEffectSummary[]);
+      } catch (err) {
+        debug.error('[socketService] onActiveEffects callback failed:', err);
+      }
+    });
   }
 
   // Remove all listeners
