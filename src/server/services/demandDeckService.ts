@@ -304,6 +304,35 @@ export class DemandDeckService {
   }
 
   /**
+   * Place a specific event card on top of the draw pile so it will be drawn next.
+   * If the card is currently in the draw pile, discard pile, or dealt set, it is
+   * removed from that location first to avoid duplicates.
+   * Debug/testing only.
+   */
+  public pushEventCardToTop(eventCardId: number): void {
+    const card = this.eventCardMap.get(eventCardId);
+    if (!card) {
+      throw new Error(`Event card ${eventCardId} not found`);
+    }
+
+    const drawKey = eventDrawKey(eventCardId);
+
+    // Remove from wherever it currently lives
+    const drawIdx = this.drawPile.indexOf(drawKey);
+    if (drawIdx !== -1) {
+      this.drawPile.splice(drawIdx, 1);
+    }
+    const discardIdx = this.discardPile.indexOf(drawKey);
+    if (discardIdx !== -1) {
+      this.discardPile.splice(discardIdx, 1);
+    }
+    this.dealtCards.delete(drawKey);
+
+    // Push to end = top of draw pile (pop() draws from end)
+    this.drawPile.push(drawKey);
+  }
+
+  /**
    * Reset the deck state (for testing)
    * Returns all dealt cards back to the draw pile and resets state
    */

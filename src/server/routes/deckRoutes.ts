@@ -77,6 +77,42 @@ router.post('/reset', (req, res) => {
   }
 });
 
+// Debug endpoint: push an event card to the top of the draw pile
+// Guarded the same way as /reset — test env or test-secret header
+router.post('/debug/push-event', (req, res) => {
+  try {
+    const testSecret = req.headers['x-test-secret'] as string;
+    const isTestEnvironment = process.env.NODE_ENV === 'test';
+    const isValidTestRequest = isTestEnvironment || testSecret === 'test-reset-secret';
+
+    if (!isValidTestRequest) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        details: 'This endpoint is only available in test/debug mode'
+      });
+    }
+
+    const { eventCardId } = req.body;
+    if (typeof eventCardId !== 'number' || isNaN(eventCardId)) {
+      return res.status(400).json({
+        error: 'Invalid request',
+        details: 'eventCardId must be a number (121-140)'
+      });
+    }
+
+    demandDeckService.pushEventCardToTop(eventCardId);
+    return res.status(200).json({
+      message: `Event card ${eventCardId} pushed to top of draw pile`,
+      deckState: demandDeckService.getDeckState()
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      error: 'Bad request',
+      details: error.message || 'Failed to push event card'
+    });
+  }
+});
+
 // Get all event card definitions
 router.get('/events', authenticateToken, (req, res) => {
   try {
