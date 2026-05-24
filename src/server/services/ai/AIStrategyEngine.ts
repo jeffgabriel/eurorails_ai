@@ -301,15 +301,17 @@ export class AIStrategyEngine {
       if (!context.isInitialBuild) {
         const finalVictoryRoute = findFinalVictoryRoute(snapshot, context, memory);
         if (finalVictoryRoute) {
-          // Idempotency: do not replace the route if the bot is already targeting
-          // the first stop of the returned route (same pattern as JIRA-243).
-          const currentStop = activeRoute?.stops[activeRoute.currentStopIndex];
-          const firstStop = finalVictoryRoute.stops[0];
-          const alreadyTargeted =
-            currentStop?.action === firstStop.action &&
-            currentStop.loadType === firstStop.loadType &&
-            currentStop.city === firstStop.city;
-          if (!alreadyTargeted) {
+          // JIRA-261: Idempotency check compares the full remaining-stops
+          // sequence, not just the first stop. The earlier first-stop-only check
+          // suppressed override at game 8350cffa s3 T68 onwards: an existing
+          // 4-stop deterministic route shared its first stop (`pickup Ham@Warszawa`)
+          // with the victory route, so the override never fired — even though
+          // the victory route diverged at stop 3 to add the critical
+          // `pickup Oranges@Sevilla → deliver Oranges@London` leg that would
+          // have connected the 4th-of-7 major and clinched the game. With the
+          // full-sequence comparison, that divergence (and the missing London
+          // leg in the existing route) now correctly triggers the override.
+          if (!AIStrategyEngine.routesMatch(activeRoute, finalVictoryRoute.stops)) {
             activeRoute = {
               stops: finalVictoryRoute.stops,
               currentStopIndex: 0,
@@ -1182,6 +1184,39 @@ export class AIStrategyEngine {
         }
         return { actor: 'system', actorDetail: 'unknown' };
     }
+  }
+
+  /**
+   * JIRA-261: Idempotency helper for the findFinalVictoryRoute override.
+   *
+   * Returns true iff the existing activeRoute's REMAINING stops (from
+   * `currentStopIndex` onward) are identical in length and content to
+   * `proposedStops`. Action / loadType / city are compared structurally.
+   *
+   * Why full-sequence equality (not first-stop equality):
+   *   The earlier first-stop-only check suppressed override at game 8350cffa
+   *   s3 T68+: an existing 4-stop deterministic route shared its first stop
+   *   (`pickup Ham@Warszawa`) with a 6-stop victory route, so the override
+   *   never fired even though the routes diverged at stop 3 to add the
+   *   victory-critical `pickup Oranges@Sevilla → deliver Oranges@London` leg.
+   *   This helper now distinguishes those cases — divergent routes correctly
+   *   trigger override, identical plans correctly suppress (no churn).
+   */
+  private static routesMatch(
+    existing: StrategicRoute | null | undefined,
+    proposedStops: RouteStop[],
+  ): boolean {
+    if (!existing) return false;
+    const remaining = existing.stops.slice(existing.currentStopIndex);
+    if (remaining.length !== proposedStops.length) return false;
+    for (let i = 0; i < remaining.length; i++) {
+      const a = remaining[i];
+      const b = proposedStops[i];
+      if (a.action !== b.action) return false;
+      if (a.loadType !== b.loadType) return false;
+      if (a.city !== b.city) return false;
+    }
+    return true;
   }
 
   /**
