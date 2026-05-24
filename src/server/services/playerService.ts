@@ -156,6 +156,7 @@ export class PlayerService {
 
     try {
       const { emitEventCardDrawn, emitEventEffectApplied } = await import('./socketService');
+      const { appendEvent } = await import('./ai/EventLogger');
 
       for (const { gameId, eventResult, drawingPlayerName, card } of emissions) {
         const affectedPlayerIds = eventResult.perPlayerEffects.map((e) => e.playerId);
@@ -181,6 +182,40 @@ export class PlayerService {
             effects: eventResult.perPlayerEffects,
             timestamp: new Date().toISOString(),
           });
+        }
+
+        // JIRA-262: persist event-card draw to logs/events-<gameId>.ndjson for
+        // post-hoc analysis. Best-effort, observability-only.
+        try {
+          const descriptor = eventResult.persistentEffectDescriptor;
+          const pendingLostTurnPlayers = eventResult.perPlayerEffects
+            .filter(e => e.effectType === 'turn_lost')
+            .map(e => e.playerId);
+          appendEvent(gameId, {
+            timestamp: new Date().toISOString(),
+            // Drawing player's current turn = expiresAfter - 1 when descriptor exists;
+            // for immediate-only events (Derailment, Excess Profit Tax) descriptor is
+            // undefined — fall through to -1 sentinel which downstream analysis can
+            // treat as "turn-of-draw unknown, infer from neighboring NDJSON entries".
+            turn: descriptor ? descriptor.expiresAfterTurnNumber - 1 : -1,
+            phase: 'drawn',
+            cardId: eventResult.cardId,
+            cardType: String(eventResult.cardType),
+            drawingPlayerId: eventResult.drawingPlayerId,
+            drawingPlayerIndex: descriptor?.drawingPlayerIndex,
+            affectedZone: eventResult.affectedZone,
+            restrictionTypes: Array.from(
+              new Set(eventResult.perPlayerEffects.map(e => e.effectType)),
+            ),
+            pendingLostTurnPlayerIds: pendingLostTurnPlayers.length > 0
+              ? pendingLostTurnPlayers
+              : undefined,
+            floodedRiver: eventResult.floodedRiver,
+            expiresAfterTurnNumber: descriptor?.expiresAfterTurnNumber,
+            note: `Drawn by ${drawingPlayerName}`,
+          });
+        } catch (logErr) {
+          console.warn(`[PlayerService] Event log failed for game ${gameId}: ${logErr instanceof Error ? logErr.message : logErr}`);
         }
       }
     } catch (emitErr) {
