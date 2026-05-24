@@ -2,6 +2,17 @@ import { ProviderResponse } from '../../../../shared/types/GameTypes';
 import { ProviderAdapter, ThinkingConfig } from './ProviderAdapter';
 import { ProviderTimeoutError, ProviderAPIError, ProviderAuthError } from './errors';
 
+/**
+ * Extra token budget reserved for Gemini 3 reasoning tokens when thinking is active.
+ * Thinking tokens are drawn from maxOutputTokens, so without this reserve the model
+ * may exhaust the budget on internal reasoning before emitting the final response.
+ */
+const GEMINI3_THINKING_RESERVE: Record<string, number> = {
+  low: 2048,
+  medium: 4096,
+  high: 8192,
+};
+
 export class GoogleAdapter implements ProviderAdapter {
   private readonly apiKey: string;
   private readonly timeoutMs: number;
@@ -9,6 +20,26 @@ export class GoogleAdapter implements ProviderAdapter {
   constructor(apiKey: string, timeoutMs: number = 15000) {
     this.apiKey = apiKey;
     this.timeoutMs = timeoutMs;
+  }
+
+  /**
+   * Recursively strip `additionalProperties` from a JSON schema object.
+   * Gemini's response_schema API doesn't support this field and returns 400.
+   * Returns a deep clone — the original schema is not mutated.
+   */
+  static stripAdditionalProperties(schema: unknown): unknown {
+    if (Array.isArray(schema)) {
+      return schema.map(item => GoogleAdapter.stripAdditionalProperties(item));
+    }
+    if (schema !== null && typeof schema === 'object') {
+      const result: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+        if (key === 'additionalProperties') continue;
+        result[key] = GoogleAdapter.stripAdditionalProperties(value);
+      }
+      return result;
+    }
+    return schema;
   }
 
   private isGemini3Model(model: string): boolean {
@@ -37,15 +68,24 @@ export class GoogleAdapter implements ProviderAdapter {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${request.model}:generateContent`;
 
     try {
+      // For Gemini 3 + thinking, inflate maxOutputTokens by the reasoning-token reserve
+      // so that internal thought tokens don't consume the caller's intended output budget.
+      let maxOutputTokens = request.maxTokens;
+      if (this.isGemini3Model(request.model) && request.thinking) {
+        const effort = request.effort ?? 'medium';
+        const reserve = GEMINI3_THINKING_RESERVE[effort] ?? GEMINI3_THINKING_RESERVE.medium;
+        maxOutputTokens += reserve;
+      }
+
       const generationConfig: Record<string, unknown> = {
-        maxOutputTokens: request.maxTokens,
+        maxOutputTokens,
         temperature: request.temperature,
       };
 
-      // Add structured output for non-Gemini-3 models (incompatible with thinkingConfig)
-      if (request.outputSchema && !this.isGemini3Model(request.model)) {
+      // Add structured output — skip only when thinkingConfig is active on Gemini 3 (incompatible)
+      if (request.outputSchema && !(this.isGemini3Model(request.model) && request.thinking)) {
         generationConfig.responseMimeType = 'application/json';
-        generationConfig.responseSchema = request.outputSchema;
+        generationConfig.responseSchema = GoogleAdapter.stripAdditionalProperties(request.outputSchema);
       }
 
       const body: Record<string, unknown> = {
@@ -60,14 +100,14 @@ export class GoogleAdapter implements ProviderAdapter {
         generationConfig,
       };
 
-      // Add thinkingConfig as a top-level request body field for models that support it
+      // Add thinkingConfig inside generationConfig for models that support it
       if (request.thinking) {
         if (this.isGemini3Model(request.model)) {
-          body.thinkingConfig = {
+          generationConfig.thinkingConfig = {
             thinkingLevel: request.effort ?? 'medium',
           };
         } else if (this.isGemini25Model(request.model)) {
-          body.thinkingConfig = {
+          generationConfig.thinkingConfig = {
             thinkingBudget: -1,
           };
         }

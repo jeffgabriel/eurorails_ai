@@ -11,6 +11,8 @@ import loadRoutes from './routes/loadRoutes';
 import lobbyRoutes from './routes/lobbyRoutes';
 import authRoutes from './routes/authRoutes';
 import chatRoutes from './routes/chatRoutes';
+import whisperRoutes from './routes/whisperRoutes';
+import logRoutes, { llmRouter } from './routes/logRoutes';
 import { checkDatabase, db } from './db';
 import { PlayerService } from './services/playerService';
 import { addRequestId } from './middleware/errorHandler';
@@ -106,6 +108,12 @@ app.use('/api/deck', deckRoutes);
 app.use('/api/loads', loadRoutes);
 app.use('/api/lobby', lobbyRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/games', whisperRoutes);
+
+// Log viewer routes (dev tool — no auth)
+app.use('/logs', logRoutes);
+app.use('/log', logRoutes);
+app.use('/llm', llmRouter);
 
 // Static file serving
 app.use(express.static(path.join(__dirname, '../../dist/client')));

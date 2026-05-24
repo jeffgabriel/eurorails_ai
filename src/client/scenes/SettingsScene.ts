@@ -1,5 +1,5 @@
 import 'phaser';
-import { GameState, Player, PlayerColor, TrainType } from '../../shared/types/GameTypes';
+import { FullGameState, Player, PlayerColor, TrainType } from '../../shared/types/GameTypes';
 import { GameScene } from './GameScene';
 import { config } from '../config/apiConfig';
 import { UI_FONT_FAMILY } from '../config/uiFont';
@@ -7,7 +7,7 @@ import { CityListDropDown } from '../components/CityListDropDown';
 import { CityListItem } from '../components/CityListDropDown';
 
 export class SettingsScene extends Phaser.Scene {
-    private gameState: GameState;
+    private gameState: FullGameState;
     private editingPlayer?: Player;
     private nameInput?: HTMLInputElement;
     private cityDropDown?: CityListDropDown;
@@ -28,7 +28,7 @@ export class SettingsScene extends Phaser.Scene {
         };
     }
 
-    init(data: { gameState: GameState }) {
+    init(data: { gameState: FullGameState }) {
         this.gameState = data.gameState;
     }
 

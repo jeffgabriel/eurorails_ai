@@ -1,5 +1,5 @@
 import { TrackDrawingManager } from '../components/TrackDrawingManager';
-import { GameState, TerrainType, GridPoint } from '../../shared/types/GameTypes';
+import { FullGameState, TerrainType, GridPoint } from '../../shared/types/GameTypes';
 import { PlayerTrackState } from '../../shared/types/TrackTypes';
 
 // Minimal fetch mock for tests
@@ -24,7 +24,7 @@ const mockScene = {
   scale: { height: 1000 }
 } as any;
 const mockMapContainer = { add: () => {} } as any;
-const mockGameState: GameState = {
+const mockGameState: FullGameState = {
   id: 'game1',
   players: [{ id: 'p1', color: '#ff0000', money: 50 }],
   currentPlayerIndex: 0

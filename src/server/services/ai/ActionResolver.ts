@@ -28,10 +28,14 @@ import {
   TRACK_USAGE_FEE,
   PlayerTrackState,
 } from '../../../shared/types/GameTypes';
-import { loadGridPoints, GridCoord, GridPointData, hexDistance } from '../MapTopology';
-import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
+import { loadGridPoints, GridCoord, GridPointData, hexDistance, makeKey } from '../MapTopology';
+import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { computeBuildSegments } from './computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
+import { NetworkBuildAnalyzer } from './NetworkBuildAnalyzer';
+import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
+import { BuildRouteResolver, isBuildResolverEnabled, type ResolverOutcome } from './BuildRouteResolver';
+import { TurnValidator } from './TurnValidator';
 import { getTrainSpeed, getTrainCapacity } from '../../../shared/services/trainProperties';
 import { isPositionAtCity } from '../../../shared/services/cityPositionResolver';
 
@@ -62,7 +66,7 @@ export class ActionResolver {
    */
   private static async resolveSingleAction(
     action: string,
-    details: Record<string, string>,
+    details: Record<string, any> & { waypoints?: [number, number][] },
     snapshot: WorldSnapshot,
     context: GameContext,
     startingCity?: string,
@@ -76,7 +80,7 @@ export class ActionResolver {
         return ActionResolver.resolveMove(details, snapshot);
       case AIActionType.DeliverLoad:
       case 'DELIVER':
-        return ActionResolver.resolveDeliver(details, snapshot);
+        return ActionResolver.resolveDeliver(details, snapshot, context);
       case AIActionType.PickupLoad:
       case 'PICKUP':
         return ActionResolver.resolvePickup(details, snapshot, context);
@@ -85,7 +89,7 @@ export class ActionResolver {
         return ActionResolver.resolveUpgrade(details, snapshot);
       case AIActionType.DropLoad:
       case 'DROP':
-        return ActionResolver.resolveDropLoad(details, snapshot);
+        return ActionResolver.resolveDropLoad(details, snapshot, context);
       case AIActionType.DiscardHand:
       case 'DISCARD_HAND':
         return ActionResolver.resolveDiscard(snapshot);
@@ -97,7 +101,7 @@ export class ActionResolver {
     }
   }
 
-  // ─── Individual Resolvers (stubs, implemented in BE-010 through BE-013) ───
+  // ─── Individual Resolvers ───────────────────────────────────────────────
 
   /**
    * Resolve a BUILD intent into a TurnPlanBuildTrack.
@@ -110,7 +114,7 @@ export class ActionResolver {
    *   5. Return the resulting segments or a descriptive error.
    */
   private static async resolveBuild(
-    details: Record<string, string>,
+    details: Record<string, any> & { waypoints?: [number, number][] },
     snapshot: WorldSnapshot,
     context: GameContext,
     startingCity?: string,
@@ -188,14 +192,229 @@ export class ActionResolver {
 
     const occupiedEdges = ActionResolver.getOccupiedEdges(snapshot);
 
-    const segments = computeBuildSegments(
-      startPositions,
-      snapshot.bot.existingSegments,
-      budget,
-      budget, // maxSegments = budget (cheapest segment costs 1M)
-      occupiedEdges,
-      targetPositions,
-    );
+    // Build network node key set from existing segments (JIRA-128: reused as existingTrackIndex).
+    // Hoisted above the analysis block so it's available for all computeBuildSegments calls.
+    let networkNodeKeys: Set<string> | undefined;
+    const shouldAnalyze = hasTrack && !NetworkBuildAnalyzer.shouldSkipAnalysis(snapshot.bot.existingSegments);
+    if (shouldAnalyze) {
+      networkNodeKeys = new Set<string>();
+      for (const seg of snapshot.bot.existingSegments) {
+        networkNodeKeys.add(makeKey(seg.from.row, seg.from.col));
+        networkNodeKeys.add(makeKey(seg.to.row, seg.to.col));
+      }
+    }
+
+    // ── Pre-build network analysis (JIRA-113 + JIRA-122) ──────────────
+    // If the bot has enough track, check if a nearby network point can serve
+    // as a shorter start position for building toward the target city.
+    if (shouldAnalyze && networkNodeKeys) {
+      try {
+        const gridPoints = loadGridPoints();
+
+        // Use the first (closest) target position for nearest-point search
+        const targetPos = targetPositions[0];
+
+        // JIRA-122: Use ferry-aware BFS for nearest-network-point search
+        const ferryAwareResult = NetworkBuildAnalyzer.findNearestNetworkPointFerryAware(
+          targetPos, networkNodeKeys, gridPoints,
+        );
+        // Fall back to standard BFS if ferry-aware returned nothing
+        const nearestResult = ferryAwareResult ?? NetworkBuildAnalyzer.findNearestNetworkPoint(
+          targetPos, networkNodeKeys, gridPoints,
+        );
+        NetworkBuildAnalyzer.logNearestPointResult(targetCity, nearestResult, 12);
+
+        // If a nearby network point is found and its build cost is within budget,
+        // add it to start positions so Dijkstra considers building a connector
+        if (nearestResult && nearestResult.distance > 0 && nearestResult.buildCost < budget) {
+          const alreadyIncluded = startPositions.some(
+            sp => sp.row === nearestResult.point.row && sp.col === nearestResult.point.col,
+          );
+          if (!alreadyIncluded) {
+            startPositions.push(nearestResult.point);
+          }
+        }
+
+        // JIRA-122 Part 3: Target-biased source selection
+        // Pre-filter track endpoints to those nearest the build target.
+        // This prevents Berlin endpoints from being used when building toward Cardiff (London is closer).
+        if (nearestResult && nearestResult.distance > 0 && startPositions.length > 1) {
+          const distanceThreshold = nearestResult.distance * 2;
+          const biasedSources = startPositions.filter(sp => {
+            const dist = hexDistance(sp.row, sp.col, targetPos.row, targetPos.col);
+            return dist <= distanceThreshold;
+          });
+          if (biasedSources.length > 0) {
+            startPositions = biasedSources;
+          }
+        }
+      } catch (error) {
+        NetworkBuildAnalyzer.logAnalysisError(error);
+      }
+    }
+
+    // Filter existingSegments to only the connected component reachable from bot position.
+    // This prevents Dijkstra from starting at disconnected cluster endpoints (e.g., remote major cities).
+    // Skip filtering when position is null (initialBuild — bot has track but no pawn placement yet).
+    const preFilterCount = snapshot.bot.existingSegments.length;
+    let ferryCrossingsIncluded = 0;
+    let connectedSegments: TrackSegment[];
+    if (hasTrack && snapshot.bot.position) {
+      const filterResult = ActionResolver.filterConnectedSegmentsWithStats(
+        snapshot.bot.existingSegments,
+        snapshot.bot.position,
+      );
+      connectedSegments = filterResult.segments;
+      ferryCrossingsIncluded = filterResult.ferryCrossingsIncluded;
+    } else {
+      connectedSegments = snapshot.bot.existingSegments;
+    }
+    const postFilterCount = connectedSegments.length;
+
+    // JIRA-129: Waypoint-chained building — iterate through each waypoint in sequence
+    const waypoints = details.waypoints ?? [];
+    let segments: TrackSegment[];
+    let resolverOutcome: ResolverOutcome | undefined;
+
+    if (isBuildResolverEnabled()) {
+      // JIRA-179: BuildRouteResolver — produce three candidates and pick the best one.
+      // The flag-off path below is byte-for-byte identical to the pre-change implementation.
+      // JIRA-203: Compute saturated city keys so the resolver excludes paths through capped cities.
+      const saturatedCityKeys = TurnValidator.computeSaturatedCityKeys(snapshot);
+      resolverOutcome = BuildRouteResolver.resolve({
+        waypoints,
+        startPositions,
+        targetPositions,
+        budget,
+        connectedSegments,
+        occupiedEdges,
+        networkNodeKeys,
+        saturatedCityKeys,
+      });
+      segments = resolverOutcome.selected.segments;
+    } else if (waypoints.length > 0) {
+      segments = [];
+      let remainingBudget = budget;
+      let currentStartPositions = startPositions;
+      let currentConnectedSegments = connectedSegments;
+
+      // Build through each waypoint in sequence, then to the final target
+      const waypointTargets: GridCoord[][] = waypoints.map(([row, col]) => [{ row, col }]);
+      waypointTargets.push(targetPositions);
+
+      for (const legTargets of waypointTargets) {
+        if (remainingBudget <= 0) break;
+
+        const legSegments = computeBuildSegments(
+          currentStartPositions,
+          currentConnectedSegments,
+          remainingBudget,
+          remainingBudget,
+          occupiedEdges,
+          legTargets,
+          undefined,
+          networkNodeKeys,
+        );
+
+        if (legSegments.length === 0) break;
+
+        segments.push(...legSegments);
+        const legCost = legSegments.reduce((sum, seg) => sum + seg.cost, 0);
+        remainingBudget -= legCost;
+
+        // Next leg starts from the end of the segments just built
+        const lastSeg = legSegments[legSegments.length - 1];
+        currentStartPositions = [{ row: lastSeg.to.row, col: lastSeg.to.col }];
+        // Include newly built segments as existing for the next leg
+        currentConnectedSegments = [...currentConnectedSegments, ...legSegments];
+      }
+    } else {
+      segments = computeBuildSegments(
+        startPositions,
+        connectedSegments,
+        budget,
+        budget, // maxSegments = budget (cheapest segment costs 1M)
+        occupiedEdges,
+        targetPositions,
+        undefined, // knownSegments
+        networkNodeKeys, // JIRA-128: proximity penalty for parallel track prevention
+      );
+    }
+
+    // ── Post-build parallel path validation (JIRA-113) ─────────────────
+    // After computing a path, check if it runs parallel to existing track.
+    // If so, reroute through existing track to avoid redundant construction.
+    if (segments.length > 0 && shouldAnalyze) {
+      try {
+        const gridPoints = loadGridPoints();
+        const proposedPath: GridCoord[] = segments.map(seg => ({ row: seg.to.row, col: seg.to.col }));
+        const detection = NetworkBuildAnalyzer.detectParallelPath(
+          proposedPath, snapshot.bot.existingSegments, gridPoints,
+        );
+        NetworkBuildAnalyzer.logParallelDetection(detection);
+
+        if (detection.isParallel && detection.suggestedWaypoint) {
+          // JIRA-128: REPLACE sources with waypoint only (not append).
+          // Appending allows Dijkstra to ignore the waypoint entirely.
+          // Replacing forces the build to start FROM existing track.
+          const rerouteStartPositions = [detection.suggestedWaypoint];
+          NetworkBuildAnalyzer.logRerouteDecision(detection.suggestedWaypoint, detection.parallelSegmentCount);
+
+          const reroutedSegments = computeBuildSegments(
+            rerouteStartPositions,
+            connectedSegments,
+            budget,
+            budget,
+            occupiedEdges,
+            targetPositions,
+            undefined, // knownSegments
+            networkNodeKeys, // JIRA-128: proximity penalty
+          );
+
+          // Use rerouted path only if it's within budget and non-empty
+          const reroutedCost = reroutedSegments.reduce((sum, seg) => sum + seg.cost, 0);
+          if (reroutedSegments.length > 0 && reroutedCost <= budget) {
+            segments = reroutedSegments;
+          } else {
+            NetworkBuildAnalyzer.logRerouteFallback(reroutedCost, budget);
+          }
+        }
+      } catch (error) {
+        NetworkBuildAnalyzer.logAnalysisError(error);
+      }
+
+      // JIRA-122 Part 4: Region-based duplicate detection
+      if (segments.length > 0) {
+        try {
+          const proposedRegionPath: GridCoord[] = segments.map(seg => ({ row: seg.to.row, col: seg.to.col }));
+          const duplication = NetworkBuildAnalyzer.detectRegionDuplication(
+            proposedRegionPath, snapshot.bot.existingSegments,
+          );
+          if (duplication) {
+            // Re-run with suggested waypoint through dense existing track region
+            const rerouteStartPositions = [...startPositions, duplication.suggestedWaypoint];
+
+            const reroutedSegments = computeBuildSegments(
+              rerouteStartPositions,
+              connectedSegments,
+              budget,
+              budget,
+              occupiedEdges,
+              targetPositions,
+              undefined, // knownSegments
+              networkNodeKeys, // JIRA-128: proximity penalty
+            );
+
+            const reroutedCost = reroutedSegments.reduce((sum, seg) => sum + seg.cost, 0);
+            if (reroutedSegments.length > 0 && reroutedCost <= budget) {
+              segments = reroutedSegments;
+            }
+          }
+        } catch (error) {
+          NetworkBuildAnalyzer.logAnalysisError(error);
+        }
+      }
+    }
 
     if (segments.length === 0) {
       return {
@@ -209,6 +428,37 @@ export class ActionResolver {
       segments,
       targetCity,
     };
+
+    // JIRA-179: Attach resolver log payload when flag is on, for composition.buildResolver
+    if (resolverOutcome) {
+      const buildResolverLog: ResolvedAction['buildResolverLog'] = {
+        enabled: true,
+        targetCity: String(targetCity),
+        budget,
+        candidates: (['llmGuided', 'dijkstraDirect', 'merged'] as const).map(id => {
+          const c = resolverOutcome!.candidates[id];
+          return {
+            id: c.id,
+            cost: c.totalCost,
+            segmentCount: c.segments.length,
+            reachesTarget: c.reachesTarget,
+            endpointDistance: c.endpointDistanceToTarget,
+            anchorsHit: c.namedCityAnchorsHit,
+            segmentCompact: c.segments.map(s => [s.from.row, s.from.col, s.to.row, s.to.col] as [number, number, number, number]),
+          };
+        }),
+        selected: resolverOutcome.selected.id,
+        ruleBranch: resolverOutcome.ruleBranch,
+        reasonText: resolverOutcome.reasonText,
+        costDelta: resolverOutcome.costDelta,
+        anchorClassification: resolverOutcome.anchorClassification,
+        connectedSegmentCount: { preFilter: preFilterCount, postFilter: postFilterCount },
+        ferryCrossingsIncluded,
+        // JIRA-203: Which saturated cities were excluded from path computation
+        rejectedSaturatedCities: resolverOutcome.rejectedSaturatedCities,
+      };
+      return { success: true, plan, buildResolverLog };
+    }
 
     return { success: true, plan };
   }
@@ -224,27 +474,55 @@ export class ActionResolver {
    * maximum distance the bot can travel this turn (partial move toward destination).
    */
   static async resolveMove(
-    details: Record<string, string>,
+    details: Record<string, string | number>,
     snapshot: WorldSnapshot,
     remainingSpeed?: number,
   ): Promise<ResolvedAction> {
-    const targetCity = details.to ?? details.toward ?? details.city;
-    if (!targetCity) {
-      return { success: false, error: 'MOVE requires details.to specifying the destination city name.' };
-    }
+    const toRow = details.toRow;
+    const toCol = details.toCol;
+
+    let targetPositions: { row: number; col: number }[];
 
     if (!snapshot.bot.position) {
       return { success: false, error: 'Bot has no position on the map. Cannot move.' };
     }
 
-    const targetPositions = ActionResolver.findCityMilepost(targetCity, snapshot);
-    if (targetPositions.length === 0) {
-      return { success: false, error: `Destination city "${targetCity}" not found on the map.` };
-    }
+    let targetDescription: string;
+    // Track whether the move was issued with a city name (vs. coordinates).
+    // Used downstream by the major-city path-truncation block.
+    const isCityNameTarget = !(toRow !== undefined && toCol !== undefined);
+    let targetCity: string | undefined;
 
-    // Check if already at the target city
-    if (ActionResolver.isBotAtCity(snapshot, targetCity)) {
-      return { success: false, error: `Bot is already at "${targetCity}".` };
+    if (toRow !== undefined && toCol !== undefined) {
+      // Coordinate-based path: target is a specific milepost by row/col
+      const row = Number(toRow);
+      const col = Number(toCol);
+      targetPositions = [{ row, col }];
+      targetDescription = `(${row},${col})`;
+
+      // Check if already at the target coordinate
+      const botPos = snapshot.bot.position;
+      if (botPos.row === row && botPos.col === col) {
+        return { success: false, error: `Bot is already at position (${row},${col}).` };
+      }
+    } else {
+      // City-name path (existing behavior)
+      const resolvedCity = details.to ?? details.toward ?? details.city;
+      if (!resolvedCity) {
+        return { success: false, error: 'MOVE requires details.to specifying the destination city name.' };
+      }
+      targetCity = String(resolvedCity);
+
+      targetPositions = ActionResolver.findCityMilepost(targetCity, snapshot);
+      if (targetPositions.length === 0) {
+        return { success: false, error: `Destination city "${targetCity}" not found on the map.` };
+      }
+
+      // Check if already at the target city
+      if (ActionResolver.isBotAtCity(snapshot, targetCity)) {
+        return { success: false, error: `Bot is already at "${targetCity}".` };
+      }
+      targetDescription = targetCity;
     }
 
     // Ferry crossing: if bot is at a ferry port, teleport to paired port
@@ -259,17 +537,19 @@ export class ActionResolver {
       fromPosition = ferryCrossing.pairedPort;
       const rawSpeed = getTrainSpeed(snapshot.bot.trainType as TrainType);
       speed = Math.ceil(rawSpeed / 2);
-      console.log(`[Ferry] Crossing ${ferryCrossing.ferryName}: (${skipFerryPortKey}) → (${fromPosition.row},${fromPosition.col}) — half speed (${speed})`);
 
       // After ferry teleportation, check if the bot landed at the target city.
       // Dublin is both a Small City and a ferry endpoint — when the target IS the
       // paired port, pathfinding from (24,10) to (24,10) returns an empty path
       // which gets rejected. Instead, return a successful zero-length move.
+      // Exclude FerryPort-terrain targets to prevent false matches when a ferry port
+      // shares a name with a nearby city (e.g., Newcastle ferry port vs SmallCity).
+      const ferryGrid = loadGridPoints();
       const atTargetAfterFerry = targetPositions.some(
-        tp => tp.row === fromPosition.row && tp.col === fromPosition.col,
+        tp => tp.row === fromPosition.row && tp.col === fromPosition.col
+          && ferryGrid.get(`${tp.row},${tp.col}`)?.terrain !== TerrainType.FerryPort,
       );
       if (atTargetAfterFerry) {
-        console.log(`[Ferry] Bot arrived at ${targetCity} via ferry crossing — zero movement`);
         const plan: TurnPlanMoveTrain = {
           type: AIActionType.MoveTrain,
           path: [fromPosition],
@@ -336,6 +616,29 @@ export class ActionResolver {
       }
       let truncatedPath = fullPath.slice(0, pathLength + 1); // +1 for the start node
 
+      // Major-city truncation: stop at the first milepost belonging to the destination
+      // major-city group. Applies only for city-name targets that resolve to a major city.
+      // Runs AFTER speed-budget truncation (above) and BEFORE ferry-port truncation (below).
+      // R5: fire only when isCityNameTarget is true and the city maps to a major-city group.
+      if (isCityNameTarget && targetCity !== undefined) {
+        const targetMajorCityGroup = majorCityLookup.get(
+          `${targetPositions[0].row},${targetPositions[0].col}`,
+        );
+        if (targetMajorCityGroup !== undefined) {
+          for (let i = 1; i < truncatedPath.length; i++) {
+            const nodeKey = `${truncatedPath[i].row},${truncatedPath[i].col}`;
+            if (majorCityLookup.get(nodeKey) === targetMajorCityGroup) {
+              console.warn(
+                `[Movement Budget] Path truncated at major-city entry: ${targetCity} (step ${i}/${rawPathLength})`,
+              );
+              pathLength = i;
+              truncatedPath = fullPath.slice(0, i + 1);
+              break;
+            }
+          }
+        }
+      }
+
       // Ferry detection: if path passes through a FerryPort, truncate at the port.
       // The bot must stop at the ferry port for this turn (game rule).
       // Skip index 0 (the starting position — bot is already there).
@@ -383,7 +686,7 @@ export class ActionResolver {
     if (!bestResult) {
       return {
         success: false,
-        error: `No valid path to "${targetCity}" on existing track network.`,
+        error: `No valid path to "${targetDescription}" on existing track network.`,
       };
     }
 
@@ -414,6 +717,7 @@ export class ActionResolver {
   private static async resolveDeliver(
     details: Record<string, string>,
     snapshot: WorldSnapshot,
+    context: GameContext,
   ): Promise<ResolvedAction> {
     const loadType = details.load;
     const cityName = details.at ?? details.city ?? details.to;
@@ -426,9 +730,9 @@ export class ActionResolver {
       return { success: false, error: `Bot is not at "${cityName}". Move there before delivering.` };
     }
 
-    // Bot must be carrying the load
-    if (!snapshot.bot.loads.includes(loadType)) {
-      return { success: false, error: `Bot is not carrying "${loadType}". Current loads: [${snapshot.bot.loads.join(', ')}].` };
+    // Bot must be carrying the load (use context.loads — the planner's in-loop working state)
+    if (!context.loads.includes(loadType)) {
+      return { success: false, error: `Bot is not carrying "${loadType}". Current loads: [${context.loads.join(', ')}].` };
     }
 
     // Must have a matching demand card
@@ -470,10 +774,10 @@ export class ActionResolver {
       return { success: false, error: `Bot is not at "${cityName}". Move there before picking up.` };
     }
 
-    // Bot must have capacity
+    // Bot must have capacity (use context.loads — the planner's in-loop working state)
     const capacity = ActionResolver.getBotCapacity(snapshot);
-    if (snapshot.bot.loads.length >= capacity) {
-      return { success: false, error: `Train is full (${snapshot.bot.loads.length}/${capacity}). Drop a load first.` };
+    if (context.loads.length >= capacity) {
+      return { success: false, error: `Train is full (${context.loads.length}/${capacity}). Drop a load first.` };
     }
 
     // Bot must hold a demand card matching this load type (no speculative pickups)
@@ -531,6 +835,7 @@ export class ActionResolver {
   private static async resolveDropLoad(
     details: Record<string, string>,
     snapshot: WorldSnapshot,
+    context: GameContext,
   ): Promise<ResolvedAction> {
     const loadType = details.load;
     const cityName = details.at ?? details.city;
@@ -538,9 +843,9 @@ export class ActionResolver {
       return { success: false, error: 'DROP requires details.load specifying the load type to drop.' };
     }
 
-    // Bot must be carrying the load
-    if (!snapshot.bot.loads.includes(loadType)) {
-      return { success: false, error: `Bot is not carrying "${loadType}". Current loads: [${snapshot.bot.loads.join(', ')}].` };
+    // Bot must be carrying the load (use context.loads — the planner's in-loop working state)
+    if (!context.loads.includes(loadType)) {
+      return { success: false, error: `Bot is not carrying "${loadType}". Current loads: [${context.loads.join(', ')}].` };
     }
 
     // Resolve city from bot position if not specified
@@ -573,7 +878,7 @@ export class ActionResolver {
   }
 
   /** Valid upgrade paths: source -> { target -> cost } */
-  private static readonly UPGRADE_PATHS: Record<string, Record<string, number>> = {
+  static readonly UPGRADE_PATHS: Record<string, Record<string, number>> = {
     [TrainType.Freight]: {
       [TrainType.FastFreight]: 20,
       [TrainType.HeavyFreight]: 20,
@@ -693,20 +998,6 @@ export class ActionResolver {
       return {
         success: false,
         error: 'Discard Hand ends the turn immediately. Cannot combine with other actions.',
-      };
-    }
-
-    // Upfront combination legality: UPGRADE(20M) + BUILD forbidden
-    const hasUpgrade = actionTypes.some(
-      t => t === AIActionType.UpgradeTrain || t === 'UPGRADE',
-    );
-    const hasBuild = actionTypes.some(
-      t => t === AIActionType.BuildTrack || t === 'BUILD',
-    );
-    if (hasUpgrade && hasBuild) {
-      return {
-        success: false,
-        error: 'Cannot upgrade and build track in the same turn.',
       };
     }
 
@@ -881,7 +1172,17 @@ export class ActionResolver {
   static async heuristicFallback(
     context: GameContext,
     snapshot: WorldSnapshot,
+    { llmFailed = false }: { llmFailed?: boolean } = {},
   ): Promise<ResolvedAction> {
+    // 0. JIRA-120: If the LLM failed to produce a valid plan, discard immediately.
+    // The LLM's inability to plan IS the discard signal — no fallback busywork.
+    if (llmFailed && !context.isInitialBuild) {
+      console.warn(
+        `[heuristicFallback] JIRA-120: LLM planning failed — forcing DiscardHand`,
+      );
+      return ActionResolver.resolveDiscard(snapshot);
+    }
+
     // 1. Try to DELIVER if there are immediate opportunities
     if (context.canDeliver && context.canDeliver.length > 0) {
       // Pick the highest-payout delivery
@@ -889,15 +1190,13 @@ export class ActionResolver {
       const result = await ActionResolver.resolveDeliver(
         { load: best.loadType, at: best.deliveryCity },
         snapshot,
+        context,
       );
       if (result.success) return result;
     }
 
     // 1b. Try to PICKUP if there are available loads at current position
-    // JIRA-94: Skip pickup when broke — picking up a load you can't afford to deliver
-    // just creates a drop/pickup loop. Let step 1c fire to discard for new demand cards.
-    const isBrokeWithNoAffordableDemands = snapshot.bot.money < 5 && context.demands.every(d => !d.isAffordable);
-    if (context.canPickup && context.canPickup.length > 0 && !isBrokeWithNoAffordableDemands) {
+    if (context.canPickup && context.canPickup.length > 0) {
       const best = context.canPickup.reduce((a, b) => (a.bestPayout > b.bestPayout ? a : b));
       const result = await ActionResolver.resolvePickup(
         { load: best.loadType, at: best.supplyCity },
@@ -907,18 +1206,7 @@ export class ActionResolver {
       if (result.success) return result;
     }
 
-    // 1c. JIRA-71: Broke-bot discard — if cash < 5M and no demand is affordable,
-    // discard immediately instead of cycling through futile move/build/drop actions.
-    // Only skip if bot can deliver right now (step 1 above would have returned).
-    if (!context.isInitialBuild && snapshot.bot.money < 5 && context.demands.length > 0 &&
-        context.demands.every(d => !d.isAffordable) &&
-        (!context.canDeliver || context.canDeliver.length === 0)) {
-      console.warn(
-        `[heuristicFallback] JIRA-71: Broke bot detected — cash=${snapshot.bot.money}M, ` +
-        `no affordable demands. Discarding hand immediately.`,
-      );
-      return ActionResolver.resolveDiscard(snapshot);
-    }
+    // 1c. (moved to step 0 above — JIRA-120 forced discard is now first check)
 
     // 2. Try to MOVE toward a pickup or delivery city on the network
     if (snapshot.bot.position && !context.isInitialBuild) {
@@ -935,7 +1223,7 @@ export class ActionResolver {
 
       // 2b. If not carrying a load, move toward supply city on network
       for (const demand of [...context.demands].sort((a, b) => b.payout - a.payout)) {
-        if (!demand.isLoadOnTrain && demand.isSupplyOnNetwork && !demand.isSupplyReachable) {
+        if (!demand.isLoadOnTrain && demand.isSupplyOnNetwork && !demand.isSupplyReachable && demand.supplyCity) {
           const result = await ActionResolver.resolveMove(
             { to: demand.supplyCity },
             snapshot,
@@ -999,8 +1287,8 @@ export class ActionResolver {
     // If all higher-priority actions failed and the bot is carrying loads with
     // poor delivery feasibility, dropping the worst one frees a cargo slot so
     // future turns can pick up something useful instead of passing endlessly.
-    if (!context.isInitialBuild && snapshot.bot.loads.length > 0) {
-      const scored = snapshot.bot.loads.map(loadType => {
+    if (!context.isInitialBuild && context.loads.length > 0) {
+      const scored = context.loads.map(loadType => {
         const matchingDemands = context.demands.filter(d => d.loadType === loadType);
         if (matchingDemands.length === 0) return { loadType, score: Infinity };
         const bestScore = Math.min(
@@ -1018,6 +1306,7 @@ export class ActionResolver {
         const result = await ActionResolver.resolveDropLoad(
           { load: worst.loadType },
           snapshot,
+          context,
         );
         if (result.success) return result;
       }
@@ -1050,13 +1339,13 @@ export class ActionResolver {
 
   // ─── Helper Utilities ────────────────────────────────────────────────────
 
-  private static readonly TURN_BUILD_BUDGET = 20;
   private static readonly MONEY_RESERVE = 5;
 
   /**
    * Find grid coordinates for a city by name.
    * Returns the closest milepost to the bot's track network (or first match if no track).
-   * Excludes FerryPort-only mileposts since they are transit, not destinations.
+   * Prefers real city mileposts over FerryPort mileposts when both share the same name.
+   * Returns FerryPort mileposts only for pure ferry port cities (e.g., Dover, Calais).
    */
   private static findCityMilepost(
     cityName: string,
@@ -1065,10 +1354,19 @@ export class ActionResolver {
   ): GridCoord[] {
     const grid = loadGridPoints();
     const targets: GridCoord[] = [];
+    const ferryTargets: GridCoord[] = [];
     for (const [, point] of grid) {
-      if (point.name === cityName && point.terrain !== 7 /* FerryPort */) {
-        targets.push({ row: point.row, col: point.col });
+      if (point.name === cityName) {
+        if (point.terrain === TerrainType.FerryPort) {
+          ferryTargets.push({ row: point.row, col: point.col });
+        } else {
+          targets.push({ row: point.row, col: point.col });
+        }
       }
+    }
+    // If no non-ferry targets found, include ferry port mileposts (pure ferry cities like Dover)
+    if (targets.length === 0 && ferryTargets.length > 0) {
+      targets.push(...ferryTargets);
     }
     // Also check major city groups for center + outposts
     if (targets.length === 0) {
@@ -1149,10 +1447,146 @@ export class ActionResolver {
   }
 
   /**
+   * Filter segments to only those in the connected component containing `position`.
+   * Uses BFS on segment adjacency. Major city red areas act as implicit edges:
+   * two segment endpoints touching the same major city's outposts are connected.
+   * Ferry-port pairs act as a third adjacency class: when the bot has track touching
+   * both landings of a ferry, those landings are treated as connected.
+   */
+  static filterConnectedSegments(
+    segments: TrackSegment[],
+    position: { row: number; col: number },
+  ): TrackSegment[] {
+    return ActionResolver.filterConnectedSegmentsWithStats(segments, position).segments;
+  }
+
+  /**
+   * Internal variant of filterConnectedSegments that also returns diagnostic metadata.
+   * Returns both the filtered segments and the number of ferry-port pairs whose A↔B
+   * edge was added to the BFS adjacency graph (zero if no cross-ferry track exists).
+   */
+  static filterConnectedSegmentsWithStats(
+    segments: TrackSegment[],
+    position: { row: number; col: number },
+  ): { segments: TrackSegment[]; ferryCrossingsIncluded: number } {
+    if (segments.length === 0) return { segments: [], ferryCrossingsIncluded: 0 };
+
+    // Build adjacency: position key → set of connected position keys
+    const adjacency = new Map<string, Set<string>>();
+    const addEdge = (a: string, b: string): void => {
+      if (!adjacency.has(a)) adjacency.set(a, new Set());
+      if (!adjacency.has(b)) adjacency.set(b, new Set());
+      adjacency.get(a)!.add(b);
+      adjacency.get(b)!.add(a);
+    };
+
+    // Add direct segment edges
+    for (const seg of segments) {
+      const fromKey = `${seg.from.row},${seg.from.col}`;
+      const toKey = `${seg.to.row},${seg.to.col}`;
+      addEdge(fromKey, toKey);
+    }
+
+    // Add implicit major city red area edges: all outposts of the same major city are connected
+    const majorCityLookup = getMajorCityLookup();
+    const majorCityGroupsList = getMajorCityGroups();
+    const cityGroupMap = new Map(majorCityGroupsList.map(g => [g.cityName, g]));
+
+    // Collect all segment endpoint keys
+    const endpointKeys = new Set<string>();
+    for (const seg of segments) {
+      endpointKeys.add(`${seg.from.row},${seg.from.col}`);
+      endpointKeys.add(`${seg.to.row},${seg.to.col}`);
+    }
+
+    // For each major city, connect all of its mileposts that appear in our endpoints
+    const citiesProcessed = new Set<string>();
+    for (const key of endpointKeys) {
+      const cityName = majorCityLookup.get(key);
+      if (!cityName || citiesProcessed.has(cityName)) continue;
+      citiesProcessed.add(cityName);
+
+      const group = cityGroupMap.get(cityName);
+      if (!group) continue;
+
+      // Collect all mileposts for this city (center + outposts)
+      const cityKeys: string[] = [];
+      for (const point of [group.center, ...group.outposts]) {
+        cityKeys.push(`${point.row},${point.col}`);
+      }
+
+      // Connect all pairs that exist in our adjacency graph or as the bot position
+      for (let i = 0; i < cityKeys.length; i++) {
+        for (let j = i + 1; j < cityKeys.length; j++) {
+          addEdge(cityKeys[i], cityKeys[j]);
+        }
+      }
+    }
+
+    // Add ferry-port adjacency edges: when the bot has track touching both landings
+    // of a ferry crossing, treat those landings as connected (same as major-city red area).
+    // This allows the BFS to see the bot's mainland network from an island position.
+    let ferryCrossingsIncluded = 0;
+    for (const ferry of getFerryEdges()) {
+      const keyA = `${ferry.pointA.row},${ferry.pointA.col}`;
+      const keyB = `${ferry.pointB.row},${ferry.pointB.col}`;
+      if (endpointKeys.has(keyA) && endpointKeys.has(keyB)) {
+        addEdge(keyA, keyB);
+        ferryCrossingsIncluded++;
+      }
+    }
+
+    // Also check if bot position is at a major city — add its outposts to adjacency
+    const posKey = `${position.row},${position.col}`;
+    const botCityName = majorCityLookup.get(posKey);
+    if (botCityName && !citiesProcessed.has(botCityName)) {
+      const group = cityGroupMap.get(botCityName);
+      if (group) {
+        const cityKeys: string[] = [];
+        for (const point of [group.center, ...group.outposts]) {
+          cityKeys.push(`${point.row},${point.col}`);
+        }
+        for (let i = 0; i < cityKeys.length; i++) {
+          for (let j = i + 1; j < cityKeys.length; j++) {
+            addEdge(cityKeys[i], cityKeys[j]);
+          }
+        }
+      }
+    }
+
+    // BFS from bot position
+    const visited = new Set<string>();
+    const queue: string[] = [posKey];
+    visited.add(posKey);
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const neighbors = adjacency.get(current);
+      if (!neighbors) continue;
+      for (const neighbor of neighbors) {
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor);
+          queue.push(neighbor);
+        }
+      }
+    }
+
+    // Filter segments: keep only those where both endpoints are in the visited set
+    const filtered = segments.filter(seg => {
+      const fromKey = `${seg.from.row},${seg.from.col}`;
+      const toKey = `${seg.to.row},${seg.to.col}`;
+      return visited.has(fromKey) && visited.has(toKey);
+    });
+
+    return { segments: filtered, ferryCrossingsIncluded };
+  }
+
+  /**
    * Build a set of edges owned by other players (Right of Way rule).
    * Format: "row,col-row,col" for each direction.
    */
-  private static getOccupiedEdges(snapshot: WorldSnapshot): Set<string> {
+  /** @internal Widened to public static for RouteDetourEstimator (JIRA-214 P1). */
+  public static getOccupiedEdges(snapshot: WorldSnapshot): Set<string> {
     const occupied = new Set<string>();
     for (const pt of snapshot.allPlayerTracks) {
       if (pt.playerId === snapshot.bot.playerId) continue;
@@ -1168,7 +1602,7 @@ export class ActionResolver {
 
   /** Compute remaining build budget for this turn. */
   private static getBuildBudget(snapshot: WorldSnapshot, turnBuildCost: number = 0): number {
-    return Math.min(ActionResolver.TURN_BUILD_BUDGET - turnBuildCost, snapshot.bot.money);
+    return Math.min(TURN_BUILD_BUDGET - turnBuildCost, snapshot.bot.money);
   }
 
   /**

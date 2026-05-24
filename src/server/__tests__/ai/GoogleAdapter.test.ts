@@ -206,7 +206,7 @@ describe('GoogleAdapter', () => {
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(callBody.thinkingConfig).toEqual({ thinkingLevel: 'high' });
+      expect(callBody.generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'high' });
     });
 
     it('should default thinkingLevel to medium when effort is not provided for Gemini 3', async () => {
@@ -219,7 +219,7 @@ describe('GoogleAdapter', () => {
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(callBody.thinkingConfig).toEqual({ thinkingLevel: 'medium' });
+      expect(callBody.generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'medium' });
     });
 
     it('should include thinkingBudget: -1 for Gemini 2.5 models when thinking is enabled', async () => {
@@ -232,7 +232,7 @@ describe('GoogleAdapter', () => {
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(callBody.thinkingConfig).toEqual({ thinkingBudget: -1 });
+      expect(callBody.generationConfig.thinkingConfig).toEqual({ thinkingBudget: -1 });
     });
 
     it('should not include thinkingConfig when thinking is not enabled', async () => {
@@ -244,7 +244,7 @@ describe('GoogleAdapter', () => {
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(callBody.thinkingConfig).toBeUndefined();
+      expect(callBody.generationConfig.thinkingConfig).toBeUndefined();
     });
 
     it('should not include thinkingConfig for non-thinking models', async () => {
@@ -257,7 +257,7 @@ describe('GoogleAdapter', () => {
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(callBody.thinkingConfig).toBeUndefined();
+      expect(callBody.generationConfig.thinkingConfig).toBeUndefined();
     });
   });
 
@@ -278,13 +278,28 @@ describe('GoogleAdapter', () => {
       expect(callBody.generationConfig.responseSchema).toEqual(testSchema);
     });
 
-    it('should NOT include responseMimeType and responseSchema for Gemini 3 models', async () => {
+    it('should include responseMimeType and responseSchema for Gemini 3 models without thinking', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse());
 
       await adapter.chat({
         ...makeRequest(),
         model: 'gemini-3-pro-preview',
         outputSchema: testSchema,
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.generationConfig.responseMimeType).toBe('application/json');
+      expect(callBody.generationConfig.responseSchema).toEqual(testSchema);
+    });
+
+    it('should NOT include responseMimeType and responseSchema for Gemini 3 models with thinking', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-3-pro-preview',
+        outputSchema: testSchema,
+        thinking: { type: 'adaptive' },
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
@@ -473,6 +488,105 @@ describe('GoogleAdapter', () => {
       })).rejects.toThrow(ProviderAPIError);
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('stripAdditionalProperties', () => {
+    it('should remove additionalProperties: false from a flat schema', () => {
+      const schema = {
+        type: 'object',
+        additionalProperties: false,
+        properties: { action: { type: 'string' } },
+        required: ['action'],
+      };
+      const result = GoogleAdapter.stripAdditionalProperties(schema) as Record<string, unknown>;
+      expect(result).toEqual({
+        type: 'object',
+        properties: { action: { type: 'string' } },
+        required: ['action'],
+      });
+      // Original not mutated
+      expect(schema.additionalProperties).toBe(false);
+    });
+
+    it('should remove additionalProperties: { type: "string" } (value schema form)', () => {
+      const schema = {
+        type: 'object',
+        additionalProperties: { type: 'string' },
+        properties: { details: { type: 'object' } },
+      };
+      const result = GoogleAdapter.stripAdditionalProperties(schema) as Record<string, unknown>;
+      expect(result).not.toHaveProperty('additionalProperties');
+    });
+
+    it('should recursively strip from nested objects, arrays, and oneOf branches', () => {
+      const schema = {
+        type: 'object',
+        additionalProperties: false,
+        oneOf: [
+          {
+            properties: {
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: { name: { type: 'string' } },
+                },
+              },
+            },
+            additionalProperties: false,
+          },
+        ],
+      };
+      const result = GoogleAdapter.stripAdditionalProperties(schema) as any;
+      expect(result.additionalProperties).toBeUndefined();
+      expect(result.oneOf[0].additionalProperties).toBeUndefined();
+      expect(result.oneOf[0].properties.items.items.additionalProperties).toBeUndefined();
+      // Preserves other fields
+      expect(result.oneOf[0].properties.items.items.properties.name.type).toBe('string');
+    });
+
+    it('should not mutate the original schema object', () => {
+      const schema = {
+        type: 'object',
+        additionalProperties: false,
+        properties: { nested: { type: 'object', additionalProperties: false } },
+      };
+      const original = JSON.stringify(schema);
+      GoogleAdapter.stripAdditionalProperties(schema);
+      expect(JSON.stringify(schema)).toBe(original);
+    });
+
+    it('should handle primitives and null gracefully', () => {
+      expect(GoogleAdapter.stripAdditionalProperties('string')).toBe('string');
+      expect(GoogleAdapter.stripAdditionalProperties(42)).toBe(42);
+      expect(GoogleAdapter.stripAdditionalProperties(null)).toBe(null);
+      expect(GoogleAdapter.stripAdditionalProperties(true)).toBe(true);
+    });
+
+    it('should strip additionalProperties from schema before sending to Gemini API', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      const schemaWithAdditional = {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          action: { type: 'string' },
+          nested: { type: 'object', additionalProperties: false, properties: { x: { type: 'number' } } },
+        },
+      };
+
+      await adapter.chat({
+        ...makeRequest(),
+        outputSchema: schemaWithAdditional,
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.generationConfig.responseSchema.additionalProperties).toBeUndefined();
+      expect(callBody.generationConfig.responseSchema.properties.nested.additionalProperties).toBeUndefined();
+      // Original not mutated
+      expect(schemaWithAdditional.additionalProperties).toBe(false);
     });
   });
 

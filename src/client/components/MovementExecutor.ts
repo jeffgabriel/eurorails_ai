@@ -1,6 +1,6 @@
 import "phaser";
 import {
-  GameState,
+  FullGameState,
   GridPoint,
   Player,
   TerrainType,
@@ -53,7 +53,7 @@ export type ExitMovementModeCallback = () => void;
  */
 export class MovementExecutor {
   private scene: Phaser.Scene;
-  private gameState: GameState;
+  private gameState: FullGameState;
   private trainMovementManager: TrainMovementManager;
   private playerStateService: PlayerStateService;
   private trackDrawingManager: TrackDrawingManager;
@@ -64,7 +64,7 @@ export class MovementExecutor {
 
   constructor(
     scene: Phaser.Scene,
-    gameState: GameState,
+    gameState: FullGameState,
     trainMovementManager: TrainMovementManager,
     playerStateService: PlayerStateService,
     trackDrawingManager: TrackDrawingManager

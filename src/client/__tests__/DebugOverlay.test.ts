@@ -1,6 +1,6 @@
 import { DebugOverlay, BotTurnEntry } from '../components/DebugOverlay';
 import { GameStateService } from '../services/GameStateService';
-import { GameState } from '../../shared/types/GameTypes';
+import { FullGameState } from '../../shared/types/GameTypes';
 
 // Mock GameStateService
 jest.mock('../services/GameStateService', () => ({
@@ -12,7 +12,7 @@ jest.mock('../services/GameStateService', () => ({
   })),
 }));
 
-function makeGameState(overrides: Partial<GameState> = {}): GameState {
+function makeGameState(overrides: Partial<FullGameState> = {}): FullGameState {
   return {
     id: 'test-game-1234-5678',
     status: 'active',
@@ -33,7 +33,7 @@ function makeGameState(overrides: Partial<GameState> = {}): GameState {
       },
     ],
     ...overrides,
-  } as GameState;
+  } as FullGameState;
 }
 
 describe('DebugOverlay', () => {

@@ -1,6 +1,6 @@
 // src/client/scenes/LoadDialogScene.ts
 import { Scene } from 'phaser';
-import { CityData, Player, GameState, TRAIN_PROPERTIES } from '../../shared/types/GameTypes';
+import { CityData, Player, FullGameState, TRAIN_PROPERTIES } from '../../shared/types/GameTypes';
 import { LoadService } from '../services/LoadService';
 import { GameStateService } from '../services/GameStateService';
 import { PlayerStateService } from '../services/PlayerStateService';
@@ -11,7 +11,7 @@ import { TurnActionManager } from '../components/TurnActionManager';
 interface LoadDialogConfig {
     city: CityData;
     player: Player;
-    gameState: GameState;
+    gameState: FullGameState;
     playerStateService: PlayerStateService;
     onClose: () => void;
     onUpdateTrainCard: () => void;
@@ -23,7 +23,7 @@ interface LoadDialogConfig {
 export class LoadDialogScene extends Scene {
     private city!: CityData;
     private player!: Player;
-    private gameState!: GameState;
+    private gameState!: FullGameState;
     private onClose!: () => void;
     private onUpdateTrainCard!: () => void;
     private onUpdateHandDisplay!: () => void;

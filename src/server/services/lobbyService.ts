@@ -921,7 +921,8 @@ export class LobbyService {
   static async addBot(
     gameId: string,
     creatorUserId: string,
-    botConfig: BotConfig
+    botConfig: BotConfig,
+    requestedColor?: string
   ): Promise<GamePlayer> {
     if (!gameId || gameId.trim().length === 0) {
       throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
@@ -998,7 +999,18 @@ export class LobbyService {
         [gameId]
       );
       const usedColorSet = new Set(usedColors.rows.map((r: any) => r.color));
-      const availableColor = allColors.find(c => !usedColorSet.has(c)) || allColors[0];
+
+      let availableColor: string;
+      if (requestedColor !== undefined) {
+        // Caller supplied a color — verify it is not already used
+        if (usedColorSet.has(requestedColor)) {
+          throw new LobbyError('Color already taken', 'COLOR_TAKEN', 400);
+        }
+        availableColor = requestedColor;
+      } else {
+        // Auto-pick: first color not yet used
+        availableColor = allColors.find(c => !usedColorSet.has(c)) || allColors[0];
+      }
 
       // Create bot player
       const botPlayer: GamePlayer = {

@@ -5,12 +5,14 @@
  */
 
 import { RouteValidator } from '../../services/ai/RouteValidator';
+import { TRIP_PLAN_SCHEMA, ROUTE_SCHEMA } from '../../services/ai/schemas';
 import {
   StrategicRoute,
   GameContext,
   WorldSnapshot,
   TerrainType,
   DemandContext,
+  GameState,
 } from '../../../shared/types/GameTypes';
 import { GridPointData } from '../../services/MapTopology';
 
@@ -73,6 +75,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     demands: [makeDemand()],
     canDeliver: [],
     canPickup: [],
+    gameState: GameState.Mid,
     ...overrides,
   } as GameContext;
 }
@@ -110,6 +113,7 @@ function makeRoute(overrides: Partial<StrategicRoute> = {}): StrategicRoute {
     phase: 'build',
     createdAtTurn: 5,
     reasoning: 'Test route',
+
     ...overrides,
   };
 }
@@ -140,145 +144,7 @@ describe('RouteValidator', () => {
     expect(result.errors).toHaveLength(0);
   });
 
-  describe('reorderStopsByProximity', () => {
-    beforeEach(() => {
-      // Set up grid points for test cities
-      mockGridPoints.set('10,5', { row: 10, col: 5, terrain: TerrainType.MajorCity, name: 'Essen' });
-      mockGridPoints.set('30,20', { row: 30, col: 20, terrain: TerrainType.MajorCity, name: 'Ruhr' });
-      mockGridPoints.set('12,7', { row: 12, col: 7, terrain: TerrainType.MajorCity, name: 'Valencia' });
-      mockGridPoints.set('25,15', { row: 25, col: 15, terrain: TerrainType.MajorCity, name: 'Berlin' });
-      mockGridPoints.set('40,25', { row: 40, col: 25, terrain: TerrainType.MajorCity, name: 'Praha' });
-    });
-
-    it('should reorder closer pickup before farther pickup', () => {
-      // Bot at Essen (10,5). Valencia (12,7) is closer than Ruhr (30,20).
-      mockEstimateHopDistance.mockImplementation(
-        (fromRow: number, fromCol: number, toRow: number, toCol: number) => {
-          // Essen→Valencia = 3, Essen→Ruhr = 20, Valencia→Ruhr = 18, Ruhr→Berlin = 10, Valencia→Berlin = 15
-          if (fromRow === 10 && toRow === 12) return 3;   // Essen→Valencia
-          if (fromRow === 10 && toRow === 30) return 20;  // Essen→Ruhr
-          if (fromRow === 12 && toRow === 30) return 18;  // Valencia→Ruhr
-          if (fromRow === 12 && toRow === 25) return 15;  // Valencia→Berlin
-          if (fromRow === 30 && toRow === 25) return 10;  // Ruhr→Berlin
-          if (fromRow === 30 && toRow === 12) return 18;  // Ruhr→Valencia
-          return 10;
-        },
-      );
-
-      const stops = [
-        { action: 'pickup' as const, loadType: 'Steel', city: 'Ruhr' },
-        { action: 'deliver' as const, loadType: 'Steel', city: 'Berlin', demandCardId: 1, payment: 15 },
-        { action: 'pickup' as const, loadType: 'Oranges', city: 'Valencia' },
-        { action: 'deliver' as const, loadType: 'Oranges', city: 'Ruhr', demandCardId: 2, payment: 10 },
-      ];
-
-      const result = RouteValidator.reorderStopsByProximity(
-        stops,
-        { row: 10, col: 5 },
-        mockGridPoints,
-      );
-
-      // Valencia (3 hops) should come before Ruhr (20 hops)
-      expect(result[0]).toEqual(expect.objectContaining({ action: 'pickup', city: 'Valencia' }));
-      // Oranges deliver at Ruhr should follow Oranges pickup
-      const orangesPickupIdx = result.findIndex(s => s.action === 'pickup' && s.loadType === 'Oranges');
-      const orangesDeliverIdx = result.findIndex(s => s.action === 'deliver' && s.loadType === 'Oranges');
-      expect(orangesPickupIdx).toBeLessThan(orangesDeliverIdx);
-    });
-
-    it('should maintain pickup-before-delivery constraint', () => {
-      mockEstimateHopDistance.mockImplementation(
-        (fromRow: number, _fromCol: number, toRow: number, _toCol: number) => {
-          // Make Berlin (deliver city) closer than Essen (pickup city)
-          if (toRow === 25) return 2;  // →Berlin: very close
-          if (toRow === 10) return 15; // →Essen: far
-          return 10;
-        },
-      );
-
-      const stops = [
-        { action: 'pickup' as const, loadType: 'Coal', city: 'Essen' },
-        { action: 'deliver' as const, loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
-      ];
-
-      const result = RouteValidator.reorderStopsByProximity(
-        stops,
-        { row: 30, col: 20 }, // bot far from both
-        mockGridPoints,
-      );
-
-      // Even though Berlin is closer, pickup must come before deliver
-      expect(result[0]).toEqual(expect.objectContaining({ action: 'pickup', city: 'Essen' }));
-      expect(result[1]).toEqual(expect.objectContaining({ action: 'deliver', city: 'Berlin' }));
-    });
-
-    it('should return single-stop route unchanged', () => {
-      const stops = [
-        { action: 'pickup' as const, loadType: 'Coal', city: 'Essen' },
-      ];
-
-      const result = RouteValidator.reorderStopsByProximity(
-        stops,
-        { row: 10, col: 5 },
-        mockGridPoints,
-      );
-
-      expect(result).toEqual(stops);
-      expect(result).toHaveLength(1);
-    });
-
-    it('should not change already-optimal order', () => {
-      mockEstimateHopDistance.mockImplementation(
-        (_fromRow: number, _fromCol: number, toRow: number, _toCol: number) => {
-          if (toRow === 10) return 2;  // Essen: closest
-          if (toRow === 25) return 5;  // Berlin: second
-          return 20;
-        },
-      );
-
-      const stops = [
-        { action: 'pickup' as const, loadType: 'Coal', city: 'Essen' },
-        { action: 'deliver' as const, loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
-      ];
-
-      const result = RouteValidator.reorderStopsByProximity(
-        stops,
-        { row: 8, col: 4 }, // near Essen
-        mockGridPoints,
-      );
-
-      // Order should be unchanged: pickup Essen then deliver Berlin
-      expect(result[0]).toBe(stops[0]);
-      expect(result[1]).toBe(stops[1]);
-    });
-
-    it('should handle same-city pickup and deliver correctly', () => {
-      mockEstimateHopDistance.mockImplementation(
-        (_fromRow: number, _fromCol: number, toRow: number, _toCol: number) => {
-          if (toRow === 30) return 5;  // Ruhr
-          if (toRow === 40) return 20; // Praha
-          return 10;
-        },
-      );
-
-      const stops = [
-        { action: 'pickup' as const, loadType: 'Steel', city: 'Ruhr' },
-        { action: 'deliver' as const, loadType: 'Oranges', city: 'Ruhr', demandCardId: 2, payment: 10 },
-        { action: 'deliver' as const, loadType: 'Steel', city: 'Praha', demandCardId: 1, payment: 20 },
-      ];
-
-      const result = RouteValidator.reorderStopsByProximity(
-        stops,
-        { row: 10, col: 5 },
-        mockGridPoints,
-      );
-
-      // Steel pickup must come before Steel deliver
-      const steelPickupIdx = result.findIndex(s => s.action === 'pickup' && s.loadType === 'Steel');
-      const steelDeliverIdx = result.findIndex(s => s.action === 'deliver' && s.loadType === 'Steel');
-      expect(steelPickupIdx).toBeLessThan(steelDeliverIdx);
-    });
-  });
+  // reorderStopsByProximity tests migrated to RouteOptimizer.test.ts (JIRA-184)
 
   describe('checkCumulativeBudget — delivery payout credit', () => {
     it('should credit payout from demand.payout when stop.payment is undefined', () => {
@@ -509,5 +375,580 @@ describe('RouteValidator', () => {
       expect(result.valid).toBe(true);
       expect(result.errors).toHaveLength(0);
     });
+  });
+
+  // JIRA-107: "OnTrain" sentinel prevents phantom pickup stops
+  describe('JIRA-107: OnTrain sentinel', () => {
+    it('should reject pickup at a city that does not match any demand supplyCity', () => {
+      // LLM hallucinates pickup(Fish@SomeCity) but the only Fish demand has supplyCity "OnTrain"
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Fish', city: 'Hamburg' },
+          { action: 'deliver', loadType: 'Fish', city: 'Berlin', demandCardId: 1, payment: 20 },
+        ],
+      });
+      const context = makeContext({
+        demands: [
+          makeDemand({
+            loadType: 'Fish',
+            supplyCity: 'OnTrain',
+            deliveryCity: 'Berlin',
+            isLoadOnTrain: true,
+          }),
+        ],
+      });
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+      // The pickup stop should be pruned — Hamburg doesn't match "OnTrain"
+      // Route may be invalid if pruning leaves no viable delivery path
+      const errors = result.errors ?? [];
+      const hasPickupMismatchError = errors.some(e => e.includes('not a known supply city'));
+      expect(hasPickupMismatchError).toBe(true);
+    });
+  });
+
+  // JIRA-121 / JIRA-123 reorderStopsByProximity tests migrated to RouteOptimizer.test.ts (JIRA-184)
+
+  // ── JIRA-123: Same-card conflict detection ──────────────────────────────────
+
+  describe('JIRA-123: same-card conflict detection', () => {
+    it('should reject lower-efficiency deliver when two delivers share the same card', () => {
+      // Card 1 has two demands: Coal→Berlin (5 M/turn) and Wine→Paris (3 M/turn)
+      // Route tries to deliver both — validator should keep Coal (higher efficiency)
+      const coalDemand = makeDemand({
+        cardIndex: 1,
+        loadType: 'Coal',
+        supplyCity: 'Essen',
+        deliveryCity: 'Berlin',
+        payout: 15,
+        efficiencyPerTurn: 5,
+      });
+      const wineDemand = makeDemand({
+        cardIndex: 1,
+        loadType: 'Wine',
+        supplyCity: 'Bordeaux',
+        deliveryCity: 'Paris',
+        payout: 12,
+        efficiencyPerTurn: 3,
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+          { action: 'pickup', loadType: 'Wine', city: 'Bordeaux' },
+          { action: 'deliver', loadType: 'Wine', city: 'Paris', demandCardId: 1, payment: 12 },
+        ],
+      });
+      const context = makeContext({ demands: [coalDemand, wineDemand] });
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+
+      // Wine deliver should be pruned (lower efficiency), Coal should survive
+      expect(result.valid).toBe(true);
+      expect(result.prunedRoute).toBeDefined();
+      expect(result.prunedRoute!.stops.some(s => s.loadType === 'Coal' && s.action === 'deliver')).toBe(true);
+      expect(result.prunedRoute!.stops.some(s => s.loadType === 'Wine')).toBe(false);
+      expect(result.errors.some(e => e.includes('card #1'))).toBe(true);
+    });
+
+    it('should pass both delivers when they reference different cards', () => {
+      const coalDemand = makeDemand({
+        cardIndex: 1,
+        loadType: 'Coal',
+        supplyCity: 'Essen',
+        deliveryCity: 'Berlin',
+        payout: 15,
+        efficiencyPerTurn: 5,
+      });
+      const wineDemand = makeDemand({
+        cardIndex: 2,
+        loadType: 'Wine',
+        supplyCity: 'Bordeaux',
+        deliveryCity: 'Paris',
+        payout: 12,
+        efficiencyPerTurn: 3,
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+          { action: 'pickup', loadType: 'Wine', city: 'Bordeaux' },
+          { action: 'deliver', loadType: 'Wine', city: 'Paris', demandCardId: 2, payment: 12 },
+        ],
+      });
+      const context = makeContext({ demands: [coalDemand, wineDemand] });
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+
+      expect(result.valid).toBe(true);
+      // No pruning needed — no same-card conflict
+      const deliverStops = (result.prunedRoute?.stops ?? route.stops).filter(s => s.action === 'deliver');
+      expect(deliverStops).toHaveLength(2);
+    });
+
+    it('should pass single deliver stop without conflict', () => {
+      const route = makeRoute();
+      const result = RouteValidator.validate(route, makeContext(), makeSnapshot());
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
+  });
+
+  // JIRA-123 detour-cost threshold tests migrated to RouteOptimizer.test.ts (JIRA-184)
+
+  // ── JIRA-181: Carried-load fix ───────────────────────────────────────────────
+
+  describe('JIRA-181: carried-load DELIVER feasibility', () => {
+    it('DELIVER Steel is feasible when bot carries Steel and no PICKUP Steel is in the candidate', () => {
+      // Bot is carrying Steel — deliver without any PICKUP stop in the route
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin', payout: 15 })],
+        loads: ['Steel'], // JIRA-222: validator reads context.loads (planner-working-state)
+      });
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = ['Steel']; // bot carries Steel
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // Should be valid — Steel is carried, so DELIVER is feasible
+      expect(result.valid).toBe(true);
+      const finalStops = result.prunedRoute?.stops ?? route.stops;
+      expect(finalStops.some(s => s.action === 'deliver' && s.loadType === 'Steel')).toBe(true);
+    });
+
+    it('DELIVER Ham is infeasible when bot does not carry Ham and no PICKUP Ham is in the candidate (orphan deliver)', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Ham', city: 'Stuttgart', demandCardId: 2, payment: 10 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Ham', supplyCity: 'Frankfurt', deliveryCity: 'Stuttgart', payout: 10 })],
+      });
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = []; // bot does NOT carry Ham
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // All stops infeasible — DELIVER Ham is orphaned
+      expect(result.valid).toBe(false);
+    });
+
+    it('DELIVER Steel is infeasible when demandCardId is 0', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Ruhr' },
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 0, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot();
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // DELIVER with demandCardId=0 is rejected (use DROP instead)
+      expect(result.valid).toBe(false);
+    });
+
+    it('DELIVER Steel is infeasible when demandCardId is unmatched in resolvedDemands', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Ruhr' },
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 999, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot();
+      // resolvedDemands is non-empty, but card 999 is not in it
+      snapshot.bot.resolvedDemands = [
+        { cardId: 1, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 10 }] },
+      ];
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // DELIVER with unmatched demandCardId is rejected
+      expect(result.valid).toBe(false);
+    });
+
+    it('DROP Sheep @ Holland is feasible at any reachable city regardless of demand cards', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'drop', loadType: 'Sheep', city: 'Holland' },
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot();
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // DROP stop should survive — it's always feasible
+      expect(result.valid).toBe(true);
+      const finalStops = result.prunedRoute?.stops ?? route.stops;
+      expect(finalStops.some(s => s.action === 'drop' && s.loadType === 'Sheep')).toBe(true);
+    });
+
+    it('turn-54 Candidate 2 fixture: PICKUP Steel@null, DELIVER Steel@Wroclaw, DELIVER Ham@Stuttgart with carrying [Sheep, Steel] → survives as [DELIVER Steel@Wroclaw]', () => {
+      // This is the exact scenario from the JIRA-181 bug report.
+      // PICKUP Steel @ null is infeasible (no known supply city).
+      // DELIVER Steel @ Wroclaw: Steel IS carried — feasible.
+      // DELIVER Ham @ Stuttgart: Ham NOT carried, no PICKUP Ham — infeasible (orphan).
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'null' }, // sentinel city name
+          { action: 'deliver', loadType: 'Steel', city: 'Wroclaw', demandCardId: 1, payment: 14 },
+          { action: 'deliver', loadType: 'Ham', city: 'Stuttgart', demandCardId: 2, payment: 12 },
+        ],
+      });
+      const context = makeContext({
+        demands: [
+          makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Wroclaw', payout: 14 }),
+          makeDemand({ cardIndex: 2, loadType: 'Ham', supplyCity: 'Frankfurt', deliveryCity: 'Stuttgart', payout: 12 }),
+        ],
+        loads: ['Sheep', 'Steel'], // JIRA-222: validator reads context.loads (planner-working-state)
+      });
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = ['Sheep', 'Steel']; // bot carries Sheep and Steel
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // Route should be valid but pruned — only DELIVER Steel@Wroclaw survives
+      expect(result.valid).toBe(true);
+      const finalStops = result.prunedRoute?.stops ?? route.stops;
+      expect(finalStops).toHaveLength(1);
+      expect(finalStops[0]).toMatchObject({ action: 'deliver', loadType: 'Steel', city: 'Wroclaw' });
+    });
+
+    it('removed pickup→deliver pair-prune: DELIVER Steel kept when PICKUP Steel pruned but bot carries Steel', () => {
+      // Old behavior: PICKUP Steel @ bad-city pruned → DELIVER Steel pruned (bug).
+      // New behavior: PICKUP Steel @ bad-city pruned → DELIVER Steel KEPT (bot carries Steel).
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'NonExistentCity' }, // infeasible
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin', payout: 15 })],
+        loads: ['Steel'], // JIRA-222: validator reads context.loads (planner-working-state)
+      });
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = ['Steel']; // bot carries Steel
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // PICKUP is infeasible (wrong city), but DELIVER should survive because bot carries Steel
+      expect(result.valid).toBe(true);
+      const finalStops = result.prunedRoute?.stops ?? route.stops;
+      expect(finalStops.some(s => s.action === 'deliver' && s.loadType === 'Steel')).toBe(true);
+    });
+
+    it('retained deliver→pickup pair-prune: PICKUP Steel pruned when DELIVER Steel is infeasible (no card)', () => {
+      // When the DELIVER is infeasible (wrong delivery city, no demand match),
+      // the paired PICKUP should also be pruned.
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Essen' }, // valid supply city
+          { action: 'deliver', loadType: 'Steel', city: 'NonExistentCity', demandCardId: 1, payment: 15 }, // no demand
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot();
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // DELIVER is infeasible (no demand for NonExistentCity) → PICKUP is also pruned
+      expect(result.valid).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it('regression: single-component trip (no carried loads, standard PICKUP + DELIVER) produces identical validator output to pre-change golden snapshot', () => {
+      // Golden snapshot: standard PICKUP Coal @ Essen, DELIVER Coal @ Berlin
+      // Validator should accept both stops and return valid=true, no errors, no pruning.
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot(); // no carried loads, no resolvedDemands
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // Identical to pre-change: valid, no errors, no pruning
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+      expect(result.prunedRoute).toBeUndefined();
+    });
+  });
+
+  // ── JIRA-211: running-cash drain on infeasible stops ──────────────────────────
+
+  describe('JIRA-211: runningCash not drained by infeasible stops', () => {
+    it('should prune unaffordable Antwerpen deliver and keep affordable Warszawa pickup + Milano deliver', () => {
+      // Game scenario from JIRA-211 (game b1dc793c T13):
+      //   bot.money = 27M, bot.loads = ['Labor']
+      //   Stop 1: deliver Labor @ Antwerpen — needs 36M track, only 27M → infeasible
+      //   Stop 2: pickup Ham @ Warszawa — needs 4M track
+      //   Stop 3: deliver Ham @ Milano — needs 19M track, payout 26M
+      //
+      // Bug: without the fix, infeasible Antwerpen stop drained runningCash by 36M
+      // then credited 26M payout, leaving only 27-36+26=17M for Warszawa (ok) but
+      // then 17-4-19=-6M for Milano → false rejection of Milano.
+      //
+      // Fix: infeasible stop is skipped entirely — runningCash stays at 27M.
+      // Warszawa: 27-4 = 23M remaining. Milano: 23M ≥ 19M → feasible.
+      // The error message must report "27M" (actual cash), NOT "13M" (bug's phantom value).
+
+      const laborDemand = makeDemand({
+        cardIndex: 91,
+        loadType: 'Labor',
+        supplyCity: 'OnTrain',
+        deliveryCity: 'Antwerpen',
+        payout: 26,
+        isLoadOnTrain: true,
+        isSupplyOnNetwork: true,
+        isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 0,
+        estimatedTrackCostToDelivery: 36,
+      });
+
+      const hamDemand = makeDemand({
+        cardIndex: 53,
+        loadType: 'Ham',
+        supplyCity: 'Warszawa',
+        deliveryCity: 'Milano',
+        payout: 26,
+        isSupplyOnNetwork: false,
+        isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 4,
+        estimatedTrackCostToDelivery: 19,
+      });
+
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Labor', city: 'Antwerpen', demandCardId: 91, payment: 26 },
+          { action: 'pickup', loadType: 'Ham', city: 'Warszawa' },
+          { action: 'deliver', loadType: 'Ham', city: 'Milano', demandCardId: 53, payment: 26 },
+        ],
+      });
+
+      const context = makeContext({
+        demands: [laborDemand, hamDemand],
+        loads: ['Labor'], // JIRA-222: validator reads context.loads (planner-working-state)
+      });
+      const snapshot = makeSnapshot(27);
+      snapshot.bot.loads = ['Labor'];
+
+      const result = RouteValidator.validate(route, context, snapshot);
+
+      // Route is valid — Warszawa pickup + Milano deliver survive after Antwerpen pruned
+      expect(result.valid).toBe(true);
+      expect(result.prunedRoute).toBeDefined();
+
+      // Pruned route contains exactly the two affordable stops
+      const stops = result.prunedRoute!.stops;
+      expect(stops).toHaveLength(2);
+      expect(stops[0]).toMatchObject({ action: 'pickup', loadType: 'Ham', city: 'Warszawa' });
+      expect(stops[1]).toMatchObject({ action: 'deliver', loadType: 'Ham', city: 'Milano' });
+
+      // Antwerpen budget error appears — with actual cash (27M), NOT the bug's phantom value (13M)
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain('Antwerpen');
+      expect(result.errors[0]).toContain('27M');
+      expect(result.errors[0]).not.toContain('13M');
+
+      // Milano is feasible — no error for it
+      expect(result.errors.every(e => !e.includes('Milano'))).toBe(true);
+    });
+  });
+});
+
+// ── JIRA-214: insertionDetourCostOverride-aware cumulative budget gate ───────
+
+describe('JIRA-214: insertionDetourCostOverride in checkCumulativeBudget (AC5)', () => {
+  it('(a) stop with insertionDetourCostOverride smaller than estimatedTrackCostToSupply survives budget check', () => {
+    // Demand says track costs 40M to reach supply — would normally fail with 30M cash.
+    // Override says the marginal cost is only 5M — stop should survive.
+    const demand = makeDemand({
+      cardIndex: 10,
+      loadType: 'Coal',
+      supplyCity: 'Essen',
+      deliveryCity: 'Berlin',
+      payout: 20,
+      isSupplyOnNetwork: false,
+      isDeliveryOnNetwork: true,
+      estimatedTrackCostToSupply: 40, // without override: would fail (40 > 30)
+      estimatedTrackCostToDelivery: 0,
+      isSupplyReachable: true,
+      isDeliveryReachable: true,
+    });
+
+    const route = makeRoute({
+      stops: [
+        {
+          action: 'pickup',
+          loadType: 'Coal',
+          city: 'Essen',
+          insertionDetourCostOverride: 5, // marginal cost per RouteDetourEstimator
+        },
+        {
+          action: 'deliver',
+          loadType: 'Coal',
+          city: 'Berlin',
+          demandCardId: 10,
+          payment: 20,
+        },
+      ],
+    });
+
+    const context = makeContext({ demands: [demand] });
+    const snapshot = makeSnapshot(30); // 30M cash — without override this would be pruned (40 > 30)
+
+    const result = RouteValidator.validate(route, context, snapshot);
+
+    // With override of 5M, the pickup passes the budget check (5 <= 30)
+    expect(result.valid).toBe(true);
+    // When all stops feasible, prunedRoute is not set — check errors are empty
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('(a) deliver stop with insertionDetourCostOverride smaller than estimatedTrackCostToDelivery survives budget check', () => {
+    // Delivery normally costs 50M track — would fail with 25M cash.
+    // Override says only 3M marginal cost.
+    const demand = makeDemand({
+      cardIndex: 11,
+      loadType: 'Steel',
+      supplyCity: 'OnTrain', // bot is carrying Steel
+      deliveryCity: 'Hamburg',
+      payout: 22,
+      isSupplyOnNetwork: true,
+      isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 0,
+      estimatedTrackCostToDelivery: 50, // without override: would fail (50 > 25)
+      isSupplyReachable: true,
+      isDeliveryReachable: true,
+      isLoadOnTrain: true,
+    });
+
+    const route = makeRoute({
+      stops: [
+        {
+          action: 'deliver',
+          loadType: 'Steel',
+          city: 'Hamburg',
+          demandCardId: 11,
+          payment: 22,
+          insertionDetourCostOverride: 3,
+        },
+      ],
+    });
+
+    const context = makeContext({
+      demands: [demand],
+      loads: ['Steel'], // JIRA-222: validator reads context.loads (planner-working-state)
+    });
+    const snapshot = makeSnapshot(25); // 25M cash
+    snapshot.bot.loads = ['Steel']; // bot is carrying Steel
+
+    const result = RouteValidator.validate(route, context, snapshot);
+
+    // Deliver stop should survive because override (3M) <= cash (25M)
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('(b) absent override → byte-identical behavior to baseline (regression guard)', () => {
+    // Standard demand: pickup costs 8M, deliver costs 5M, cash is 20M
+    // No insertionDetourCostOverride — uses demand fields as before
+    const demand = makeDemand({
+      cardIndex: 20,
+      loadType: 'Grain',
+      supplyCity: 'Lodz',
+      deliveryCity: 'Praha',
+      payout: 18,
+      isSupplyOnNetwork: false,
+      isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 8,
+      estimatedTrackCostToDelivery: 5,
+      isSupplyReachable: true,
+      isDeliveryReachable: true,
+    });
+
+    const route = makeRoute({
+      stops: [
+        { action: 'pickup', loadType: 'Grain', city: 'Lodz' }, // no override
+        { action: 'deliver', loadType: 'Grain', city: 'Praha', demandCardId: 20, payment: 18 }, // no override
+      ],
+    });
+
+    const context = makeContext({ demands: [demand] });
+    const snapshot = makeSnapshot(20); // 20M cash (8 + 5 = 13M total, fits in 20M)
+
+    const result = RouteValidator.validate(route, context, snapshot);
+
+    // Without override, the route uses demand estimates — should pass (8+5=13 <= 20)
+    expect(result.valid).toBe(true);
+    // All stops feasible — prunedRoute absent, errors empty
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('(b) regression: stop without override still fails budget check when demand estimate is too high', () => {
+    const demand = makeDemand({
+      cardIndex: 21,
+      loadType: 'Wine',
+      supplyCity: 'Milano',
+      deliveryCity: 'Paris',
+      payout: 30,
+      isSupplyOnNetwork: false,
+      isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 50, // too high
+      estimatedTrackCostToDelivery: 5,
+      isSupplyReachable: true,
+      isDeliveryReachable: true,
+    });
+
+    const route = makeRoute({
+      stops: [
+        { action: 'pickup', loadType: 'Wine', city: 'Milano' }, // no override — uses 50M estimate
+        { action: 'deliver', loadType: 'Wine', city: 'Paris', demandCardId: 21, payment: 30 },
+      ],
+    });
+
+    const context = makeContext({ demands: [demand] });
+    const snapshot = makeSnapshot(30); // 30M cash — 50M > 30M: pickup should be pruned
+
+    const result = RouteValidator.validate(route, context, snapshot);
+
+    // Pickup is infeasible (50M > 30M) — behavior unchanged from pre-JIRA-214
+    // The Milano pickup should be absent from prunedRoute (if any)
+    const prunedStops = result.prunedRoute?.stops ?? [];
+    const milanoPick = prunedStops.filter(s => s.action === 'pickup' && s.city === 'Milano');
+    expect(milanoPick).toHaveLength(0);
+  });
+});
+
+// ── JIRA-181: Schema enum tests (standalone) ────────────────────────────────
+
+describe('JIRA-181: Schema enum includes DROP', () => {
+  it('TRIP_PLAN_SCHEMA stop action enum includes PICKUP and DELIVER (DROP removed per JIRA-190, JIRA-210B: single-route schema)', () => {
+    // JIRA-210B: TRIP_PLAN_SCHEMA is now a single-route schema — stops[] is top-level
+    const stopSchema = TRIP_PLAN_SCHEMA.properties.stops.items.properties.action;
+    expect(stopSchema.enum).toContain('PICKUP');
+    expect(stopSchema.enum).toContain('DELIVER');
+    // JIRA-190: DROP removed from trip-planner LLM schema to prevent hallucinated drop stops
+    expect(stopSchema.enum).not.toContain('DROP');
+  });
+
+  it('ROUTE_SCHEMA stop action enum includes PICKUP, DELIVER, and DROP', () => {
+    const stopSchema = ROUTE_SCHEMA.properties.route.items.properties.action;
+    expect(stopSchema.enum).toContain('PICKUP');
+    expect(stopSchema.enum).toContain('DELIVER');
+    expect(stopSchema.enum).toContain('DROP');
   });
 });

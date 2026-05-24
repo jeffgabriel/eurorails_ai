@@ -1,24 +1,31 @@
 /**
  * System prompts for LLM bot skill levels.
  *
- * The common suffix (game rules + response format) is appended to every prompt,
- * followed by a skill-level modifier.
+ * TRIMMING PRINCIPLES:
+ * - Don't tell the LLM about things enforced by code (TurnValidator, GuardrailEnforcer,
+ *   TurnComposer, PlanExecutor). The LLM's job is STRATEGY, not rules enforcement.
+ * - Don't repeat game rules across prompts — each prompt gets only what it needs.
+ * - Don't instruct on secondary pickups — TurnComposer Phase A1 handles opportunistic pickups.
+ * - Don't instruct on DISCARD_HAND/PASS — broke-bot gate and stuck detection handle these.
+ * - Don't instruct on cash sufficiency — TurnValidator enforces this.
+ * - Don't instruct on movement budget — GuardrailEnforcer truncates paths.
  */
 
-import { BotSkillLevel } from '../../../../shared/types/GameTypes';
+import { BotSkillLevel, GameContext, BotMemoryState, StrategicRoute, CorridorMap, FerryConnection, TrackSegment, GridPoint } from '../../../../shared/types/GameTypes';
+import { UPGRADE_DELIVERY_THRESHOLD, UPGRADE_OPERATING_BUFFER } from '../context/UpgradeGatingConstants';
+import type { StrategicContext } from '../StrategicContextBuilder';
+import { renderStrategicContext } from '../StrategicContextBuilder';
 
 // ── Common Suffix ─────────────────────────────────────────────────────
 
 export const COMMON_SYSTEM_SUFFIX = `
 GAME RULES REFERENCE:
 - Victory: 250M+ ECU cash AND track connecting 7 of 8 major cities
-- Turn actions (in order): Move train → Pick up/deliver loads → Build track → End turn
-- OR instead of building: Upgrade train (20M) | Discard hand (draw 3 new cards, ends turn)
+- Turn actions (in order): Move train → Pick up/deliver loads → Build track OR Upgrade train (20M) → End turn
 - Demand cards: 3 cards, 3 demands each, only 1 per card can be fulfilled
 - Track building: up to 20M per turn. Terrain costs: Clear 1M, Mountain 2M, Alpine 5M
 - Ferry penalty: Lose all remaining movement, start next turn at half speed
 - Track usage fee: 4M to use opponent's track per opponent per turn
-- Loads: Globally limited (3-4 copies). If all on trains, no one can pick up.
 - First track must start from a major city.
 
 AVAILABLE ACTIONS:
@@ -28,8 +35,6 @@ AVAILABLE ACTIONS:
 - DROP: Drop a load you're carrying at the current city (use when carrying a load you cannot deliver)
 - BUILD: Build new track extending your network (up to 20M this turn)
 - UPGRADE: Buy a better train for 20M (no track building this turn)
-- DISCARD_HAND: Discard all 3 demand cards, draw 3 new ones, end turn immediately
-- PASS: End turn without acting
 
 MULTI-ACTION TURNS — You SHOULD combine actions in a single turn to maximize efficiency:
 - MOVE to a supply city → PICKUP a load → MOVE toward delivery city (use remaining speed)
@@ -38,39 +43,12 @@ MULTI-ACTION TURNS — You SHOULD combine actions in a single turn to maximize e
 - PICKUP at current city → MOVE to nearby delivery city → DELIVER
 - MOVE to demand city → DELIVER for payout → UPGRADE train (20M, replaces BUILD this turn)
 - PICKUP at current city → MOVE toward delivery → UPGRADE (when speed/cargo matters more than track)
-The key insight: loading/unloading does NOT cost movement points. You can MOVE partway, PICKUP, then continue MOVE with remaining speed. Always use ALL your movement points — stopping early wastes your turn.
 UPGRADE replaces BUILD for this turn's Phase B (you still MOVE, PICKUP, DELIVER normally).
 You CANNOT combine UPGRADE + BUILD, or DISCARD_HAND with anything.
 
-CRITICAL RULES — ALWAYS FOLLOW:
-1. NEVER pick PASS if a delivery can be completed this turn (load on train + at city)
-2. NEVER recommend actions that would drop cash below 5M
-3. NEVER chase a demand where track cost exceeds payout unless the track serves other demands
-4. In early game (first 10 turns): prioritize first delivery speed over everything else
-5. Ferry crossings before turn 15 are almost always a mistake
-6. DELIVERY CHAIN: To earn a payout you must (a) pick up a load at its SOURCE city, (b) carry it to the DEMAND city on your card. Only pick up loads you have a matching demand card for.
-7. CHECK YOUR CARDS: Before building track, verify the destination city appears on one of your demand cards. Do not build toward a city just because a load exists there.
-8. COMMIT TO YOUR PLAN: Pick ONE delivery chain (pickup city → delivery city). Build track toward it. Pick up the load. Deliver it. Do NOT change your mind mid-execution. Only reassess AFTER completing a delivery.
-9. Consider discarding your hand when no demand card has a profitable, reachable delivery. Do not cling to bad cards — fresh cards may unlock better routes.
-10. STARTING LOCATION: In the first 2 build turns, start at the SUPPLY city of your first planned pickup — this enables immediate pickup when the train is placed, saving 1-2 turns vs starting at the delivery end. Among supply cities, prefer central Europe (Ruhr, Berlin, Paris, Holland) over peripheral cities.
-11. DROP USELESS LOADS: If carrying a load with no matching demand card, DROP it at the next city you pass through. Do not waste cargo capacity on undeliverable loads.
-12. TRACK REUSE: Prefer directions that serve MULTIPLE demand chains over a single high-payment chain.
-13. BUDGET AWARENESS: Before committing to a chain, verify you can afford the build cost AND have 5M+ remaining.
-14. VICTORY ROUTING: When payouts are similar, prefer deliveries that pass through or near unconnected major cities. Every major city you connect counts toward victory (7 of 8 required).
-
-SUPPLY RARITY STRATEGY:
-Each load type is sourced from a limited number of cities. When the demand context shows supply availability, consider rarity:
-- UNIQUE SOURCE (1 supply city): High-value opportunity if the supply city is on or near your network. Prioritize these — no alternative pickup location exists. If far from your network, the build cost may outweigh the benefit.
-- LIMITED (2 supply cities): Moderate scarcity. Prefer the supply city closer to your existing track. If one is on-network, it's a strong pickup candidate.
-- COMMON (3-4 supply cities): Flexible — choose whichever supply city best fits your current route.
-Rare supply loads near your network deserve priority because competitors may also target them, and building toward a unique source you're already close to is highly efficient.
-
-HAND QUALITY ASSESSMENT:
-Your hand quality is evaluated each turn based on the average best demand score across your 3 cards. Assessments:
-- GOOD: Strong hand — at least one high-value, affordable demand near your network. Execute your best delivery chain.
-- FAIR: Acceptable hand — demands are achievable but may require significant track investment. Proceed unless a cheaper option exists.
-- POOR: Weak hand — all demands are expensive, distant, or unprofitable. If your best demand takes 8+ estimated turns, strongly consider DISCARD_HAND to draw 3 fresh cards (costs 1 turn but saves 5-10 turns of bad execution).
-Cards held for 12+ turns without fulfillment are STALE — they drag down hand quality and signal a stuck strategy. Discard stale hands aggressively.
+. Verify the destination city appears on one of your demand cards
+. COMMIT TO YOUR PLAN
+. Games typically last ~100 turns. Don't play as if the game goes on forever
 
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 For a single action:
@@ -83,7 +61,6 @@ For a single action:
     // PICKUP: { "load": "<load type>", "at": "<city name>" }
     // DROP: { "load": "<load type>" }
     // UPGRADE: { "to": "<train type>" }
-    // DISCARD_HAND or PASS: {} (empty)
   },
   "reasoning": "<1-2 sentences in character>",
   "planHorizon": "<what this sets up for next 2-3 turns>"
@@ -98,114 +75,36 @@ For multiple actions in one turn:
   ],
   "reasoning": "...",
   "planHorizon": "..."
-}`;
+}
+
+PLAN PERSISTENCE:
+You MUST continue your existing plan unless:
+(a) The delivery was completed, or
+(b) A dramatically better opportunity appeared.`;
 
 // ── Route Planning Suffix ────────────────────────────────────────────
 
 export const ROUTE_PLANNING_SYSTEM_SUFFIX = `
-GAME RULES REFERENCE:
-- Victory: 250M+ ECU cash AND track connecting 7 of 8 major cities
-- Turn actions (in order): Move train → Pick up/deliver loads → Build track → End turn
-- Demand cards: 3 cards, 3 demands each, only 1 per card can be fulfilled
-- Track building: up to 20M per turn. Terrain costs: Clear 1M, Mountain 2M, Alpine 5M
-- Track usage fee: 4M to use opponent's track per opponent per turn
-- Loads: Globally limited (3-4 copies). If all on trains, no one can pick up.
-- First track must start from a major city.
-
-ROUTE PLANNING:
 You are planning a MULTI-STOP delivery route. This route will be auto-executed across multiple turns.
-Think carefully about the optimal sequence of pickups and deliveries.
 
-ROUTE PLANNING CRITERIA:
+ROUTE PLANNING RULES:
 1. COMBINE LOADS: Look for 2+ demands that share pickup/delivery corridors. Two 20M deliveries on the same route beat one 40M delivery on a separate route.
 2. PICKUP BEFORE DELIVER: Always pick up a load before you can deliver it. Sequence matters.
-3. BUDGET CHECK: Estimate total track building cost for the route. Don't plan routes that cost more to build than they pay out. IMPORTANT: Your current cash is shown in the context. Do NOT plan routes that require building more track than you can afford. If all routes require more track cost than your cash, plan a shorter route or recommend DISCARD_HAND.
-4. EXISTING TRACK: Prefer routes that leverage your existing network — zero-cost pickups/deliveries are the best.
-5. LOAD CAPACITY: Freight/Fast Freight carry 2 loads, Heavy Freight/Superfreight carry 3. Don't plan more simultaneous pickups than your capacity allows.
-6. STARTING CITY: Your train MUST start at one of the 8 major cities (Paris, Holland, Milano, Ruhr, Berlin, London, Wien, Madrid). Pick the major city nearest to your first planned pickup's supply city. You will build track FROM that major city TOWARD the supply city. If the supply city IS a major city, start there.
-7. ACHIEVABLE ROUTES: Keep routes to 2-4 stops. Overly ambitious routes risk failure.
-8. VICTORY CONNECTIONS: If a route can detour through an unconnected major city for ≤10M extra track cost, prefer it. Connecting major cities is required for victory.
-9. SCARCITY: If a load is marked SCARCE, avoid building expensive track to reach it — the last copy may be taken before you arrive. Prefer abundant loads.
-9b. SUPPLY RARITY: Loads with only 1 supply city (UNIQUE SOURCE) are high-value targets when near your network — no alternative pickup exists. Loads with 2 supply cities (LIMITED) offer moderate flexibility. Loads with 3-4 supply cities (COMMON) let you choose the most convenient source. Prioritize rare-source demands that are accessible over common-source demands that require major track investment.
-10. CORRIDORS: When a DEMAND CORRIDORS section is shown, prefer corridor routes over standalone demands. Combined routes earn more per turn of building.
-11. ON THE WAY: Demands marked "ON THE WAY" can be added to a corridor route at near-zero extra cost. Always include them if your train has capacity.
+3. EXISTING TRACK: Prefer routes that leverage your existing network — zero-cost pickups/deliveries are the best.
+4. ACHIEVABLE ROUTES: Keep routes to 2-4 stops. Overly ambitious routes risk failure.
+5. VICTORY CONNECTIONS: Prefer routes that pass through unconnected major cities. Connecting major cities is required for victory (7 of 8).
+6. STARTING CITY: Your train MUST start at one of the 8 major cities. Prefer central Europe (Ruhr, Berlin, Paris, Wien, Milano, Holland) over London and Madrid. Pick the major city nearest to your first planned pickup.
 
 GEOGRAPHIC STRATEGY:
-The map has a cheap, dense core and expensive peripheral regions. Understanding this geography is critical to not going bankrupt.
+CORE NETWORK (cheap, high reuse): Paris — Ruhr — Holland — Berlin — Wien. Mostly clear terrain (1M/segment). Build here first.
+PERIPHERAL (expensive, low reuse): London (ferry 8M+), Madrid (mountains), Scandinavia (ferry), deep Italy (alpine). Expand only with 80M+ cash and 2+ demands pointing there.
 
-CORE NETWORK (cheap to build, high track reuse):
-Paris — Ruhr — Holland — Berlin form a tight rectangle in northwest Europe, mostly clear terrain (1M/segment). Wien is reachable southeast of Berlin through moderate terrain. The northwest rectangle (Paris-Ruhr-Holland-Berlin) costs ~15-20M to interconnect; extending to Wien adds another ~15-20M. Track built here serves dozens of future deliveries because most demand cards route through central Europe.
+CAPITAL VELOCITY: A 9M delivery in 4 turns beats a 42M delivery in 12 turns. Ask "how many turns until I get PAID?" not "which pays the most?"
 
-PERIPHERAL REGIONS (expensive, low early reuse):
-- London/Britain: Requires English Channel ferry (8M+). Island track only serves British deliveries.
-- Madrid/Spain: Mountain and Alpine terrain through the Pyrenees. 20-30M to connect from Paris. Isolated — track only serves Iberian deliveries.
-- Scandinavia (Oslo, Stockholm): Requires ferry from Denmark. 15-25M to connect. Very few loads originate here.
-- Italy south of Milano: Alpine passes from Wien or France cost 5M/segment. Milano itself is reachable but Roma/Napoli are deep extensions.
-- Ireland (Dublin, Belfast): Requires TWO ferry crossings — Channel ferry (continent→Britain) then Irish Sea ferry (Britain→Ireland). Each ferry burns a full turn of movement. Almost never worth it before mid-game.
-
-EXPANSION PHILOSOPHY:
-- Early game (under 80M cash, under 4 major cities connected): Stay in the core. Build the Paris-Ruhr-Holland-Berlin-Wien rectangle. Make fast, cheap deliveries to accumulate capital. A 17M delivery in the core completed in 4 turns is far better than a 42M delivery to Oslo that takes 12 turns and costs 30M in track.
-- Mid game (80-180M cash, 4-5 major cities connected): Expand to ONE peripheral region when you have (a) 80M+ cash, (b) 2+ demand cards pointing to that region, and (c) the track would connect a major city you still need for victory. Don't expand to two peripheral regions simultaneously.
-- Late game (180M+ cash, 5-6 major cities connected): You need 7 of 8 major cities connected. Plan your remaining expansions around which 1 city you can skip (usually Madrid or London, whichever is most expensive to reach from your network).
-
-CAPITAL VELOCITY:
-A 9M delivery completed on turn 4 generates capital that funds the NEXT delivery, which funds the next. A 42M delivery that takes until turn 12 means 8 turns of zero income. Always ask: "How many turns until I get PAID?" not "Which demand pays the most?"
-
-WHEN TO BREAK THESE GUIDELINES:
-- A peripheral demand is your ONLY affordable option (all core demands need track you can't afford)
-- You already have partial track toward a peripheral region from a previous route
-- A corridor of 2-3 demands all point to the same peripheral region, making the total payout justify the investment
-- You're in late game and MUST connect London or Madrid for victory
-
-HAND EVALUATION — THINK IN CARDS, NOT DEMANDS:
-You hold 3 demand cards with 3 demands each (9 total), but only 1 demand per card can ever be fulfilled. When you deliver a load, that card is discarded and replaced. This changes everything about how you evaluate your options.
-
-EVALUATE EACH CARD'S BEST OPTION:
-For each of your 3 cards, identify the single best demand — the one that's cheapest to reach, fits within your budget, and ideally stays in the core network. Ignore the other 2 demands on that card. Your real choice is between 3 options (one per card), not 9.
-
-Example: If Card A's best demand is Steel→Paris (9M, core), Card B's best is Wheat→Ruhr (13M, core), and Card C's best is Iron→Praha (17M, near-core) — that's a strong hand. But if Card A's only affordable demand is Machinery→Dublin (25M, double ferry) and Card B's only affordable demand is Tourists→Sevilla (48M, deep Spain) — those cards are dead weight.
-
-WHEN TO DISCARD YOUR ENTIRE HAND:
-Discarding costs a full turn but gives you 3 fresh cards. Consider it when:
-- 2 or more cards have NO affordable demand in or near the core network
-- Your best available demand requires 25M+ in track building with cash under 40M
-- All demands point to peripheral regions you have no track toward
-- You've just completed a delivery and the new hand is terrible
-A bad hand played stubbornly wastes 5-10 turns. A discard wastes 1 turn. Compare that 1 lost turn against the estimated turns shown for your best available demand — if your best option takes 8+ turns to complete, discarding is almost certainly better.
-
-SECONDARY DELIVERY — FILL YOUR CARGO SLOTS:
-Your train carries 2 loads (Freight/Fast Freight) or 3 loads (Heavy Freight/Superfreight). Picking up and carrying loads is FREE — no movement cost, no money cost. Dropping a load at any city is also free.
-
-After choosing your primary delivery (Card X), ALWAYS look for a secondary pickup from a DIFFERENT card (Card Y or Z). The primary card gets discarded on delivery, so the secondary must come from a card that stays in your hand.
-
-Look for secondary pickups that are:
-- On or very near the primary route (zero or minimal detour)
-- From a supply city you'll pass through anyway
-- For a demand you can deliver after the primary, or carry until a future route
-Even if you can't deliver the secondary load immediately, carrying it costs nothing. You can deliver it later or drop it at any city. An empty cargo slot is a wasted opportunity.
-
-Pick up a load with no matching demand card if it's at a remote city you're already passing through AND your train has a free slot. Eg you are in Porto so pickup an extra fish load! Oranges in Sevilla! Tobacco in Napoli. Oil in Aberdeen.
-
-TRAIN UPGRADE STRATEGY:
-Upgrading costs 20M and takes your entire build phase (no track building that turn). There are two upgrade paths from the starting Freight train:
-
-UPGRADE OPTIONS:
-- Freight (9 speed, 2 cargo) → Fast Freight (12 speed, 2 cargo) — 20M
-  Best when: Your routes are long. Fast Freight's +3 speed means any route over 15 mileposts takes 1 fewer turn. Over 5 deliveries that's 5 extra turns of income.
-- Freight (9 speed, 2 cargo) → Heavy Freight (9 speed, 3 cargo) — 20M
-  Best when: You have corridor routes where you can carry 3 loads simultaneously. The extra slot means delivering 3 loads per route instead of 2.
-- Either → Superfreight (12 speed, 3 cargo) — another 20M
-  The endgame train. 12 speed + 3 cargo is dominant. Plan to reach Superfreight by mid-game.
-
-WHEN TO UPGRADE:
-- DON'T upgrade before your first delivery. You need cash flow first.
-- DON'T upgrade when you have less than 30M — you'll be unable to build track afterward.
-- DO upgrade when you have 60M+ cash and your current routes involve long travel distances (Fast Freight) or you consistently have 3 viable pickups (Heavy Freight).
-- DO upgrade when spending 20M on track this turn wouldn't meaningfully advance your route — upgrading might be better value.
-- The upgrade pays for itself quickly: Fast Freight saves 1 turn on any route over 15 mileposts; Heavy Freight earns an extra delivery payout per route when corridors are available.
-
-CROSSGRADE:
-You can switch between Fast Freight and Heavy Freight for only 5M (and still build up to 15M of track that turn). Consider this when your strategy shifts from long routes to corridor routes or vice versa.
+UPGRADE OPTIONS (20M each):
+- Freight → Fast Freight: +3 speed. Almost always the right first upgrade.
+- Fast Freight/Heavy Freight → Superfreight: 12 speed + 3 cargo. The endgame train.
+To upgrade, include "upgradeOnRoute" in your response.
 
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 {
@@ -214,43 +113,22 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
     { "action": "DELIVER", "load": "<load type>", "city": "<city name>" }
   ],
   "startingCity": "<major city to start building from, if no track yet>",
+  "upgradeOnRoute": "<FastFreight|HeavyFreight|Superfreight — ONLY if upgrading, omit if not>",
   "reasoning": "<1-2 sentences explaining why this route>",
   "planHorizon": "<estimated turns: Build X→Y (N turns), pickup, deliver (N turns)>"
-}
-
-EXAMPLE — efficient double-delivery route:
-{
-  "route": [
-    { "action": "PICKUP", "load": "Potatoes", "city": "Szczecin" },
-    { "action": "PICKUP", "load": "Potatoes", "city": "Szczecin" },
-    { "action": "DELIVER", "load": "Potatoes", "city": "Paris" },
-    { "action": "DELIVER", "load": "Potatoes", "city": "Ruhr" }
-  ],
-  "startingCity": "Berlin",
-  "reasoning": "Two potato demands share a route through central Europe. Picking up 2x at Szczecin maximizes throughput.",
-  "planHorizon": "Build Berlin→Szczecin (3 turns), pickup 2x, deliver Paris then Ruhr (2 turns each)"
 }`;
 
 // ── Plan Selection Suffix ────────────────────────────────────────────
 
 export const PLAN_SELECTION_SYSTEM_SUFFIX = `
-GAME RULES REFERENCE:
-- Victory: 250M+ ECU cash AND track connecting 7 of 8 major cities
-- Turn: Move train (up to speed limit) → Build track (up to 20M) → End turn
-- Demand cards: 3 cards, 3 demands each, only 1 per card can be fulfilled
-- Track usage fee: 4M to use opponent's track
-- Loads: Globally limited (3-4 copies). If all on trains, no one can pick up.
+Pick the BEST delivery chain to pursue next from the ranked options shown.
 
-CHAIN SELECTION CRITERIA:
-1. USE THE DEMAND RANKING: The context includes a demand ranking sorted by investment value. Higher scores account for ROI, network expansion, and victory progress. Prefer the RECOMMENDED demand.
-2. TRACK REUSE: Prefer chains that share track corridors with other demands. Shared track is the most valuable asset.
-3. NETWORK VALUE: Building track that unlocks new cities/regions is valuable even if the immediate ROI is negative. Early-game investment pays off later.
-4. EXISTING TRACK: Chains that leverage your existing network (low/zero build cost) are almost always the best choice.
-5. PICKUP PROXIMITY: If two chains score similarly, pick the one with a closer pickup city.
+AFTER 10 TURNS LOOK FOR:
+1. POSITIVE ROI  
+2. Two demand cards with the same demand type (eg potatoes)
+3. Two demand cards that have the same demand city
 
-RESPONSE FORMAT:
-You will see ranked delivery chains. Pick the BEST one to pursue next.
-Respond with ONLY a JSON object, no markdown, no commentary:
+RESPONSE FORMAT (JSON only, no markdown):
 {
   "chainIndex": <integer index of the chain to pursue, 0-based>,
   "reasoning": "<1-2 sentences explaining why this chain>"
@@ -259,7 +137,7 @@ Respond with ONLY a JSON object, no markdown, no commentary:
 // ── Skill Level Modifiers ─────────────────────────────────────────────
 
 const SKILL_LEVEL_TEXT: Record<BotSkillLevel, string> = {
-  [BotSkillLevel.Easy]: 'You are a casual player. Pick whatever seems good. Don\'t overthink it.',
+  [BotSkillLevel.Easy]: 'You are a competent player. Think 1-2 turns ahead.',
   [BotSkillLevel.Medium]: 'You are a competent player. Think 2-3 turns ahead.',
   [BotSkillLevel.Hard]: 'You are an expert player. Think 5+ turns ahead. Consider what opponents are doing and whether you can exploit or deny their plans.',
 };
@@ -293,113 +171,558 @@ export function getPlanSelectionPrompt(skillLevel: BotSkillLevel): string {
   return `${PLAN_SELECTION_SYSTEM_SUFFIX}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
 }
 
-// ── Secondary Delivery Prompt (JIRA-89) ──
+// ── Trip Planning Prompt (JIRA-126, JIRA-207B, JIRA-210B) ──
 
-const SECONDARY_DELIVERY_SYSTEM_SUFFIX = `
-You are evaluating whether a bot can add a profitable SECONDARY pickup to its planned route.
+export const TRIP_PLANNING_SYSTEM_SUFFIX = `
+Plan one route — the best multi-stop trip for this turn.
+Your route should consider all OPTIONS simultaneously.
 
-The bot just planned a primary delivery route. It has unused cargo capacity. Your job: check if any other demand card offers a load that can be picked up along (or near) the planned route with minimal detour.
+SCORING: trip_score = (total payout - build costs - usage fees) / estimated turns
+A 30M trip in 4 turns (7.5M/turn) beats a 60M trip in 12 turns (5M/turn).
 
-EVALUATION CRITERIA:
-1. The pickup city must be ON or NEAR the planned route (within 3 mileposts)
-2. A demand card must match the loadType + deliveryCity pair
-3. The load must be available at the pickup city
-4. Same-destination deliveries are ESPECIALLY valuable (deliver 2 loads in one stop)
-5. The detour cost (extra turns) must be justified by the payout
-6. Prefer loads where both pickup AND delivery are near the existing route
+ACTION GRAMMAR RULES — every stop must conform to these rules:
+- DELIVER requires a prior PICKUP in the same stop sequence, OR the load must already be in your CURRENT PLAN carried loads. You cannot emit a DELIVER without first establishing how the load reached your train.
+- Same-city same-load multi-load pickups must be written as SEPARATE PICKUP stops — one stop per load unit. You cannot pick up two loads with a single PICKUP stop.
+- Total PICKUP stops plus carried loads (from CURRENT PLAN) must not exceed train capacity.
 
-RESPONSE FORMAT (JSON only, no markdown):
+WORKED EXAMPLE — Cardiff×2 Hops → Holland + Ruhr (capacity 2, no loads carried):
+  CORRECT (two separate PICKUPs, each for one Hops unit):
+    stop 1: { "action": "PICKUP", "load": "Hops", "supplyCity": "Cardiff" }  -- picks up first Hops
+    stop 2: { "action": "PICKUP", "load": "Hops", "supplyCity": "Cardiff" }  -- picks up second Hops (use the correct demandCardId per delivery below)
+    stop 3: { "action": "DELIVER", "load": "Hops", "deliveryCity": "Holland", "demandCardId": 10, "payment": 16 }
+    stop 4: { "action": "DELIVER", "load": "Hops", "deliveryCity": "Ruhr", "demandCardId": 7, "payment": 16 }
+  WRONG (two DELIVERs with no PICKUPs — validator rejects because Hops is not in carried loads):
+    stop 1: { "action": "DELIVER", "load": "Hops", "deliveryCity": "Holland", ... }
+    stop 2: { "action": "DELIVER", "load": "Hops", "deliveryCity": "Ruhr", ... }
+
+REASONING RULES:
+- When arguing against a demand card based on cost, you MUST cite the exact "Build cost" M figure shown in the prompt (e.g., "supply ~12M, delivery ~8M"). Qualitative descriptions ("expensive", "significant", "substantial") without citing the specific M figure are not allowed. If you cannot cite a specific figure, do not argue against the card on cost grounds.
+
+TRIP RULES:
+1. CARRIED LOADS: Loads in your CURRENT PLAN (carried loads section) are already in your possession. Do NOT emit a PICKUP for a carried load.
+2. COMBINE CORRIDORS: Two deliveries on one route beat two separate routes.
+3. EXISTING TRACK FIRST: On-network stops are essentially free.
+4. RUNNING CASH: Deliveries mid-trip pay out immediately. Later pickups and builds can be funded by earlier delivery income in the same trip. Evaluate affordability at the point of the action, not at turn start.
+5. Keep trips to 2-6 stops.
+6. PICKUP and DELIVER stops MUST reference the exact supplyCity or deliveryCity of a demand card listed in OPTIONS. If no demand card has a supply/delivery pair you need, do not emit that stop.
+
+GEOGRAPHIC STRATEGY: Bias toward the core cluster (Paris — Ruhr — Holland — Berlin — Wien) when short on cash or cities; otherwise optimize by corridor efficiency.
+
+CAPITAL VELOCITY: Ask "how many turns until I get PAID?" not "which pays the most?"
+
+UPGRADE OPTIONS (20M each):
+- Freight → Fast Freight: +3 speed. Best first upgrade after 1+ deliveries with 50M+ cash.
+- Fast Freight/Heavy Freight → Superfreight: The endgame train.
+Include "upgradeOnRoute" in your top-level response if upgrading.
+
+RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 {
-  "action": "none" | "add_secondary",
-  "reasoning": "Brief explanation",
-  "pickupCity": "city name (required if add_secondary)",
-  "loadType": "load type (required if add_secondary)",
-  "deliveryCity": "city name (required if add_secondary)"
-}
+  "stops": [
+    { "action": "DELIVER", "load": "<carried load>", "deliveryCity": "<city name from demand card>", "demandCardId": <card number>, "payment": <payout> },
+    { "action": "PICKUP", "load": "<load type>", "supplyCity": "<city name from demand card>" },
+    { "action": "DELIVER", "load": "<load type>", "deliveryCity": "<city name from demand card>", "demandCardId": <card number>, "payment": <payout> }
+  ],
+  "reasoning": "<why this route is the best play>",
+  "upgradeOnRoute": "<FastFreight|HeavyFreight|Superfreight — ONLY if upgrading, omit if not>"
+}`;
 
-Choose "none" if no secondary pickup is worth the detour.
-Choose "add_secondary" only if the opportunity clearly improves the trip.
-`;
+// ── Medium-skill Strategic Reasoning Blocks ───────────────────────────────
 
 /**
- * Get the system prompt for secondary delivery evaluation (JIRA-89).
- *
- * Lightweight prompt for evaluating whether a second load can be added to a planned route.
+ * Instructs Medium-skill (Sonnet) to produce structured counterfactual reasoning.
+ * Extends the standard TRIP_PLANNING_SYSTEM_SUFFIX with a reasoning contract.
  */
-export function getSecondaryDeliveryPrompt(): string {
-  return SECONDARY_DELIVERY_SYSTEM_SUFFIX;
+export const TRIP_REASONING_STRUCTURE = `STRUCTURED REASONING REQUIRED:
+Your response must include a "reasoning" object with these fields:
+- "chosen": identifier of the plan you selected (e.g. "Card 2 Coal→Berlin")
+- "chosenOver": array of alternatives you explicitly considered and rejected (at least 1 entry when multiple viable options exist)
+- "chosenOverWhy": justification citing NET value, estimated turns, or strategic context data from the prompt
+- "riskIfWrong": what you would do if your top pick turns out to be wrong
+- "followUpTrip": a brief sketch of the next likely trip after this one completes
+
+When ≥2 viable options exist, "chosenOver" MUST be non-empty. Qualitative descriptions without citing specific M figures are not allowed.`;
+
+/**
+ * Grants Medium-skill (Sonnet) permission to propose a trip outside the helper-generated options.
+ * The proposed trip is validated by the simulator before acceptance.
+ */
+export const TRIP_PROPOSE_LATITUDE = `PROPOSE LATITUDE:
+If you believe a trip not listed in OPTIONS would outperform all listed options, include a "propose" field:
+{
+  "propose": {
+    "stops": [ ... same stop format as the main stops array ... ],
+    "rationale": "why this unlisted trip beats all OPTIONS"
+  }
+}
+Your main "stops" must still be a valid status-quo plan from OPTIONS. The "propose" field is evaluated independently — if the simulator confirms it scores higher, it will be accepted instead.`;
+
+/**
+ * JIRA-207B: Evaluate the upgrade gate — must pass ALL three conditions.
+ * Lives in the user-prompt builder so the system prompt stays byte-stable (R17).
+ */
+function canUpgradeThisTurn(context: GameContext, memory: BotMemoryState): boolean {
+  if (!context.canUpgrade) return false;
+  if (memory.deliveryCount < UPGRADE_DELIVERY_THRESHOLD) return false;
+  const upgradeCost = 20; // ECU millions — standard upgrade cost
+  if (context.money - upgradeCost < UPGRADE_OPERATING_BUFFER) return false;
+  return true;
+}
+
+/**
+ * Build the dynamic trip planning context from current game state.
+ * JIRA-207B: Reframed as REPLAN prompt with CURRENT PLAN + OPTIONS sections.
+ * OPTIONS filters out unaffordable cards and carry-load cards (commitments).
+ * Upgrade prose is suppressed (with hard-suppression rule) when gate fails (Pattern B / R14-R17).
+ * JIRA-210B: Renamed NEW OPTIONS → OPTIONS; fixed count semantics; removed chosenIndex guidance.
+ *
+ * When strategicContext is provided (Medium skill only), the rendered strategic
+ * context block is injected between CURRENT PLAN and OPTIONS.
+ */
+function buildTripPlanningContext(context: GameContext, memory: BotMemoryState, strategicContext?: StrategicContext): string {
+  const lines: string[] = [];
+
+  // ── Upgrade gate (Pattern B — resolves here, not in system prompt) ──
+  const upgradeQualified = canUpgradeThisTurn(context, memory);
+
+  // ── Upgrade suppression rule (R15) — injected at top of user prompt when gate fails ──
+  if (!upgradeQualified) {
+    lines.push(`UPGRADE STATUS: You do not qualify to upgrade this turn (insufficient cash buffer or delivery count). Do NOT include "upgradeOnRoute" in your response. Treat all upgrade-related sections of the system prompt as not applicable for this turn.`);
+    lines.push('');
+  }
+
+  // Position and cargo
+  const posStr = context.position?.city
+    ? `at ${context.position.city}`
+    : context.position
+      ? `at (${context.position.row},${context.position.col})`
+      : 'unknown';
+  lines.push(`CURRENT STATE:`);
+  lines.push(`- Position: ${posStr}`);
+  lines.push(`- Cash: ${context.money}M ECU`);
+  lines.push(`- Train: ${context.trainType} (speed ${context.speed}, capacity ${context.capacity})`);
+  lines.push(`- Carried loads: ${context.loads.length > 0 ? context.loads.join(', ') : 'none'}`);
+  lines.push(`- Turn: ${context.turnNumber}`);
+  lines.push(`- Deliveries completed: ${memory.deliveryCount}`);
+  lines.push('');
+
+  // Victory progress
+  lines.push(`VICTORY PROGRESS:`);
+  lines.push(`- Connected major cities (${context.connectedMajorCities.length}/${context.totalMajorCities}): ${context.connectedMajorCities.join(', ') || 'none'}`);
+  if (context.unconnectedMajorCities.length > 0) {
+    const unconnected = context.unconnectedMajorCities
+      .map(c => `${c.cityName} (~${c.estimatedCost}M to connect)`)
+      .join(', ');
+    lines.push(`- Unconnected: ${unconnected}`);
+  }
+  lines.push('');
+
+  // Network topology
+  lines.push(`NETWORK TOPOLOGY:`);
+  lines.push(`- Track summary: ${context.trackSummary}`);
+  lines.push(`- Cities on network: ${context.citiesOnNetwork.length > 0 ? context.citiesOnNetwork.join(', ') : 'none'}`);
+  lines.push('');
+
+  // ── CURRENT PLAN block (R10a) ──
+  // Build the set of demand card IDs that are "in flight" (carried load or active route stop).
+  const carryLoadCardIds = new Set<number>();
+  const activeRoute = memory.activeRoute;
+
+  // Identify which demand cards correspond to loads already on the train
+  const carriedLoadLines: string[] = [];
+  for (const loadType of context.loads) {
+    // Find the demand card for this carried load
+    const matchingDemand = context.demands.find(d => d.loadType === loadType && d.isLoadOnTrain);
+    if (matchingDemand) {
+      carryLoadCardIds.add(matchingDemand.cardIndex);
+      carriedLoadLines.push(`  Carried load: ${loadType} (card ${matchingDemand.cardIndex} → deliver to ${matchingDemand.deliveryCity} for ${matchingDemand.payout}M)`);
+    } else {
+      carriedLoadLines.push(`  Carried load: ${loadType} (demand card unresolved)`);
+    }
+  }
+
+  // Render remaining stops of active route
+  const remainingStopLines: string[] = [];
+  if (activeRoute && activeRoute.stops.length > activeRoute.currentStopIndex) {
+    const remaining = activeRoute.stops.slice(activeRoute.currentStopIndex);
+    remaining.forEach((stop, i) => {
+      const cardRef = stop.demandCardId != null ? ` (card ${stop.demandCardId})` : '';
+      const paymentRef = stop.payment != null ? ` → ${stop.payment}M` : '';
+      if (stop.action === 'pickup') {
+        remainingStopLines.push(`  ${i + 1}. PICKUP ${stop.loadType} at ${stop.city}${cardRef}`);
+      } else if (stop.action === 'deliver') {
+        remainingStopLines.push(`  ${i + 1}. DELIVER ${stop.loadType} at ${stop.city}${cardRef}${paymentRef}`);
+        if (stop.demandCardId != null) {
+          carryLoadCardIds.add(stop.demandCardId);
+        }
+      }
+    });
+  }
+
+  const hasPlan = remainingStopLines.length > 0 || carriedLoadLines.length > 0;
+  lines.push(`CURRENT PLAN:`);
+  if (!hasPlan) {
+    lines.push(`(no current plan in flight)`);
+  } else {
+    if (remainingStopLines.length > 0) {
+      lines.push(`  Remaining stops:`);
+      remainingStopLines.forEach(l => lines.push(l));
+    }
+    if (carriedLoadLines.length > 0) {
+      carriedLoadLines.forEach(l => lines.push(l));
+    }
+  }
+  lines.push('');
+
+  // ── Strategic context injection (Medium skill only) ──
+  if (strategicContext) {
+    lines.push(renderStrategicContext(strategicContext));
+  }
+
+  // ── OPTIONS block (JIRA-207B R10b, JIRA-210B: renamed from NEW OPTIONS) ──
+  // Filter: include only cards that are (a) affordable AND (b) not already a carry-load commitment.
+  // A carry-load is only a "commitment" when the active route still covers its delivery — without
+  // a route the carry-load is an undischarged obligation and must surface as an actionable option.
+  const hasActiveRouteRemaining = activeRoute != null && activeRoute.stops.length > activeRoute.currentStopIndex;
+  const newOptionCards = context.demands.filter(d => {
+    if (!d.isAffordable) return false;
+    if (d.isLoadOnTrain && hasActiveRouteRemaining) return false;
+    return true;
+  });
+
+  const newOptionsCount = newOptionCards.length;
+  const uniqueCardCount = new Set(newOptionCards.map(d => d.cardIndex)).size;
+  lines.push(`OPTIONS (${newOptionsCount} supply→delivery row${newOptionsCount !== 1 ? 's' : ''} across ${uniqueCardCount} card${uniqueCardCount !== 1 ? 's' : ''}):`);
+  if (newOptionsCount === 0) {
+    lines.push(`(no actionable options this turn)`);
+  } else {
+    for (const d of newOptionCards) {
+      const onNetwork = d.isSupplyOnNetwork && d.isDeliveryOnNetwork ? ' [ON-NETWORK]' : '';
+      const available = d.isLoadAvailable ? '' : ' [UNAVAILABLE]';
+      lines.push(`  Card ${d.cardIndex}: ${d.loadType} from ${d.supplyCity ?? '(on train)'} → ${d.deliveryCity} (${d.payout}M)${onNetwork}${available}`);
+      lines.push(`    Build cost: supply ~${d.estimatedTrackCostToSupply}M, delivery ~${d.estimatedTrackCostToDelivery}M`);
+      lines.push(`    Estimated turns: ${d.estimatedTurns} | Efficiency: ${d.efficiencyPerTurn.toFixed(1)}M/turn`);
+    }
+  }
+  lines.push('');
+
+  // Guidance: when both CURRENT PLAN and OPTIONS are non-empty, invite keep-or-replan decision
+  if (hasPlan && newOptionsCount > 0) {
+    lines.push(`If your current plan still represents the best play, keep it (your route's first stop should be the current plan's first remaining stop). Otherwise, propose a replan from OPTIONS.`);
+    lines.push('');
+  }
+
+  // Available pickups
+  if (context.canPickup.length > 0) {
+    lines.push(`AVAILABLE PICKUPS (at current location):`);
+    for (const p of context.canPickup) {
+      lines.push(`  - ${p.loadType} at ${p.supplyCity} (best payout: ${p.bestPayout}M → ${p.bestDeliveryCity})`);
+    }
+    lines.push('');
+  }
+
+  // Immediate deliveries
+  if (context.canDeliver.length > 0) {
+    lines.push(`IMMEDIATE DELIVERIES (can complete this turn):`);
+    for (const d of context.canDeliver) {
+      lines.push(`  - ${d.loadType} at ${d.deliveryCity} for ${d.payout}M (card ${d.cardIndex})`);
+    }
+    lines.push('');
+  }
+
+  // Upgrade info — only when gate passes (Pattern B / R16)
+  if (upgradeQualified) {
+    lines.push(`UPGRADE AVAILABLE: You can upgrade your train for 20M.`);
+    if (context.upgradeAdvice) {
+      lines.push(`Upgrade advice: ${context.upgradeAdvice}`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Get the system and user prompts for multi-stop trip planning (JIRA-126, JIRA-190, JIRA-207B, JIRA-210B).
+ *
+ * Returns { system, user } where system is byte-stable (cacheable — never varies across turns).
+ * User prompt contains the dynamic game state context per turn.
+ *
+ * System prompt: static rules only (JIRA-210B: persona block removed; byte-stable across all skill levels)
+ * User prompt: dynamic context built from current game state, including CURRENT PLAN + OPTIONS (R10),
+ *              and conditional upgrade suppression rule when gate fails (R15, Pattern B).
+ *
+ * When skillLevel is Medium and strategicContext is provided, the system prompt is composed
+ * as [TRIP_PLANNING_SYSTEM_SUFFIX, TRIP_REASONING_STRUCTURE, TRIP_PROPOSE_LATITUDE].join('\n\n')
+ * and the user prompt includes the rendered strategic context block. Easy and Hard use the
+ * existing byte-stable suffix unchanged.
+ */
+export function getTripPlanningPrompt(
+  skillLevel: BotSkillLevel,
+  context: GameContext,
+  memory: BotMemoryState,
+  strategicContext?: StrategicContext,
+): { system: string; user: string } {
+  if (skillLevel === BotSkillLevel.Medium && strategicContext) {
+    const system = [TRIP_PLANNING_SYSTEM_SUFFIX, TRIP_REASONING_STRUCTURE, TRIP_PROPOSE_LATITUDE].join('\n\n');
+    const dynamicContext = buildTripPlanningContext(context, memory, strategicContext);
+    const user = `${dynamicContext}\n\nReview your CURRENT PLAN and OPTIONS. Keep the current plan if it is still optimal, or propose a replan using one or more cards from OPTIONS. Your response must include a structured "reasoning" object as described in the system prompt.`;
+    return { system, user };
+  }
+
+  // Easy and Hard: byte-stable system prompt unchanged
+  const system = TRIP_PLANNING_SYSTEM_SUFFIX;
+  const dynamicContext = buildTripPlanningContext(context, memory);
+  const user = `${dynamicContext}\n\nReview your CURRENT PLAN and OPTIONS. Keep the current plan if it is still optimal, or propose a replan using one or more cards from OPTIONS.`;
+  return { system, user };
 }
 
 // ── Cargo Conflict Prompt (JIRA-92) ──
 
 const CARGO_CONFLICT_SYSTEM_SUFFIX = `
-You are evaluating whether a bot should DROP a carried load to free cargo slots for a better planned route.
-
-The bot has planned a new delivery route, but it needs more cargo slots than it has free. One or more carried loads are NOT part of the planned route. Your job: decide whether to drop a carried load to enable the planned pickups.
+Should the bot DROP a carried load to free cargo slots for a better planned route?
 
 DECISION CRITERIA:
-1. If the carried load's delivery is IMMINENT (on existing network, 1-2 turns away), KEEP it — completing the delivery is more valuable than dropping.
-2. If the carried load's delivery is EXPENSIVE (requires significant track building) or DISTANT (many turns), dropping it to enable a clearly better route is correct.
-3. Compare: (carried load payout - track cost) / estimated turns VS (planned route total payout - track cost) / estimated turns. Drop the worse deal.
-4. An empty slot earning 20M+ over 6 turns beats a slot holding a 48M load that costs 40M track and 9 turns.
-5. When in doubt, KEEP — dropping a load wastes the effort to pick it up.
+1. If the carried load's delivery is IMMINENT (1-2 turns away on existing track), KEEP it.
+2. If the carried load's delivery is EXPENSIVE or DISTANT, dropping it for a better route is correct.
+3. When in doubt, KEEP.
 
 RESPONSE FORMAT (JSON only, no markdown):
 {
   "action": "drop" | "keep",
   "dropLoad": "load type to drop (required if action is drop)",
-  "reasoning": "Brief explanation of the decision"
-}
-
-Choose "keep" if the carried load is valuable or delivery is imminent.
-Choose "drop" only if the planned route is significantly better and the carried load is a poor investment.
-`;
+  "reasoning": "Brief explanation"
+}`;
 
 /**
  * Get the system prompt for cargo conflict evaluation (JIRA-92).
- *
- * Lightweight prompt for evaluating whether to drop carried cargo to enable a better route.
  */
 export function getCargoConflictPrompt(): string {
   return CARGO_CONFLICT_SYSTEM_SUFFIX;
 }
 
-// ── Route Re-evaluation Prompt (JIRA-64) ──
+// ── Upgrade-Before-Drop Prompt (JIRA-105b) ──
 
-const ROUTE_REEVAL_SYSTEM_SUFFIX = `
-You are evaluating whether a bot's current delivery route should change after a new demand card was drawn (from a mid-turn delivery).
+const UPGRADE_BEFORE_DROP_SYSTEM_SUFFIX = `
+Should the bot UPGRADE its train instead of DROPPING a load to resolve a cargo conflict?
 
-You will receive:
-- The bot's current route (remaining stops)
-- The bot's refreshed demand cards (including the newly drawn card)
-- The bot's position, cash, and train type
+DECISION CRITERIA:
+1. If the upgrade lets the bot deliver ALL loads and net benefit is positive, upgrade.
+2. Upgrading is permanent — 3 cargo slots for the rest of the game. Long-term value.
+3. When in doubt, UPGRADE.
 
-Your task: Decide whether the current route is still the best plan, or whether the new demand card changes things.
-
-RESPONSE FORMAT (JSON):
+RESPONSE FORMAT (JSON only, no markdown):
 {
-  "decision": "continue" | "amend" | "abandon",
-  "amendedStops": [{"action": "PICKUP"|"DELIVER", "load": "...", "city": "...", "demandCardId": N, "payment": N}],
+  "action": "upgrade" | "skip",
+  "targetTrain": "target train type (required if action is upgrade)",
   "reasoning": "Brief explanation"
-}
-
-DECISION GUIDELINES:
-- "continue": The current route is still the best plan. The new card doesn't improve on it.
-- "amend": The new card offers an opportunity that can be incorporated into the current route with minimal detour. Provide the full amended stop list.
-- "abandon": The new card is significantly better than the current route. The bot should drop the current plan entirely and re-plan next turn.
-
-Only choose "amend" if the detour adds fewer turns than the payout justifies.
-Only choose "abandon" if the current route is clearly suboptimal compared to alternatives.
-When in doubt, choose "continue" — stability is better than constant re-planning.
-
-The "amendedStops" field is only required when decision is "amend".
-`;
+}`;
 
 /**
- * Get the system prompt for post-delivery route re-evaluation (JIRA-64).
- *
- * Lightweight prompt for focused continue/amend/abandon decision.
+ * Get the system prompt for upgrade-before-drop evaluation (JIRA-105b).
  */
-export function getRouteReEvaluationPrompt(): string {
-  return ROUTE_REEVAL_SYSTEM_SUFFIX;
+export function getUpgradeBeforeDropPrompt(): string {
+  return UPGRADE_BEFORE_DROP_SYSTEM_SUFFIX;
+}
+
+// ── Build Advisor Prompt (JIRA-129) ────────────────────────────────────
+
+/**
+ * Build a FERRY CONNECTIONS section listing ferries fully within the corridor bounds.
+ * Returns empty string if no ferry connections exist within corridor.
+ */
+function buildFerryConnectionsSection(
+  ferryConnections: FerryConnection[],
+  corridorMap: CorridorMap,
+): string {
+  const { minRow, maxRow, minCol, maxCol } = corridorMap;
+  const inCorridor = ferryConnections.filter(fc => {
+    const [a, b] = fc.connections;
+    return (
+      a.row >= minRow && a.row <= maxRow && a.col >= minCol && a.col <= maxCol &&
+      b.row >= minRow && b.row <= maxRow && b.col >= minCol && b.col <= maxCol
+    );
+  });
+
+  if (inCorridor.length === 0) return '';
+
+  const lines = inCorridor.map(fc => {
+    const [a, b] = fc.connections;
+    return `  ${fc.Name}: (${a.row},${a.col}) ↔ (${b.row},${b.col}) — cost ${fc.cost}M`;
+  });
+  return `FERRY CONNECTIONS (within corridor):\n${lines.join('\n')}`;
+}
+
+/**
+ * Build a YOUR TRACK NETWORK section showing connected chains of bot segments.
+ * Returns empty string if no segments exist.
+ */
+function buildTrackNetworkSection(
+  existingSegments: TrackSegment[],
+  gridPoints: GridPoint[],
+): string {
+  if (existingSegments.length === 0) return '';
+
+  // Build a city name lookup by row,col key
+  const cityNameMap = new Map<string, string>();
+  for (const gp of gridPoints) {
+    if (gp.city?.name) {
+      cityNameMap.set(`${gp.row},${gp.col}`, gp.city.name);
+    }
+  }
+
+  // Walk segments adjacently to form connected chains
+  // Each segment is from→to; chains share endpoints
+  const remaining = [...existingSegments];
+  const chains: Array<Array<{ row: number; col: number }>> = [];
+
+  while (remaining.length > 0) {
+    // Start a new chain from the first remaining segment
+    const first = remaining.splice(0, 1)[0];
+    const chain: Array<{ row: number; col: number }> = [
+      { row: first.from.row, col: first.from.col },
+      { row: first.to.row, col: first.to.col },
+    ];
+
+    // Try to extend chain at either end
+    let extended = true;
+    while (extended) {
+      extended = false;
+      const head = chain[0];
+      const tail = chain[chain.length - 1];
+
+      for (let i = remaining.length - 1; i >= 0; i--) {
+        const seg = remaining[i];
+        const fromKey = `${seg.from.row},${seg.from.col}`;
+        const toKey = `${seg.to.row},${seg.to.col}`;
+        const headKey = `${head.row},${head.col}`;
+        const tailKey = `${tail.row},${tail.col}`;
+
+        if (fromKey === tailKey) {
+          chain.push({ row: seg.to.row, col: seg.to.col });
+          remaining.splice(i, 1);
+          extended = true;
+        } else if (toKey === tailKey) {
+          chain.push({ row: seg.from.row, col: seg.from.col });
+          remaining.splice(i, 1);
+          extended = true;
+        } else if (toKey === headKey) {
+          chain.unshift({ row: seg.from.row, col: seg.from.col });
+          remaining.splice(i, 1);
+          extended = true;
+        } else if (fromKey === headKey) {
+          chain.unshift({ row: seg.to.row, col: seg.to.col });
+          remaining.splice(i, 1);
+          extended = true;
+        }
+      }
+    }
+
+    chains.push(chain);
+  }
+
+  // Format each chain with city annotations
+  const chainLines = chains.map(chain => {
+    const nodes = chain.map(pt => {
+      const key = `${pt.row},${pt.col}`;
+      const cityName = cityNameMap.get(key);
+      return cityName ? `${cityName}(${pt.row},${pt.col})` : `(${pt.row},${pt.col})`;
+    });
+    return `  Chain: ${nodes.join(' → ')}`;
+  });
+
+  return `YOUR TRACK NETWORK:\n${chainLines.join('\n')}`;
+}
+
+/**
+ * Generate system and user prompts for the Build Advisor LLM call.
+ */
+export function getBuildAdvisorPrompt(
+  context: GameContext,
+  activeRoute: StrategicRoute | null,
+  corridorMap: CorridorMap,
+  buildTarget?: string,
+  ferryConnections: FerryConnection[] = [],
+  existingSegments: TrackSegment[] = [],
+  gridPoints: GridPoint[] = [],
+): { system: string; user: string } {
+  const targetDirective = buildTarget
+    ? `Build track to connect your network to ${buildTarget}. Provide waypoints for the cheapest path.`
+    : 'Build track to extend your network toward your next route stop. Provide waypoints for the cheapest path.';
+
+  const system = `You are a railroad track building advisor for the board game Eurorails.
+
+TRACK BUILDING RULES:
+- Spend up to 20M ECU per turn. Terrain: Clear 1M, Mountain 2M, Alpine 5M, Small/Medium City 3M, Major City 5M.
+- Water crossings: River +2M, Lake +3M, Ocean Inlet +3M.
+- Water (~) is impassable — you CANNOT build across open water. Use ferry ports (F) to cross water.
+- Track must connect to your existing network or start from a major city.
+
+OPPONENT TRACK: You may use an opponent's track for 4M ECU per opponent per turn.
+
+${targetDirective}
+Answer with waypoints (row, col coordinates) — the pathfinding algorithm determines the exact route.
+
+Actions: "build", "useOpponentTrack"`;
+
+  const sections: string[] = [];
+
+  sections.push(`CORRIDOR MAP:\n${corridorMap.rendered}`);
+  sections.push(`CONNECTED MAJOR CITIES: ${context.connectedMajorCities.join(', ') || 'None'}`);
+  sections.push(`CITIES ON NETWORK: ${context.citiesOnNetwork.join(', ') || 'None'}`);
+
+  if (activeRoute) {
+    const stops = activeRoute.stops.map((s, i) => {
+      const marker = i === activeRoute.currentStopIndex ? ' [CURRENT]' : '';
+      return `  ${i + 1}. ${s.action} ${s.loadType} at ${s.city}${s.payment ? ` (${s.payment}M)` : ''}${marker}`;
+    }).join('\n');
+    sections.push(`ACTIVE ROUTE (phase: ${activeRoute.phase}):\n${stops}`);
+  } else {
+    sections.push('ACTIVE ROUTE: None');
+  }
+
+  sections.push(`CASH: ${context.money}M ECU`);
+  sections.push(`CARRIED LOADS: ${context.loads.length > 0 ? context.loads.join(', ') : 'None'}`);
+  sections.push(`GAME PHASE: ${context.phase} | Turn ${context.turnNumber}`);
+
+  // Ferry connections section (omitted when empty)
+  const ferrySection = buildFerryConnectionsSection(ferryConnections, corridorMap);
+  if (ferrySection) {
+    sections.push(ferrySection);
+  }
+
+  // Track network section (omitted when no segments)
+  const trackSection = buildTrackNetworkSection(existingSegments, gridPoints);
+  if (trackSection) {
+    sections.push(trackSection);
+  }
+
+  // JIRA-148: Demand cards intentionally omitted — BuildAdvisor is a tactical
+  // pathfinding tool, not a strategic planner. Including demand cards caused
+  // the LLM to override the computed build target with its own route selection.
+
+  return { system, user: sections.join('\n\n') };
+}
+
+/**
+ * Build a compact extraction prompt for two-pass structured extraction.
+ */
+export function getBuildAdvisorExtractionPrompt(
+  rawText: string,
+  targetCity: { row: number; col: number },
+  frontier: Array<{ row: number; col: number }>,
+): { system: string; user: string } {
+  const frontierStr = frontier.slice(0, 5).map(f => `(${f.row},${f.col})`).join(', ');
+
+  const system = `Extract structured data from a track building advisor's text response.
+
+OUTPUT FORMAT (JSON):
+- action: one of "build", "useOpponentTrack"
+- target: city name string
+- waypoints: array of [row, col] coordinate pairs (integers)
+- reasoning: brief summary
+
+Target city: (${targetCity.row},${targetCity.col}). Frontier: ${frontierStr || 'none'}.
+If no coordinates mentioned, infer waypoints between frontier and target.`;
+
+  return { system, user: rawText };
 }

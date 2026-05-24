@@ -90,6 +90,19 @@ export class TurnExecutor {
       return TurnExecutor.executeMultiAction(plan.steps, snapshot);
     }
 
+    // JIRA-173: Skip plans that were already executed during TurnExecutorPlanner's
+    // early delivery path (preExecuted=true prevents double-execution).
+    if ((plan as { preExecuted?: boolean }).preExecuted) {
+      return {
+        success: true,
+        action: plan.type as AIActionType,
+        cost: 0,
+        segmentsBuilt: 0,
+        remainingMoney: snapshot.bot.money,
+        durationMs: 0,
+      };
+    }
+
     const option = TurnExecutor.planToOption(plan);
     return TurnExecutor.execute(option, snapshot);
   }
@@ -191,6 +204,13 @@ export class TurnExecutor {
     const concatenatedPath: { row: number; col: number }[] = [];
 
     for (const step of steps) {
+      // JIRA-173: Skip plans that were already executed during TurnExecutorPlanner's
+      // early delivery path. The delivery has already been committed to DB and the
+      // plan carries preExecuted=true to prevent double-execution here.
+      if ((step as { preExecuted?: boolean }).preExecuted) {
+        continue;
+      }
+
       // JIRA-83: Skip DELIVER/DROP steps when bot is not at a named city.
       // Earlier steps (MOVE) already committed to DB, so failing the entire turn
       // would misrepresent what happened. Warn and continue instead.
@@ -250,16 +270,16 @@ export class TurnExecutor {
         concatenatedPath.push(...result.movementPath.slice(startIndex));
       }
 
-      // Update snapshot state so subsequent steps see correct position/loads
+      // Update snapshot.bot.position so subsequent steps see the new position.
+      // Loads mutations now live inside the per-action handlers
+      // (handlePickupLoad / handleDeliverLoad / handleDropLoad), so they fire
+      // both on the multi-action path and on the early-execution path used by
+      // MovementPhasePlanner's post-delivery replan. JIRA-220 follow-up —
+      // see analysis on game e437ce9b for why orchestrator-level mutations
+      // were incorrect.
       if (step.type === AIActionType.MoveTrain && step.path.length > 0) {
         const dest = step.path[step.path.length - 1];
         snapshot.bot.position = { row: dest.row, col: dest.col };
-      }
-      if (step.type === AIActionType.PickupLoad) {
-        snapshot.bot.loads = [...snapshot.bot.loads, step.load];
-      }
-      if (step.type === AIActionType.DeliverLoad) {
-        snapshot.bot.loads = snapshot.bot.loads.filter(l => l !== step.load);
       }
     }
 
@@ -381,8 +401,8 @@ export class TurnExecutor {
       to: { row: destination.row, col: destination.col, x: pixel.x, y: pixel.y },
     });
 
-    const cost = moveResult.feeTotal;
-    const remainingMoney = moveResult.updatedMoney;
+    const cost = moveResult?.feeTotal ?? 0;
+    const remainingMoney = moveResult?.updatedMoney ?? 0;
 
     // Post-commit: audit record (best-effort)
     try {
@@ -464,7 +484,9 @@ export class TurnExecutor {
       cityName,
     );
 
-    // Update snapshot so subsequent steps see the correct loads
+    // Update snapshot so subsequent steps see the correct loads (JIRA-220 follow-up
+    // game e437ce9b — keep snapshot in sync with DB for mid-turn consumers like
+    // MovementPhasePlanner's JIRA-165 demand refresh).
     snapshot.bot.loads = updatedLoads;
 
     // Post-commit: audit record (best-effort)
@@ -556,17 +578,53 @@ export class TurnExecutor {
     }
 
     // Delegate to PlayerService — handles validation, payment, debt, card draw, DB update
-    const deliverResult = await PlayerService.deliverLoadForUser(
-      snapshot.gameId,
-      snapshot.bot.userId,
-      cityName,
-      loadType as LoadType,
-      cardId,
-    );
+    let deliverResult: Awaited<ReturnType<typeof PlayerService.deliverLoadForUser>>;
+    try {
+      deliverResult = await PlayerService.deliverLoadForUser(
+        snapshot.gameId,
+        snapshot.bot.userId,
+        cityName,
+        loadType as LoadType,
+        cardId,
+      );
+    } catch (deliverError) {
+      console.error(
+        `[TurnExecutor.handleDeliverLoad] JIRA-188 delivery error:`,
+        JSON.stringify({
+          loadType: plan.loadType,
+          cardId: plan.cardId,
+          targetCity: plan.targetCity,
+          derivedCityName: cityName,
+          position: snapshot.bot.position,
+          loads: snapshot.bot.loads,
+          resolvedDemandCardIds: snapshot.bot.resolvedDemands.map(r => r.cardId),
+          errorMessage: deliverError instanceof Error ? deliverError.message : String(deliverError),
+        }),
+      );
+      throw deliverError;
+    }
 
     const payment = deliverResult.payment;
     const newCardId = deliverResult.newCard.id;
     const remainingMoney = deliverResult.updatedMoney;
+
+    // Mirror the DB mutation onto the in-memory snapshot so subsequent
+    // mid-turn consumers (e.g., MovementPhasePlanner's JIRA-165 demand
+    // refresh after a delivery) see the correct loads. Without this,
+    // a stale snapshot.bot.loads gets copied onto the freshly-captured
+    // snapshot at MovementPhasePlanner.ts:256, which propagates wrong
+    // isLoadOnTrain flags into the post-delivery replan and causes the
+    // deterministic algorithm to emit deliver-only routes for fresh
+    // demands of the just-delivered loadType. JIRA-220 follow-up — see
+    // analysis on game e437ce9b. Removes ONE occurrence of the load
+    // (delivery is per-instance, not per-loadType-class).
+    const idx = snapshot.bot.loads.indexOf(loadType);
+    if (idx >= 0) {
+      snapshot.bot.loads = [
+        ...snapshot.bot.loads.slice(0, idx),
+        ...snapshot.bot.loads.slice(idx + 1),
+      ];
+    }
 
     // Post-commit: audit record (best-effort)
     try {

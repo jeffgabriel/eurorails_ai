@@ -6,7 +6,7 @@ import {
   GRID_MARGIN,
 } from "../config/mapConfig";
 import { TerrainType, GridPoint } from "../../shared/types/GameTypes";
-import { GameState } from "../../shared/types/GameTypes";
+import { FullGameState } from "../../shared/types/GameTypes";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
 import { MapElement } from "./map/MapElement";
 import { MapElementFactory } from "./map/MapElementFactory";
@@ -28,11 +28,12 @@ export class MapRenderer {
   private trackDrawingManager: TrackDrawingManager;
   private backgroundGraphics: Phaser.GameObjects.Graphics;
   private mapElements: MapElement[][] = [];
+  private coordTooltip: Phaser.GameObjects.Text | null = null;
 
   constructor(
     scene: Phaser.Scene,
     mapContainer: Phaser.GameObjects.Container,
-    gameState: GameState,
+    gameState: FullGameState,
     trackDrawingManager: TrackDrawingManager
   ) {
     this.scene = scene;
@@ -157,10 +158,12 @@ export class MapRenderer {
         }
 
         // Store point data with grid coordinates
+        const px = config ? config.x : x + MapRenderer.GRID_MARGIN;
+        const py = config ? config.y : y + MapRenderer.GRID_MARGIN;
         this.gridPoints[row][col] = {
           id: config?.id || "",
-          x: config ? config.x : x + MapRenderer.GRID_MARGIN,
-          y: config ? config.y : y + MapRenderer.GRID_MARGIN,
+          x: px,
+          y: py,
           row,
           col,
           terrain,
@@ -175,6 +178,20 @@ export class MapRenderer {
               }
             : undefined,
         };
+
+        // Add clickable hit zone for coordinate display
+        if (terrain !== TerrainType.Water) {
+          const hitZone = this.scene.add.zone(px, py, 14, 14)
+            .setInteractive({ useHandCursor: true })
+            .setDepth(999);
+          this.mapContainer.add(hitZone);
+
+          const r = row, c = col;
+          const cityName = city?.name;
+          hitZone.on('pointerdown', () => {
+            this.showCoordinateTooltip(px, py, r, c, cityName);
+          });
+        }
       }
     }
 
@@ -236,6 +253,27 @@ export class MapRenderer {
     coordLabel.setDepth(10000);
     coordLabel.setOrigin(0, 1);
     this.mapContainer.add(coordLabel);
+  }
+
+  private showCoordinateTooltip(x: number, y: number, row: number, col: number, cityName?: string): void {
+    if (this.coordTooltip) {
+      this.coordTooltip.destroy();
+    }
+    const label = cityName ? `${row},${col} (${cityName})` : `${row},${col}`;
+    this.coordTooltip = this.scene.add.text(x + 10, y - 20, label, {
+      fontSize: '14px',
+      color: '#ffffff',
+      backgroundColor: '#000000cc',
+      padding: { x: 6, y: 3 },
+    }).setDepth(1000);
+    this.mapContainer.add(this.coordTooltip);
+
+    this.scene.time.delayedCall(3000, () => {
+      if (this.coordTooltip) {
+        this.coordTooltip.destroy();
+        this.coordTooltip = null;
+      }
+    });
   }
 
   private writeGridPointLabel(p: GridPoint | undefined, isOffsetRow: boolean) {

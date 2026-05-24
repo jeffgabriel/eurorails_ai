@@ -131,6 +131,12 @@ module.exports = {
         secure: false,
         changeOrigin: true,
         ws: true
+      },
+      {
+        context: ['/logs', '/log', '/llm'],
+        target: 'http://localhost:3001',
+        secure: false,
+        changeOrigin: true
       }
     ]
   },

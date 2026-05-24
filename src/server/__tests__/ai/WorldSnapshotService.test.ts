@@ -1,9 +1,8 @@
 /**
  * WorldSnapshotService — ferryHalfSpeed flag tests (TEST-004)
  *
- * After BE-006, ferryHalfSpeed is no longer set by terrain detection in capture().
- * Instead, ActionResolver.resolveMove() handles ferry crossing and half-speed
- * directly when the bot teleports across a ferry.
+ * JIRA-108: Restored terrain-based ferry detection in capture().
+ * When bot is at a FerryPort milepost, ferryHalfSpeed = true (half speed this turn).
  */
 
 import { TerrainType } from '../../../shared/types/GameTypes';
@@ -15,16 +14,19 @@ jest.mock('../../db/index', () => ({
 }));
 
 jest.mock('../../services/MapTopology', () => ({
+  ...jest.requireActual<typeof import('../../services/MapTopology')>('../../services/MapTopology'),
   loadGridPoints: jest.fn(() => new Map()),
   gridToPixel: jest.fn(() => ({ x: 0, y: 0 })),
 }));
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
+  ...jest.requireActual<typeof import('../../../shared/services/majorCityGroups')>('../../../shared/services/majorCityGroups'),
   getMajorCityGroups: jest.fn(() => []),
   getFerryEdges: jest.fn(() => []),
 }));
 
 jest.mock('../../services/ai/connectedMajorCities', () => ({
+  ...jest.requireActual<typeof import('../../services/ai/connectedMajorCities')>('../../services/ai/connectedMajorCities'),
   getConnectedMajorCityCount: jest.fn(() => 0),
 }));
 
@@ -74,9 +76,7 @@ describe('WorldSnapshotService.capture — ferryHalfSpeed', () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  it('should always set ferryHalfSpeed=false (BE-006: moved to ActionResolver)', async () => {
-    // After BE-006, ferryHalfSpeed is always false in capture().
-    // Half-speed is applied directly in resolveMove() during ferry teleportation.
+  it('should set ferryHalfSpeed=true when bot is at a FerryPort (JIRA-108)', async () => {
     const botRow = makeBotRow(10, 20);
     mockQuery.mockResolvedValueOnce({ rows: [botRow] });
 
@@ -85,7 +85,7 @@ describe('WorldSnapshotService.capture — ferryHalfSpeed', () => {
     mockLoadGridPoints.mockReturnValue(grid);
 
     const snapshot = await capture(GAME_ID, BOT_ID);
-    expect(snapshot.bot.ferryHalfSpeed).toBe(false);
+    expect(snapshot.bot.ferryHalfSpeed).toBe(true);
   });
 
   it('should set ferryHalfSpeed=false when bot is at Clear terrain', async () => {

@@ -57,10 +57,11 @@ function buildDemandRanking(demands: DemandContext[]): Array<{
   rank: number;
 }> {
   return [...demands]
+    .filter(d => d.supplyCity !== null)
     .sort((a, b) => b.demandScore - a.demandScore)
     .map((d, i) => ({
       loadType: d.loadType,
-      supplyCity: d.supplyCity,
+      supplyCity: d.supplyCity as string,
       deliveryCity: d.deliveryCity,
       payout: d.payout,
       score: d.demandScore,

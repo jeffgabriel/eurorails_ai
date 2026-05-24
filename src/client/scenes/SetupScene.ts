@@ -1,12 +1,12 @@
 import 'phaser';
-import { Player, PlayerColor, GameState, INITIAL_PLAYER_MONEY, TrainType } from '../../shared/types/GameTypes';
+import { Player, PlayerColor, FullGameState, INITIAL_PLAYER_MONEY, TrainType } from '../../shared/types/GameTypes';
 import { IdService } from '../../shared/services/IdService';
 import { DemandDeckService } from '../../shared/services/DemandDeckService';
 import { DemandCard } from '../../shared/types/DemandCard';
 import { config } from '../config/apiConfig';
 import { authenticatedFetch } from '../services/authenticatedFetch';
 export class SetupScene extends Phaser.Scene {
-    private gameState: GameState;
+    private gameState: FullGameState;
     private nameInput?: HTMLInputElement;
     private colorButtons: Phaser.GameObjects.Rectangle[] = [];
     private selectedColor?: PlayerColor;
@@ -47,7 +47,7 @@ export class SetupScene extends Phaser.Scene {
         
     }
 
-    init(data: { gameState?: GameState; gameId?: string }) {
+    init(data: { gameState?: FullGameState; gameId?: string }) {
         // Prefer explicit init param; fall back to URL (important on refresh)
         const effectiveGameId = data.gameId ?? this.getGameIdFromUrl();
 

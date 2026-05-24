@@ -133,3 +133,45 @@ describe('AnthropicAdapter', () => {
     await expect(slowAdapter.chat(mockRequest)).rejects.toThrow(ProviderTimeoutError);
   });
 });
+
+describe('AnthropicAdapter — x-api-key header (always unconditional after bearer removal)', () => {
+  // Verify that x-api-key is always sent and Authorization header is never sent
+  it('always sends x-api-key header and does NOT send Authorization', async () => {
+    const apiKeyAdapter = new AnthropicAdapter('key-ABC', 5000);
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        content: [{ type: 'text', text: '{"ok":true}' }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }),
+    });
+
+    await apiKeyAdapter.chat(mockRequest);
+
+    const [, options] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(options.headers['x-api-key']).toBe('key-ABC');
+    expect(options.headers['Authorization']).toBeUndefined();
+    expect(options.headers['anthropic-version']).toBe('2023-06-01');
+    expect(options.headers['content-type']).toBe('application/json');
+  });
+
+  // Two-arg constructor sends x-api-key
+  it('two-arg constructor: sends x-api-key header', async () => {
+    const twoArgAdapter = new AnthropicAdapter('test-key', 5000);
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        content: [{ type: 'text', text: 'ok' }],
+        usage: { input_tokens: 5, output_tokens: 3 },
+      }),
+    });
+
+    await twoArgAdapter.chat(mockRequest);
+
+    const [, options] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(options.headers['x-api-key']).toBe('test-key');
+    expect(options.headers['Authorization']).toBeUndefined();
+  });
+});

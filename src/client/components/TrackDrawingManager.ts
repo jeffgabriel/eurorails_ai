@@ -1,5 +1,5 @@
 import 'phaser';
-import { GameState, TerrainType, GridPoint } from '../../shared/types/GameTypes';
+import { FullGameState, TerrainType, GridPoint } from '../../shared/types/GameTypes';
 import { TrackSegment, PlayerTrackState } from '../../shared/types/TrackTypes';
 import { MapRenderer } from './MapRenderer';
 import { TrackService } from '../services/TrackService';
@@ -12,7 +12,7 @@ export class TrackDrawingManager {
     private mapContainer: Phaser.GameObjects.Container;
     private drawingGraphics: Phaser.GameObjects.Graphics;
     private previewGraphics: Phaser.GameObjects.Graphics;
-    private gameState: GameState;
+    private gameState: FullGameState;
     private playerTracks: Map<string, PlayerTrackState>;
     private gridPoints: GridPoint[][];
     
@@ -70,7 +70,7 @@ export class TrackDrawingManager {
     constructor(
         scene: Phaser.Scene, 
         mapContainer: Phaser.GameObjects.Container, 
-        gameState: GameState,
+        gameState: FullGameState,
         gridPoints: GridPoint[][],
         gameStateService?: any, // Using 'any' to avoid circular dependency
         trackService?: TrackService // Optional for testability

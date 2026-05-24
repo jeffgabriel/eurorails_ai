@@ -439,9 +439,32 @@ router.post('/players/presence', asyncHandler(async (req: Request, res: Response
 router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const { id: gameId } = req.params;
   const userId = req.user!.id;
-  const { skillLevel, name, provider, model } = req.body;
+  const { skillLevel, name, provider, model, color } = req.body;
 
-  logLobbyOperation('Add bot request', { gameId, userId, skillLevel, name, provider, model }, req);
+  // Normalize and validate optional color field
+  const CANONICAL_PALETTE = ['#ff0000', '#0000ff', '#008000', '#ffd700', '#000000', '#8b4513'];
+  let normalizedColor: string | undefined;
+  if (color !== undefined && color !== null && color !== '') {
+    if (typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)) {
+      res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        message: 'Invalid color',
+        details: 'color must be a 6-digit hex code'
+      });
+      return;
+    }
+    normalizedColor = color.toLowerCase();
+    if (!CANONICAL_PALETTE.includes(normalizedColor)) {
+      res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        message: 'Invalid color',
+        details: 'color is not an allowed player color'
+      });
+      return;
+    }
+  }
+
+  logLobbyOperation('Add bot request', { gameId, userId, skillLevel, name, provider, model, color: normalizedColor ?? 'auto' }, req);
 
   // Validate UUID format
   if (!validateUUID(gameId, 'gameId', res)) {
@@ -499,7 +522,7 @@ router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(asyn
     ...(provider && { provider }),
     ...(model && { model }),
   };
-  const bot = await LobbyService.addBot(gameId, userId, botConfig);
+  const bot = await LobbyService.addBot(gameId, userId, botConfig, normalizedColor);
 
   logLobbyOperation('Bot added successfully', { gameId, botId: bot.id }, req);
 

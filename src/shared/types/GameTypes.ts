@@ -25,6 +25,7 @@ export enum BotSkillLevel {
 export enum LLMProvider {
     Anthropic = 'anthropic',
     Google = 'google',
+    OpenAI = 'openai',
 }
 
 /** Default model per provider and skill level */
@@ -38,6 +39,11 @@ export const LLM_DEFAULT_MODELS: Record<LLMProvider, Record<BotSkillLevel, strin
         [BotSkillLevel.Easy]: 'gemini-3-flash-preview',
         [BotSkillLevel.Medium]: 'gemini-3-pro-preview',
         [BotSkillLevel.Hard]: 'gemini-3.1-pro-preview',
+    },
+    [LLMProvider.OpenAI]: {
+        [BotSkillLevel.Easy]: 'gpt-5.4-nano',
+        [BotSkillLevel.Medium]: 'gpt-5.4-mini',
+        [BotSkillLevel.Hard]: 'gpt-5.4-mini',
     },
 };
 
@@ -128,6 +134,34 @@ export const VICTORY_INITIAL_THRESHOLD = 250; // 250M ECU to win
 export const VICTORY_TIE_THRESHOLD = 300; // 300M ECU after a tie
 export const TRACK_USAGE_FEE = 4; // 4M ECU per opponent's track used per turn
 
+/** Cash threshold (ECU M) at which the bot's game state latches to End and never reverts. */
+export const END_GAME_ENTRY_CASH = 200;
+
+/** Number of connected major cities required to win. Hoisted from routeHelpers.ts for shared use. */
+export const VICTORY_CITY_COUNT = 7;
+
+/**
+ * Persistent game phase for bot decision-making.
+ *
+ * Turn-based brackets (JIRA-242):
+ *   Initial : turns 1–3 (setup builds + first regular turn)
+ *   Early   : turns 4–25 (expansion phase)
+ *   Mid     : turn ≥ 26 (and cash ≤ END_GAME_ENTRY_CASH)
+ *
+ * Cash-latched (JIRA-241):
+ *   End : cash > END_GAME_ENTRY_CASH (200M) ever, latched and never reverts.
+ *
+ * Initial → Early → Mid is monotonic (turn number only increases), so
+ * those transitions don't need explicit latching. End takes precedence
+ * over any turn-based phase the moment cash crosses 200M.
+ */
+export enum GameState {
+  Initial = 'initial',
+  Early = 'early',
+  Mid = 'mid',
+  End = 'end',
+}
+
 export interface VictoryState {
     triggered: boolean;              // Has someone declared victory?
     triggerPlayerIndex: number;      // Who triggered it? (-1 if not triggered)
@@ -146,7 +180,8 @@ export interface Game {
     victoryState?: VictoryState;
 }
 
-export interface GameState {
+/** Full game state snapshot (players, board, etc.). Named FullGameState to distinguish from the bot-phase GameState enum. */
+export interface FullGameState {
     id: string;  // Add unique identifier for the game
     players: Player[];
     currentPlayerIndex: number;
@@ -343,6 +378,13 @@ export interface WorldSnapshot {
         ferryHalfSpeed?: boolean;
         /** Number of major cities connected by the bot's continuous track network */
         connectedMajorCityCount: number;
+        /**
+         * Total completed deliveries this game — used by BuildContext.checkCanUpgrade
+         * to enforce UPGRADE_DELIVERY_THRESHOLD before allowing train upgrades.
+         * Populated from BotMemoryState.deliveryCount by ContextBuilder.
+         * JIRA-207A.
+         */
+        deliveriesCompleted?: number;
     };
     allPlayerTracks: Array<{
         playerId: string;
@@ -439,11 +481,19 @@ export interface DeliveryPlan {
 
 /** A single stop in a multi-stop delivery route */
 export interface RouteStop {
-  action: 'pickup' | 'deliver';
+  action: 'pickup' | 'deliver' | 'drop';
   loadType: string;
   city: string;
   demandCardId?: number;   // for delivers — which demand card this fulfills
   payment?: number;         // for delivers — ECU payout
+  /**
+   * When set by RouteEnrichmentAdvisor (Project 2), overrides
+   * demand.estimatedTrackCostToSupply / estimatedTrackCostToDelivery in the
+   * RouteValidator cumulative-budget gate. Represents the marginal build cost
+   * computed by RouteDetourEstimator for an inserted stop.
+   * R4 — Project 1 adds field; Project 2 sets it.
+   */
+  insertionDetourCostOverride?: number;
 }
 
 /** Multi-stop strategic route planned by LLM, auto-executed over multiple turns */
@@ -452,6 +502,7 @@ export interface StrategicRoute {
   currentStopIndex: number;     // which stop we're working toward
   phase: 'build' | 'travel' | 'act';  // within current stop: build track → travel → pickup/deliver
   startingCity?: string;        // for initial build: where to start building from
+  upgradeOnRoute?: string;      // LLM's upgrade decision: 'FastFreight' | 'HeavyFreight' | 'Superfreight'
   createdAtTurn: number;
   reasoning: string;            // LLM's reasoning for choosing this route
 }
@@ -464,8 +515,6 @@ export interface BotMemoryState {
     turnsOnTarget: number;
     /** What the bot did last turn (Phase 2 action) */
     lastAction: AIActionType | null;
-    /** Consecutive turns with zero progress — used for stuck detection */
-    noProgressTurns: number;
     /** Consecutive DiscardHand actions — used to prevent discard death spirals */
     consecutiveDiscards: number;
     /** Total deliveries completed this game */
@@ -488,6 +537,44 @@ export interface BotMemoryState {
     lastPlanHorizon?: string | null;
     /** Remaining stops from a partially completed route — passed to LLM for context (BE-010) */
     previousRouteStops?: RouteStop[] | null;
+    /** Consecutive turns where LLM failed to produce a valid route plan (JIRA-120) */
+    consecutiveLlmFailures: number;
+    /** JIRA-203: Hard gate name that stripped Phase B last turn (for stuck-state detection) */
+    lastPhaseBStrippedGate?: string | null;
+    /** JIRA-203: Bot position when Phase B was last stripped (for stuck-state detection) */
+    lastPositionWhenStripped?: { row: number; col: number } | null;
+    /**
+     * Rolling window of recent deliveries (length capped at RECENT_DELIVERIES_WINDOW).
+     * Used by StrategicContextBuilder to compute per-turn income velocity for Medium bots.
+     */
+    recentDeliveries?: Array<{ turn: number; payout: number }>;
+    /**
+     * Maps demand card index to the turn on which it was drawn.
+     * Used by StrategicContextBuilder to compute hand staleness for Medium bots.
+     */
+    cardAcquisitionTurn?: Record<number, number>;
+    /**
+     * Cumulative count of turns the bot ended with its train at full cargo
+     * capacity (loads.length >= cap). Gates the Fast Freight → Superfreight
+     * upgrade: only emit the cargo-slot upgrade once the bot has demonstrated
+     * it actually saturates its current slots. Heavy Freight → Superfreight is
+     * not gated (that upgrade buys speed, not a slot).
+     */
+    capSaturatedTurns?: number;
+    /**
+     * JIRA-234 Defect A3: Consecutive turns the bot has been carrying load(s)
+     * with matching demand cards but cannot reach any delivery city on its
+     * network within available cash. Incremented when stuck-with-carry detected,
+     * reset on any delivery or successful build progress. When this counter
+     * exceeds a threshold, the carried-loads-suppress logic in GuardrailEnforcer
+     * is bypassed so the bot can DiscardHand and break out of the death loop.
+     */
+    stuckWithCarryTurns?: number;
+    /**
+     * JIRA-241: Persistent bot game phase. Once latched to End (cash > 200M),
+     * never reverts to Mid — even after temporary cash dips from building.
+     */
+    gameState?: GameState;
 }
 
 /** Simplified option summary for decision logging */
@@ -547,6 +634,12 @@ export interface LlmAttempt {
     responseText: string;
     error?: string;
     latencyMs: number;
+    /**
+     * JIRA-197 (ADR-5): Present and true when this success attempt was recovered from
+     * a truncated LLM response (pass-2 walk-back recovery). Omitted on normal success.
+     * Allows the debug overlay to label this attempt "success — recovered from truncation".
+     */
+    recoveredFromTruncation?: boolean;
 }
 
 // ─── LLM Strategy Brain Types ───────────────────────────────────────────────
@@ -558,7 +651,14 @@ export interface LLMStrategyConfig {
     /** If omitted, uses LLM_DEFAULT_MODELS[provider][skillLevel] */
     model?: string;
     apiKey: string;
-    /** Timeout in ms for LLM API calls. 10000 for Easy, 15000 for Medium/Hard. */
+    /**
+     * Credential mode for Anthropic provider.
+     * 'api-key'     — uses x-api-key header against api.anthropic.com (default, CI/prod).
+     * 'subscription' — routes through @anthropic-ai/claude-agent-sdk using local
+     *                  ~/.claude/.credentials.json; opt-in via ANTHROPIC_USE_CLAUDE_CODE=1.
+     */
+    credentialMode?: 'api-key' | 'subscription';
+    /** Timeout in ms for LLM API calls. Default 30000 (30s). */
     timeoutMs: number;
     /** Number of retries with minimal prompt before heuristic fallback. Default 1. */
     maxRetries: number;
@@ -635,7 +735,8 @@ export const AI_ACTION_LABELS: Record<AIActionType, string> = {
 export interface DemandContext {
     cardIndex: number;
     loadType: string;
-    supplyCity: string;
+    /** Supply city name, or null when the load is already on the train */
+    supplyCity: string | null;
     deliveryCity: string;
     payout: number;
     isSupplyReachable: boolean;
@@ -667,6 +768,18 @@ export interface DemandContext {
     projectedFundsAfterDelivery: number;
     /** On cold-start (no track), the major city that minimizes total route cost as a hub (JIRA-72) */
     optimalStartingCity?: string;
+    /**
+     * JIRA-231: Whether this demand card is structurally feasible for the bot to fulfill.
+     * false when the supply or delivery city is at its player-entry cap and the bot has no
+     * existing track there. Undefined when the saturation check was not performed
+     * (backwards compatible — treat as feasible when absent).
+     */
+    isFeasible?: boolean;
+    /**
+     * JIRA-231: Why the demand was marked infeasible.
+     * Only set when isFeasible === false.
+     */
+    infeasibleReason?: 'supplyCitySaturated' | 'deliveryCitySaturated';
 }
 
 /** An immediately completable delivery at the bot's current position */
@@ -740,6 +853,14 @@ export interface GameContext {
     deliveryCount?: number;
     /** En-route pickup opportunities near the bot's planned route (JIRA-87) */
     enRoutePickups?: EnRoutePickup[];
+    /** Consecutive LLM route planning failures — threaded from BotMemory (JIRA-120) */
+    consecutiveLlmFailures?: number;
+    /**
+     * JIRA-241: Persistent bot game phase stamped by ContextBuilder each turn.
+     * Required — ContextBuilder always populates this. Defaults to Mid when memory
+     * has no prior state.
+     */
+    gameState: GameState;
 }
 
 /** A single action within an LLM multi-action response */
@@ -793,6 +914,11 @@ export interface TurnPlanDeliverLoad {
     city: string;
     cardId: number;
     payout: number;
+    /** Set to true when the delivery has already been executed against the DB
+     *  (pre-executed during TurnExecutorPlanner's post-delivery replan path).
+     *  TurnExecutor.executeMultiAction() will skip steps with this flag set
+     *  to prevent double-execution. */
+    preExecuted?: boolean;
 }
 
 export interface TurnPlanPickupLoad {
@@ -831,6 +957,32 @@ export interface ResolvedAction {
     success: boolean;
     plan?: TurnPlan;
     error?: string;
+    /** JIRA-179: BuildRouteResolver structured log payload — only populated when ENABLE_BUILD_RESOLVER=true */
+    buildResolverLog?: {
+      enabled: true;
+      targetCity: string;
+      budget: number;
+      candidates: Array<{
+        id: string;
+        cost: number;
+        segmentCount: number;
+        reachesTarget: boolean;
+        endpointDistance: number;
+        anchorsHit: string[];
+        segmentCompact: Array<[number, number, number, number]>;
+      }>;
+      selected: string;
+      ruleBranch: string;
+      reasonText: string;
+      costDelta: number;
+      anchorClassification: Array<{ coord: [number, number]; namedCity: string | null; kept: boolean }>;
+      /** JIRA-182: Segment count before and after filterConnectedSegments runs */
+      connectedSegmentCount?: { preFilter: number; postFilter: number };
+      /** JIRA-182: Number of ferry-port pairs whose A↔B edge was added during BFS */
+      ferryCrossingsIncluded?: number;
+      /** JIRA-203: Saturated small/medium cities excluded from path computation */
+      rejectedSaturatedCities?: Array<{ row: number; col: number }>;
+    };
 }
 
 /** Result from LLMStrategyBrain.decideAction() — includes resolved plan and LLM metadata */
@@ -844,4 +996,99 @@ export interface LLMDecisionResult {
     retried: boolean;
     guardrailOverride?: boolean;
     llmLog?: LlmAttempt[];
+    // Prompt text for NDJSON observability
+    systemPrompt?: string;
+    userPrompt?: string;
+}
+
+// ─── Build Advisor Types (JIRA-129) ─────────────────────────────────────────
+
+/** Corridor map bounding box and rendered ASCII for LLM prompt */
+export interface CorridorMap {
+    rendered: string;        // ASCII map string
+    minRow: number;
+    maxRow: number;
+    minCol: number;
+    maxCol: number;
+}
+
+/** Result from BuildAdvisor LLM call — structured build/replan decision */
+export interface BuildAdvisorResult {
+    action: 'build' | 'buildAlternative' | 'replan' | 'useOpponentTrack';
+    target: string;
+    waypoints: [number, number][];
+    newRoute?: RouteStop[];
+    alternativeBuild?: { target: string; waypoints: [number, number][] };
+    reasoning: string;
+}
+
+// ─── Initial Build Planner Types (JIRA-142b) ────────────────────────────────
+
+/** A single demand + supply city option evaluated against a starting major city */
+export interface DemandOption {
+    cardId: number;
+    demandIndex: number;
+    loadType: string;
+    supplyCity: string;
+    deliveryCity: string;
+    payout: number;
+    startingCity: string;
+    buildCostToSupply: number;
+    buildCostSupplyToDelivery: number;
+    totalBuildCost: number;
+    ferryRequired: boolean;
+    estimatedTurns: number;
+    efficiency: number;
+}
+
+/** A cross-card pairing of two demand options for double delivery */
+export interface DeliveryPairing {
+    first: DemandOption;
+    second: DemandOption;
+    sharedStartingCity: string | null;
+    chainDistance: number;
+    totalBuildCost: number;
+    totalPayout: number;
+    estimatedTurns: number;
+    efficiency: number;
+    pairingScore: number;
+}
+
+/** The computed initial build plan output */
+export interface InitialBuildPlan {
+    startingCity: string;
+    route: RouteStop[];
+    buildPriority: string;
+    totalBuildCost: number;
+    totalPayout: number;
+    estimatedTurns: number;
+    /** JIRA-148: All evaluated demand options sorted by efficiency (best first) */
+    evaluatedOptions?: Array<{
+        rank: number;
+        loadType: string;
+        supplyCity: string;
+        deliveryCity: string;
+        startingCity: string;
+        payout: number;
+        totalBuildCost: number;
+        buildCostToSupply: number;
+        buildCostSupplyToDelivery: number;
+        estimatedTurns: number;
+        efficiency: number;
+    }>;
+    /** Top double-delivery pairings evaluated during initial build (ranked by pairingScore) */
+    evaluatedPairings?: Array<{
+        rank: number;
+        firstLoad: string;
+        firstRoute: string;
+        secondLoad: string;
+        secondRoute: string;
+        sharedHub: string | null;
+        chainDistance: number;
+        totalBuildCost: number;
+        totalPayout: number;
+        estimatedTurns: number;
+        efficiency: number;
+        pairingScore: number;
+    }>;
 }
