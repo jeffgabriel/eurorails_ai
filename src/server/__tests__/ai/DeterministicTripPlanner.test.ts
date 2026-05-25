@@ -2812,12 +2812,11 @@ describe('JIRA-255 Layer A: end-game lock in planTripDeterministic', () => {
     // Default simulateTrip: feasible result
     mockSimulateTrip.mockReturnValue({
       feasible: true,
-      net: 20,
-      turns: 3,
+      finalCashRelative: 20,
+      turnsToComplete: 3,
+      totalBuildCost: 0,
       builtSegments: [],
-      endCity: 'DeliveryCity',
       minCashRelative: 0,
-      reasoning: 'ok',
     });
   });
 
@@ -3012,7 +3011,7 @@ describe('JIRA-255 Layer C: end-game ranking in planTripDeterministic', () => {
     const demandB = makeDemand({ cardIndex: 1, loadType: 'Hops', deliveryCity: 'Paris', payout: 67 });
 
     mockSimulateTrip.mockReturnValue({
-      feasible: true, net: 67, turns: 16, builtSegments: [], endCity: 'Paris', minCashRelative: 0, reasoning: 'B',
+      feasible: true, finalCashRelative: 67, turnsToComplete: 16, totalBuildCost: 0, builtSegments: [], minCashRelative: 0,
     });
 
     const memory = makeMemory({ endGameLocked: true });
@@ -3068,7 +3067,7 @@ describe('JIRA-255 Layer C: end-game ranking in planTripDeterministic', () => {
     const demandA = makeDemand({ cardIndex: 0, loadType: 'Coal', deliveryCity: 'Berlin', payout: 10 });
 
     mockSimulateTrip.mockReturnValue({
-      feasible: true, net: 10, turns: 3, builtSegments: [], endCity: 'Berlin', minCashRelative: 0, reasoning: 'A',
+      feasible: true, finalCashRelative: 10, turnsToComplete: 3, totalBuildCost: 0, builtSegments: [], minCashRelative: 0,
     });
 
     const memory = makeMemory({ endGameLocked: true });
@@ -3089,7 +3088,7 @@ describe('JIRA-255 Layer C: end-game ranking in planTripDeterministic', () => {
     const demandA = makeDemand({ cardIndex: 0, loadType: 'Coal', deliveryCity: 'Berlin', payout: 10 });
 
     mockSimulateTrip.mockReturnValue({
-      feasible: true, net: 10, turns: 3, builtSegments: [], endCity: 'Berlin', minCashRelative: 0, reasoning: 'A',
+      feasible: true, finalCashRelative: 10, turnsToComplete: 3, totalBuildCost: 0, builtSegments: [], minCashRelative: 0,
     });
 
     const memory = makeMemory({ endGameLocked: false });
