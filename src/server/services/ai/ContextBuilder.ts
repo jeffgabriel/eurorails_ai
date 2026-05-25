@@ -143,9 +143,11 @@ export class ContextBuilder {
     // Compute upgrade advice with deliveryCount gate
     const upgradeAdvice = UpgradeContext.compute(snapshot, demands, canBuild, deliveryCount);
 
-    // Determine game phase
+    // Determine game phase (display string — see JIRA-265 Layer 3 below for the
+    // gameState-aware refinement). isInitialBuild stays here; `phase` moves
+    // after the gameState latch so we can pass the new gameState into
+    // computePhase and never produce "Mid Game" when gameState=end.
     const isInitialBuild = snapshot.gameStatus === 'initialBuild';
-    const phase = NetworkContext.computePhase(snapshot, connectedMajorCities);
 
     // Build opponent context based on skill level
     const opponents = ContextBuilder.buildOpponentContext(
@@ -223,6 +225,12 @@ export class ContextBuilder {
         );
       }
     }
+
+    // JIRA-265 Layer 3: compute display phase AFTER gameState so "End Game" /
+    // "Victory Imminent" shows correctly once the cash latch has fired.
+    // Previously this ran before the latch and returned "Mid Game" at cash
+    // $255M whenever the bot had only 3-4 majors connected (game 086fa2ce s1 T65).
+    const phase = NetworkContext.computePhase(snapshot, connectedMajorCities, gamePhase);
 
     return {
       position: botPosition

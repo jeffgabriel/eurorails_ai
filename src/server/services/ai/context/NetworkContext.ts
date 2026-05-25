@@ -17,6 +17,7 @@ import {
   TRAIN_PROPERTIES,
   TrackSegment,
   TerrainType,
+  GameState,
 } from '../../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../../shared/services/majorCityGroups';
@@ -255,12 +256,27 @@ export class NetworkContext {
     return Array.from(cityNames);
   }
 
-  /** Determine game phase from connected major cities and cash. */
+  /**
+   * Determine game phase from connected major cities and cash.
+   *
+   * JIRA-265 Layer 3: when the bot's persistent gameState has latched to End
+   * (cash > $200M), the display must never drop back to "Mid Game" — that's
+   * what produced the confusing "Mid Game | Cash: 255M" output in game
+   * 086fa2ce s1 T65 (cash $255M but only 4 majors → old logic returned
+   * Mid Game because the major-city thresholds dominated). With gameState=End
+   * forced, the only relevant refinement is whether victory is one step away.
+   */
   static computePhase(
     snapshot: WorldSnapshot,
     connectedMajorCities: string[],
+    gameState?: GameState,
   ): string {
     if (snapshot.gameStatus === 'initialBuild') return 'Initial Build';
+    if (gameState === GameState.End) {
+      if (connectedMajorCities.length >= 7 && snapshot.bot.money >= 250) return 'Victory Imminent';
+      if (connectedMajorCities.length >= 6 && snapshot.bot.money >= 230) return 'Victory Imminent';
+      return 'End Game';
+    }
     if (connectedMajorCities.length >= 6 && snapshot.bot.money >= 230) return 'Victory Imminent';
     if (connectedMajorCities.length >= 5 && snapshot.bot.money >= 250) return 'Victory Imminent';
     if (connectedMajorCities.length >= 5 && snapshot.bot.money >= 150) return 'Late Game';
