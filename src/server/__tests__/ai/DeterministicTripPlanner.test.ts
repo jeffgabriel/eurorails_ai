@@ -363,6 +363,100 @@ describe('detectCarriedLoads', () => {
     const result = detectCarriedLoads(route, demands);
     expect(result.has('Coal')).toBe(false);
   });
+
+  // ── JIRA-263: implicit-carry walk must slice by currentStopIndex ──
+
+  it('JIRA-263 AC1: post-execution slice — historical deliver is not implicit carry', () => {
+    // activeRoute=[pickup A, deliver B, deliver A], currentStopIndex=2 (post-B-delivery).
+    // cargoLoads=[A]. Remaining slice is just [deliver A]. B is no longer carried — the
+    // delivered Bauxite stop in the past must not produce a phantom-carry flag.
+    const demands = [
+      makeDemand({ cardIndex: 0, loadType: 'A', deliveryCity: 'CityA', payout: 10 }),
+      makeDemand({ cardIndex: 1, loadType: 'B', deliveryCity: 'CityB', payout: 14 }),
+    ];
+    const route = makeRoute(
+      [
+        { action: 'pickup', loadType: 'A', city: 'SupA' },
+        { action: 'deliver', loadType: 'B', city: 'CityB', demandCardId: 1, payment: 14 },
+        { action: 'deliver', loadType: 'A', city: 'CityA', demandCardId: 0, payment: 10 },
+      ],
+      { currentStopIndex: 2 },
+    );
+    const result = detectCarriedLoads(route, demands, ['A']);
+    expect(result.has('A')).toBe(true);
+    expect(result.has('B')).toBe(false);
+  });
+
+  it('JIRA-263 AC2: pre-execution preserved — entire route ahead, both implicit carries detected', () => {
+    // Same activeRoute but currentStopIndex=0. B was just imagined as carried (no pickup
+    // stop for B in this route → implicit carry); A also marked carry via cargoLoads.
+    // The pre-execution case must still produce {A: 1, B: 1}.
+    const demands = [
+      makeDemand({ cardIndex: 0, loadType: 'A', deliveryCity: 'CityA', payout: 10, isLoadOnTrain: true }),
+      makeDemand({ cardIndex: 1, loadType: 'B', deliveryCity: 'CityB', payout: 14, isLoadOnTrain: true }),
+    ];
+    const route = makeRoute(
+      [
+        { action: 'pickup', loadType: 'A', city: 'SupA' },
+        { action: 'deliver', loadType: 'B', city: 'CityB', demandCardId: 1, payment: 14 },
+        { action: 'deliver', loadType: 'A', city: 'CityA', demandCardId: 0, payment: 10 },
+      ],
+      { currentStopIndex: 0 },
+    );
+    const result = detectCarriedLoads(route, demands, ['A', 'B']);
+    expect(result.has('A')).toBe(true);
+    expect(result.has('B')).toBe(true);
+  });
+
+  it('JIRA-263 AC3: mid-execution slice — only remaining stops considered', () => {
+    // activeRoute=[pickup A, deliver A, deliver B, pickup C, deliver C], currentStopIndex=2.
+    // Remaining slice=[deliver B, pickup C, deliver C]. B is currently carried (deliver
+    // without prior pickup in the remaining slice). C is not implicit (pickup precedes).
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'B', deliveryCity: 'CityB', payout: 10 }),
+      makeDemand({ cardIndex: 2, loadType: 'C', deliveryCity: 'CityC', payout: 12 }),
+    ];
+    const route = makeRoute(
+      [
+        { action: 'pickup', loadType: 'A', city: 'SupA' },
+        { action: 'deliver', loadType: 'A', city: 'CityA', demandCardId: 0, payment: 8 },
+        { action: 'deliver', loadType: 'B', city: 'CityB', demandCardId: 1, payment: 10 },
+        { action: 'pickup', loadType: 'C', city: 'SupC' },
+        { action: 'deliver', loadType: 'C', city: 'CityC', demandCardId: 2, payment: 12 },
+      ],
+      { currentStopIndex: 2 },
+    );
+    const result = detectCarriedLoads(route, demands, ['B']);
+    expect(result.has('A')).toBe(false); // A already delivered, no longer carried
+    expect(result.has('B')).toBe(true);  // B is the current carry (deliver-without-pickup in remaining)
+    expect(result.has('C')).toBe(false); // C has a pickup stop in remaining — not implicit
+  });
+
+  it('JIRA-263 AC4: replay game 8e176094 s3 T44 — Bauxite-delivered, only Tourists remains carried', () => {
+    // Reconstructed from logs/game-8e176094-a679-490f-9406-d6faa7b55723.ndjson:
+    // route was [pickup Tourists@Ruhr, deliver Bauxite@Munchen, deliver Tourists@Venezia].
+    // After Bauxite delivery at T44, currentStopIndex=2 (pointing at "deliver Tourists").
+    // cargoLoads=[Tourists] (Bauxite removed from snapshot by handleDeliverLoad).
+    // Expected: only Tourists is detected as carried. Bauxite must NOT appear, because
+    // its remaining-slice contribution is empty.
+    const demands = [
+      makeDemand({
+        cardIndex: 100, loadType: 'Tourists', supplyCity: 'Ruhr',
+        deliveryCity: 'Venezia', payout: 19, isLoadOnTrain: true,
+      }),
+    ];
+    const route = makeRoute(
+      [
+        { action: 'pickup', loadType: 'Tourists', city: 'Ruhr' },
+        { action: 'deliver', loadType: 'Bauxite', city: 'Munchen', demandCardId: 99, payment: 14 },
+        { action: 'deliver', loadType: 'Tourists', city: 'Venezia', demandCardId: 100, payment: 19 },
+      ],
+      { currentStopIndex: 2 },
+    );
+    const result = detectCarriedLoads(route, demands, ['Tourists']);
+    expect(result.has('Tourists')).toBe(true);
+    expect(result.has('Bauxite')).toBe(false);
+  });
 });
 
 // ── normalizeRows multiplicity (AC1, R1) ──────────────────────────────
