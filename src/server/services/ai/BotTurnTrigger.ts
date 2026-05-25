@@ -434,15 +434,7 @@ export async function advanceTurnAfterBot(gameId: string): Promise<void> {
   if (game.status === 'initialBuild') {
     await InitialBuildService.advanceTurn(gameId, game.current_player_index);
   } else if (game.status === 'active') {
-    const countResult = await db.query(
-      'SELECT COUNT(*)::int as count FROM players WHERE game_id = $1',
-      [gameId],
-    );
-    const playerCount = countResult.rows[0]?.count || 0;
-    if (playerCount > 0) {
-      const nextIndex = (game.current_player_index + 1) % playerCount;
-      await PlayerService.updateCurrentPlayerIndex(gameId, nextIndex);
-    }
+    await PlayerService.advanceTurn(gameId);
   }
   // completed/abandoned: do nothing
 }

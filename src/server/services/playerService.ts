@@ -729,6 +729,42 @@ export class PlayerService {
   }
 
   /**
+   * High-level turn advancement: reads current game state, opens a transaction,
+   * computes the next player index, and delegates to updateCurrentPlayerIndex
+   * with the transactional path (effect cleanup + turn-skip + emit).
+   *
+   * This is the preferred entry point for all callers that simply want to
+   * advance the turn. Use updateCurrentPlayerIndex directly only when the
+   * caller already owns a transaction.
+   */
+  static async advanceTurn(gameId: string): Promise<void> {
+    const gameResult = await db.query(
+      'SELECT current_player_index FROM games WHERE id = $1',
+      [gameId],
+    );
+    const prevPlayerIndex: number = gameResult.rows[0]?.current_player_index ?? 0;
+
+    const countResult = await db.query(
+      'SELECT COUNT(*)::int AS count FROM players WHERE game_id = $1',
+      [gameId],
+    );
+    const playerCount: number = countResult.rows[0]?.count || 1;
+    const nextIndex = (prevPlayerIndex + 1) % playerCount;
+
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      await PlayerService.updateCurrentPlayerIndex(gameId, nextIndex, client, prevPlayerIndex);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Advance the current player index for a game.
    *
    * When `client` and `prevPlayerIndex` are provided (transactional path):

@@ -3,7 +3,7 @@ import { PlayerService } from '../services/playerService';
 import { v4 as uuidv4 } from 'uuid';
 import { GameStatus } from '../types';
 import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
-import { emitStatePatch, emitTurnChange, getSocketIO } from '../services/socketService';
+import { emitStatePatch, getSocketIO } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { InitialBuildService } from '../services/InitialBuildService';
@@ -317,17 +317,12 @@ router.post('/updateCurrentPlayer', async (req, res) => {
             return res.status(200).json(gameState);
         }
 
-        // Active phase: use standard player index update
-        await PlayerService.updateCurrentPlayerIndex(gameId, currentPlayerIndex);
+        // Active phase: advanceTurn handles the transaction, effect cleanup,
+        // turn-skip logic, and turn-change emit internally.
+        await PlayerService.advanceTurn(gameId);
 
         // Get the updated game state
         const gameState = await PlayerService.getGameState(gameId);
-
-        // Emit turn change and state patch
-        emitTurnChange(gameId, currentPlayerIndex);
-        await emitStatePatch(gameId, {
-            currentPlayerIndex: currentPlayerIndex
-        });
 
         return res.status(200).json(gameState);
     } catch (error: any) {
