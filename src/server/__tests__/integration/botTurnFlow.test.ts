@@ -27,6 +27,7 @@ jest.mock('../../services/socketService', () => ({
 // Mock playerService
 jest.mock('../../services/playerService', () => ({
   PlayerService: {
+    advanceTurn: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
     updateCurrentPlayerIndex: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
   },
 }));
@@ -292,8 +293,6 @@ describe('Bot Turn + Initial Build Flow (Integration)', () => {
       mockQuery.mockResolvedValueOnce(mockResult([{ current_player_index: 1, victory_triggered: false, final_turn_player_index: -1 }]));
       // advanceTurnAfterBot: game status query (index 9)
       mockQuery.mockResolvedValueOnce(mockResult([{ status: 'active', current_player_index: 1 }]));
-      // advanceTurnAfterBot: SELECT COUNT players (index 10)
-      mockQuery.mockResolvedValueOnce(mockResult([{ count: 3 }]));
 
       const promise = onTurnChange(gameId, 1, bot1Id);
       await jest.advanceTimersByTimeAsync(1500);
@@ -342,14 +341,13 @@ describe('Bot Turn + Initial Build Flow (Integration)', () => {
         status: 'active',
         current_player_index: 1,
       }]));
-      mockQuery.mockResolvedValueOnce(mockResult([{ count: 3 }]));
 
       const { PlayerService } = await import('../../services/playerService');
-      (PlayerService.updateCurrentPlayerIndex as jest.Mock<() => Promise<void>>).mockResolvedValue(undefined);
+      (PlayerService.advanceTurn as jest.Mock<() => Promise<void>>).mockResolvedValue(undefined);
 
       await advanceTurnAfterBot(gameId);
 
-      expect(PlayerService.updateCurrentPlayerIndex).toHaveBeenCalledWith(gameId, 2);
+      expect(PlayerService.advanceTurn).toHaveBeenCalledWith(gameId);
     });
 
     it('should call InitialBuildService.advanceTurn for initialBuild games', async () => {
@@ -380,7 +378,7 @@ describe('Bot Turn + Initial Build Flow (Integration)', () => {
       const { PlayerService } = await import('../../services/playerService');
       await advanceTurnAfterBot(gameId);
 
-      expect(PlayerService.updateCurrentPlayerIndex).not.toHaveBeenCalled();
+      expect(PlayerService.advanceTurn).not.toHaveBeenCalled();
     });
   });
 
