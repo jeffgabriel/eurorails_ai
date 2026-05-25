@@ -46,3 +46,6 @@ test-results/
 
 # SQLite databases
 *.db
+
+# Patch artifacts (use `gh pr diff <n>` on demand instead)
+*.patch
