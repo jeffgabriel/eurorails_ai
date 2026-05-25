@@ -298,6 +298,8 @@ export async function onTurnChange(
         demandRanking: result.demandRanking,
         gamePhase: result.gamePhase,
         gameState: result.gameState,
+        // JIRA-265: Per-turn end-game trace (cashGap, majorsGap, victory-route projection, etc.)
+        endGame: result.endGame,
         cash: result.cash,
         train: result.trainType,
         upgradeAdvice: result.upgradeAdvice,
