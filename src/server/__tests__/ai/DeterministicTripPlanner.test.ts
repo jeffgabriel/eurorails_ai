@@ -2781,8 +2781,15 @@ describe('JIRA-249/250: enumerateCandidates includes carry floor and corridor ca
 });
 
 // ── JIRA-255 Layer A: End-game lock mechanism ──────────────────────────
+// JIRA-265 Layer 2: the latch moved to ContextBuilder.build. Tests for the
+// latch's behavior live in `ContextBuilder.test.ts` under "endGameLocked
+// latch (JIRA-265 Layer 2)" — covering AC4 (latches on route-executor turn
+// when cash > $200M), AC5 (sticky after cash dip), and the negative case
+// (no latch when cash ≤ $200M and not in late phase). The original tests in
+// this describe block asserted the latch happened INSIDE planTripDeterministic,
+// which is no longer true after the Layer 2 relocation.
 
-describe('JIRA-255 Layer A: end-game lock in planTripDeterministic', () => {
+describe.skip('[OBSOLETE — JIRA-265 Layer 2] JIRA-255 Layer A: end-game lock in planTripDeterministic', () => {
   beforeEach(() => {
     mockUpdateMemory.mockClear();
     // Default cheapPrune: always keep
