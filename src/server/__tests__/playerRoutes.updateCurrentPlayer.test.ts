@@ -23,6 +23,7 @@ jest.mock('../services/InitialBuildService', () => ({
 // Mock PlayerService
 jest.mock('../services/playerService', () => ({
   PlayerService: {
+    advanceTurn: jest.fn(),
     updateCurrentPlayerIndex: jest.fn(),
     getGameState: jest.fn(),
     getPlayers: jest.fn().mockResolvedValue([]),
@@ -50,6 +51,7 @@ import playerRoutes from '../routes/playerRoutes';
 const mockQuery = db.query as unknown as jest.Mock;
 const mockAdvanceTurn = InitialBuildService.advanceTurn as jest.Mock;
 const mockGetGameState = PlayerService.getGameState as jest.Mock;
+const mockPlayerAdvanceTurn = PlayerService.advanceTurn as jest.Mock;
 const mockUpdateCurrentPlayerIndex = PlayerService.updateCurrentPlayerIndex as jest.Mock;
 
 const app = express();
@@ -69,6 +71,7 @@ describe('POST /api/players/updateCurrentPlayer', () => {
     jest.clearAllMocks();
     mockGetGameState.mockResolvedValue(mockGameState);
     mockAdvanceTurn.mockResolvedValue(undefined);
+    mockPlayerAdvanceTurn.mockResolvedValue(undefined);
     mockUpdateCurrentPlayerIndex.mockResolvedValue(undefined);
   });
 
@@ -156,7 +159,7 @@ describe('POST /api/players/updateCurrentPlayer', () => {
   });
 
   describe('active phase', () => {
-    it('should call PlayerService.updateCurrentPlayerIndex for active games', async () => {
+    it('should call PlayerService.advanceTurn for active games', async () => {
       mockQuery.mockResolvedValueOnce(mockResult([{
         status: 'active',
         current_player_index: 1,
@@ -167,7 +170,7 @@ describe('POST /api/players/updateCurrentPlayer', () => {
         .send({ gameId, currentPlayerIndex: 2 })
         .expect(200);
 
-      expect(mockUpdateCurrentPlayerIndex).toHaveBeenCalledWith(gameId, 2);
+      expect(mockPlayerAdvanceTurn).toHaveBeenCalledWith(gameId);
       expect(mockAdvanceTurn).not.toHaveBeenCalled();
       expect(response.body).toEqual(mockGameState);
     });
