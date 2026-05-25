@@ -58,6 +58,7 @@ import {
   formatReachabilityNote as _formatReachabilityNote,
 } from './prompts/ContextSerializer';
 import { computeGameState } from './victoryRules';
+import { classifyGamePhase } from './DeterministicTripPlanner';
 import { updateMemory } from './BotMemory';
 
 export { ContextSerializer };
@@ -196,6 +197,31 @@ export class ContextBuilder {
       updateMemory(snapshot.gameId, snapshot.bot.playerId, { gameState: gamePhase }).catch(
         (err: unknown) => console.warn('[ContextBuilder] Failed to persist gameState:', err),
       );
+    }
+
+    // JIRA-265 Layer 2: End-game lock latch. Previously lived inside
+    // planTripDeterministic, which only runs on REPLAN turns; pure
+    // [route-executor] execution turns never updated the flag. Moving the
+    // latch here ensures it engages on every turn regardless of replan, so
+    // downstream consumers (cheapPrune carve-out, win-completer ranking,
+    // reasoning annotation) and the new per-turn endGame trace observe a
+    // consistent value.
+    //
+    // Same trigger as the prior site: cash > $200M OR classifyGamePhase=='late'.
+    // Once set, the flag is sticky (one-way) — never reverts even after a
+    // post-build cash dip.
+    if (!memoryForPhase.endGameLocked) {
+      const phaseClass = classifyGamePhase(
+        snapshot.turnNumber,
+        memoryForPhase.deliveryCount ?? 0,
+        connectedMajorCities.length,
+      );
+      if (snapshot.bot.money > 200 || phaseClass === 'late') {
+        memoryForPhase.endGameLocked = true;
+        updateMemory(snapshot.gameId, snapshot.bot.playerId, { endGameLocked: true }).catch(
+          (err: unknown) => console.warn('[ContextBuilder] Failed to persist endGameLocked:', err),
+        );
+      }
     }
 
     return {

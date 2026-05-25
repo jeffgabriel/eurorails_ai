@@ -35,7 +35,6 @@ import {
   VICTORY_CITY_COUNT,
 } from '../../../shared/types/GameTypes';
 import { cheapestUnconnectedMajorConnectorCost } from './victoryRules';
-import { updateMemory } from './BotMemory';
 import { isWinCompleting, fullWinCost } from './winCompletion';
 import { getCityMilepointKey, isPickupDeliveryBlocked } from '../restrictionPredicates';
 
@@ -1664,25 +1663,11 @@ export function planTripDeterministic(
     excludeRouteSignatures: new Set(options?.excludeRouteSignatures ?? []),
   };
 
-  // JIRA-255 Layer A: End-game lock hook.
-  // Once set, endGameLocked is sticky (one-way) — it never reverts even after
-  // temporary cash dips from track building. Whichever condition fires first
-  // sets the lock for the remainder of the game.
-  if (!memory.endGameLocked) {
-    const cmcCount = context.connectedMajorCities?.length ?? 0;
-    const phase = classifyGamePhase(
-      snapshot.turnNumber,
-      memory.deliveryCount,
-      cmcCount,
-    );
-    if (snapshot.bot.money > 200 || phase === 'late') {
-      memory.endGameLocked = true;
-      // Persist asynchronously — in-memory mutation is authoritative for this turn.
-      updateMemory(snapshot.gameId, snapshot.bot.playerId, { endGameLocked: true }).catch(
-        (err: unknown) => console.warn('[planTripDeterministic] Failed to persist endGameLocked:', err),
-      );
-    }
-  }
+  // JIRA-265 Layer 2: End-game lock latch moved to ContextBuilder so it engages
+  // every turn (not just REPLAN turns). Downstream consumers (cheapPrune carve-
+  // out, applyEndStateScoring, win-completer ranking, reasoning annotation)
+  // continue to read memory.endGameLocked from the same in-memory location;
+  // they see the latched value regardless of whether this planner ran.
 
   // Empty hand check (R8)
   if (!context.demands || context.demands.length === 0) {
