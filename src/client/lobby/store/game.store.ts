@@ -10,6 +10,7 @@ import type {
 } from '../../../shared/types/EventCard';
 import { socketService } from '../shared/socket';
 import { debug } from '../shared/config';
+import { authenticatedFetch } from '../../services/authenticatedFetch';
 
 /** Auto-dismiss timer delay for event overlays (30 seconds) */
 const EVENT_OVERLAY_AUTO_DISMISS_MS = 30_000;
@@ -151,15 +152,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   disconnect: () => {
+    // Clear overlay auto-dismiss timer to prevent stale callbacks after reconnect
+    if (overlayAutoDismissTimer) {
+      clearTimeout(overlayAutoDismissTimer);
+      overlayAutoDismissTimer = null;
+    }
+
     socketService.removeAllListeners();
     socketService.disconnect();
-    
+
     set({
       gameState: null,
       isConnected: false,
       isLoading: false,
       connectionStatus: 'disconnected',
       clientSeq: 0,
+      pendingEventOverlay: null,
+      pendingVisualUpdates: [],
+      activeEffects: [],
     });
   },
 
@@ -365,7 +375,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   fetchEventCardDefinitions: async () => {
     try {
-      const response = await fetch('/api/deck/events');
+      const response = await authenticatedFetch('/api/deck/events');
       if (!response.ok) {
         debug.warn('[game.store] Failed to fetch event card definitions:', response.status);
         return;

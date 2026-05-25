@@ -248,6 +248,17 @@ export interface EventCardDrawnPayload {
 }
 
 /**
+ * Payload for event:effect-applied — broadcast after effect is persisted.
+ * Mirrors the server-side EventEffectAppliedPayload in socketService.ts.
+ */
+export interface EventEffectAppliedPayload {
+  gameId: string;
+  cardId: number;
+  effects: PerPlayerEffect[];
+  timestamp: string;
+}
+
+/**
  * Payload for event:effect-expired — broadcast when effect expires at turn end.
  * Mirrors the server-side EventEffectExpiredPayload in socketService.ts.
  */
