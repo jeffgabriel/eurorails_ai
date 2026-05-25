@@ -26,8 +26,10 @@ import {
   LlmAttempt,
   TerrainType,
   TrainType,
+  TrackSegment,
   TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
+import { isMovementHalfRate, isPickupDeliveryBlocked, getCityMilepointKey } from '../../services/restrictionPredicates';
 import {
   resolveBuildTarget,
   applyStopEffectToLocalState,
@@ -107,7 +109,26 @@ export class MovementPhasePlanner {
 
     const plans: TurnPlan[] = [];
     let hasDelivery = false;
-    let remainingBudget = context.speed;
+
+    // ── Event card: half-rate movement adjustment ─────────────────────────
+    // When a Snow event is active and the bot's current position is within
+    // the half-rate zone, the bot moves at half speed this turn.  We cap the
+    // planning budget now so the loop never emits more moves than allowed.
+    // PlayerService enforces this at execution time; halving here prevents the
+    // planner from committing to unreachable stops.
+    let remainingBudget: number;
+    if (snapshot.bot.position) {
+      const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
+      const movementRestrictions = (snapshot.activeEffects ?? []).flatMap(e => e.restrictions.movement);
+      if (isMovementHalfRate(movementRestrictions, posKey)) {
+        remainingBudget = Math.ceil(context.speed / 2);
+        console.info(`[MovementPhasePlanner] Half-rate movement: budget capped ${context.speed} → ${remainingBudget}`);
+      } else {
+        remainingBudget = context.speed;
+      }
+    } else {
+      remainingBudget = context.speed;
+    }
     let lastMoveTargetCity: string | null = null;
     let replanLlmLog: LlmAttempt[] | undefined;
     let replanSystemPrompt: string | undefined;
@@ -146,6 +167,9 @@ export class MovementPhasePlanner {
         // If the bot arrived at a delivery city but the load is not in context.loads,
         // the route is stale/malformed. Abandon the current stop and trigger a replan
         // rather than emitting PassTurn or a failed deliver action.
+        // Runs BEFORE the Strike-zone check below because a stale route is a
+        // structural problem (route is broken) while a Strike is temporary
+        // (clears in 1-2 turns) — we want the replan path to fire either way.
         if (
           currentStop.action === 'deliver' &&
           !context.loads.includes(currentStop.loadType)
@@ -165,6 +189,23 @@ export class MovementPhasePlanner {
             replanLlmLog, replanSystemPrompt, replanUserPrompt,
             pendingUpgradeAction, upgradeSuppressionReason,
           );
+        }
+
+        // JIRA-256: skip pickup/delivery if the city is in a coastal Strike zone.
+        // PlayerService will enforce this at execution time, but we skip here to
+        // prevent the planner from stalling on a blocked stop indefinitely.
+        if (currentStop.action === 'pickup' || currentStop.action === 'deliver') {
+          const pickupDeliveryRestrictions = (snapshot.activeEffects ?? []).flatMap(e => e.restrictions.pickupDelivery);
+          if (pickupDeliveryRestrictions.length > 0) {
+            const cityKey = getCityMilepointKey(targetCity) ?? '';
+            const blocked = isPickupDeliveryBlocked(pickupDeliveryRestrictions, cityKey);
+            if (blocked.blocked) {
+              console.info(
+                `${tag} Pickup/delivery at ${targetCity} skipped: city is in coastal Strike zone (key=${cityKey})`,
+              );
+              break; // Exit movement loop; bot can't make progress this turn
+            }
+          }
         }
 
         const _stopActionStart = Date.now();
@@ -601,12 +642,37 @@ export class MovementPhasePlanner {
                 previewBuildOrigin.row === currentPos.row &&
                 previewBuildOrigin.col === currentPos.col
               ) {
-                // Build origin is the bot's current position — set build target and
-                // continue so Phase B composes a BuildTrack action (no move needed).
-                console.warn(`${tag} a3_build_origin_is_current_pos — build origin matches current position, continuing to Phase B`);
+                // JIRA-247: Commit a3OriginResult as a BuildTrack plan directly
+                // instead of `continue`-ing the loop and deferring to Phase B.
+                // The prior partial fix set trace.build.target and looped, which
+                // re-entered A2/A3 with unchanged inputs (livelock to
+                // MAX_LOOP_ITERS) and then handed off to Phase B whose
+                // independent computeBuildSegments call returned [] at
+                // medium-city outer mileposts (game f3ed7b8f T95: bot at
+                // (4,61) building toward Stockholm Medium City at (4,62)).
+                // Truncate the path to fit the build budget — computeBuildSegments
+                // may return more segments than the bot can afford this turn.
+                const truncated: TrackSegment[] = [];
+                let accCost = 0;
+                for (const seg of a3OriginResult) {
+                  if (accCost + seg.cost > a3Budget) break;
+                  truncated.push(seg);
+                  accCost += seg.cost;
+                }
                 trace.a3.terminationReason = 'a3_build_origin_is_current_pos';
                 trace.build.target = a3BuildTarget.targetCity;
-                continue;
+                if (truncated.length > 0) {
+                  console.warn(`${tag} a3_build_origin_is_current_pos — committing ${truncated.length} seg(s) cost ${accCost}M toward ${a3BuildTarget.targetCity}`);
+                  trace.build.cost = accCost;
+                  plans.push({
+                    type: AIActionType.BuildTrack,
+                    segments: truncated,
+                    targetCity: a3BuildTarget.targetCity,
+                  });
+                } else {
+                  console.warn(`${tag} a3_build_origin_is_current_pos — budget ${a3Budget}M too small for cheapest segment (${a3OriginResult[0]?.cost ?? '?'}M), no build committed`);
+                }
+                break;
               } else {
                 const _a3MoveStart = Date.now();
                 const a3MoveResult = await ActionResolver.resolveMove(

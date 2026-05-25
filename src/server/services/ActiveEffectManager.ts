@@ -154,6 +154,19 @@ export class ActiveEffectManager {
       console.info(
         `[ActiveEffectManager] Cleaned up expired effects: cardIds=${expiredCardIds.join(',')} gameId=${gameId}`,
       );
+      // JIRA-262: persist expiry event to logs/events-<gameId>.ndjson for
+      // post-hoc analysis. Best-effort.
+      try {
+        const { appendEvent } = await import('./ai/EventLogger');
+        appendEvent(gameId, {
+          timestamp: new Date().toISOString(),
+          turn: completedTurnNumber,
+          phase: 'expired',
+          expiredCardIds,
+        });
+      } catch (logErr) {
+        console.warn(`[ActiveEffectManager] Event log (expired) failed for game ${gameId}: ${logErr instanceof Error ? logErr.message : logErr}`);
+      }
     }
 
     return { expiredCardIds };
@@ -231,6 +244,23 @@ export class ActiveEffectManager {
     console.info(
       `[ActiveEffectManager] Consumed lost turn for player=${playerId} gameId=${gameId}`,
     );
+
+    // JIRA-262: persist consume event for post-hoc analysis. Best-effort.
+    try {
+      const { appendEvent } = await import('./ai/EventLogger');
+      appendEvent(gameId, {
+        timestamp: new Date().toISOString(),
+        // Turn number isn't directly available here — we know it's "the turn
+        // before the player is supposed to play this round" but we don't have
+        // a single per-call counter. Downstream analysis can interleave with
+        // the game-<id>.ndjson turn entries by timestamp to recover ordering.
+        turn: -1,
+        phase: 'consumed',
+        consumedPlayerId: playerId,
+      });
+    } catch (logErr) {
+      console.warn(`[ActiveEffectManager] Event log (consumed) failed for game ${gameId}: ${logErr instanceof Error ? logErr.message : logErr}`);
+    }
 
     return true;
   }

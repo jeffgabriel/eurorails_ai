@@ -1,5 +1,5 @@
 #!/bin/bash
-# compounds-hooks v3 — installed by 'compounds init-hooks'
+# compounds-hooks v5 — installed by 'compounds init-hooks'
 # Do not edit manually — re-run 'compounds init-hooks' to update
 
 # Record that plan_change() was called so the pre-explore hook can allow
@@ -34,5 +34,5 @@ else
     touch "${FALLBACK_DIR}/plan_change_called" 2>/dev/null || true
 fi
 
-echo '{"additionalContext": "Follow the returned prompt through all steps. Do not skip steps or implement directly."}'
+echo '{"additionalContext": "Follow the returned prompt through every step. The trivial-primary path edits and commits directly; the trivial-fallback path goes through gen_spec(tier=trivial) -> create_project -> upload -> add_task -> finalize directly; the standard path goes through gen_master_spec -> validate_master_spec -> wc -c branching -> upload -> handoff. Do not skip steps."}'
 exit 0

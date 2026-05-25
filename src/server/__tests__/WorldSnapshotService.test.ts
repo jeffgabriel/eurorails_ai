@@ -7,6 +7,14 @@ jest.mock('../db/index', () => ({
   },
 }));
 
+// Mock ActiveEffectManager so tests stay unit-level (no DB reads)
+const mockGetActiveEffects = jest.fn().mockResolvedValue([]);
+jest.mock('../services/ActiveEffectManager', () => ({
+  activeEffectManager: {
+    getActiveEffects: (...args: unknown[]) => mockGetActiveEffects(...args),
+  },
+}));
+
 import { db } from '../db/index';
 const mockQuery = db.query as jest.Mock;
 
@@ -34,6 +42,7 @@ describe('WorldSnapshotService.capture', () => {
         cost: 1,
       },
     ],
+    pending_flood_rebuilds: [],
   };
 
   const baseHumanRow = {
@@ -49,9 +58,13 @@ describe('WorldSnapshotService.capture', () => {
     bot_config: null,
     current_turn_number: 3,
     segments: [],
+    pending_flood_rebuilds: [],
   };
 
-  afterEach(() => jest.clearAllMocks());
+  afterEach(() => {
+    jest.clearAllMocks();
+    mockGetActiveEffects.mockResolvedValue([]);
+  });
 
   it('should return a complete WorldSnapshot', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [baseBotRow, baseHumanRow] });
@@ -177,5 +190,76 @@ describe('WorldSnapshotService.capture', () => {
     const snapshot = await capture(GAME_ID, BOT_ID);
 
     expect(snapshot.bot.demandCards).toEqual([]);
+  });
+
+  // ── New fields: activeEffects and pendingFloodRebuilds ─────────────────────
+
+  it('should set activeEffects to empty array when no effects are active', async () => {
+    mockGetActiveEffects.mockResolvedValue([]);
+    mockQuery.mockResolvedValueOnce({ rows: [baseBotRow, baseHumanRow] });
+
+    const snapshot = await capture(GAME_ID, BOT_ID);
+
+    expect(snapshot.activeEffects).toEqual([]);
+  });
+
+  it('should populate activeEffects from ActiveEffectManager', async () => {
+    const fakeEffect = {
+      cardId: 121,
+      cardType: 'Strike',
+      drawingPlayerId: 'player-1',
+      drawingPlayerIndex: 0,
+      expiresAfterTurnNumber: 5,
+      affectedZone: new Set(['10,5']),
+      restrictions: { movement: [], build: [], pickupDelivery: [] },
+      pendingLostTurns: [],
+    };
+    mockGetActiveEffects.mockResolvedValue([fakeEffect]);
+    mockQuery.mockResolvedValueOnce({ rows: [baseBotRow, baseHumanRow] });
+
+    const snapshot = await capture(GAME_ID, BOT_ID);
+
+    expect(snapshot.activeEffects).toHaveLength(1);
+    expect(snapshot.activeEffects![0].cardId).toBe(121);
+    expect(mockGetActiveEffects).toHaveBeenCalledWith(GAME_ID);
+  });
+
+  it('should set pendingFloodRebuilds to empty array when column is empty', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [baseBotRow, baseHumanRow] });
+
+    const snapshot = await capture(GAME_ID, BOT_ID);
+
+    expect(snapshot.bot.pendingFloodRebuilds).toEqual([]);
+  });
+
+  it('should populate pendingFloodRebuilds from player_tracks column', async () => {
+    const rebuildSegment = {
+      from: { x: 0, y: 0, row: 10, col: 5, terrain: 0 },
+      to: { x: 1, y: 0, row: 10, col: 6, terrain: 0 },
+      cost: 2,
+    };
+    const botWithRebuilds = {
+      ...baseBotRow,
+      pending_flood_rebuilds: [rebuildSegment],
+    };
+    mockQuery.mockResolvedValueOnce({ rows: [botWithRebuilds, baseHumanRow] });
+
+    const snapshot = await capture(GAME_ID, BOT_ID);
+
+    expect(snapshot.bot.pendingFloodRebuilds).toHaveLength(1);
+    expect(snapshot.bot.pendingFloodRebuilds![0].from.row).toBe(10);
+    expect(snapshot.bot.pendingFloodRebuilds![0].from.col).toBe(5);
+  });
+
+  it('should handle null pending_flood_rebuilds column gracefully', async () => {
+    const botWithNullRebuilds = {
+      ...baseBotRow,
+      pending_flood_rebuilds: null,
+    };
+    mockQuery.mockResolvedValueOnce({ rows: [botWithNullRebuilds, baseHumanRow] });
+
+    const snapshot = await capture(GAME_ID, BOT_ID);
+
+    expect(snapshot.bot.pendingFloodRebuilds).toEqual([]);
   });
 });

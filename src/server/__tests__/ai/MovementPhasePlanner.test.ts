@@ -1864,7 +1864,7 @@ describe('JIRA-247 AC5: origin_is_current_position → a3_build_origin_is_curren
     mockComputeBuildSegments.mockReturnValue([]); // restore global default
   });
 
-  it('AC5: bot at Goteborg (3,40), segment from=Goteborg → terminationReason=a3_build_origin_is_current_pos AND trace.build.target=Stockholm', async () => {
+  it('AC5: bot at Goteborg (3,40), segment from=Goteborg → terminationReason=a3_build_origin_is_current_pos AND trace.build.target=Stockholm AND BuildTrack committed', async () => {
     // computeBuildSegments returns segments with from = Goteborg = bot's current position
     const goteborgCoord = { row: 3, col: 40 };
     mockComputeBuildSegments.mockReturnValue([
@@ -1895,6 +1895,83 @@ describe('JIRA-247 AC5: origin_is_current_position → a3_build_origin_is_curren
     // No abandon from this branch
     expect(result.routeAbandoned).toBe(false);
     // No PassTurn emitted from this branch
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.PassTurn)).toBe(false);
+
+    // JIRA-247 (re-fix, game f3ed7b8f): A3 must directly commit a BuildTrack
+    // plan with the computed segments — the prior partial fix only set
+    // trace.build.target and let Phase B re-resolve, which produced 0 segments
+    // at medium-city outer mileposts and silently emitted PassTurn.
+    const buildPlans = result.accumulatedPlans.filter(p => p.type === AIActionType.BuildTrack);
+    expect(buildPlans).toHaveLength(1);
+    expect((buildPlans[0] as any).segments).toEqual([
+      { from: goteborgCoord, to: { row: 5, col: 41 }, cost: 3 },
+    ]);
+    expect((buildPlans[0] as any).targetCity).toBe('Stockholm');
+    expect(trace.build.cost).toBe(3);
+  });
+
+  it('AC5 truncation: when segment-path cost exceeds budget, only the prefix that fits is committed', async () => {
+    const startCoord = { row: 3, col: 40 };
+    mockComputeBuildSegments.mockReturnValue([
+      { from: startCoord, to: { row: 4, col: 40 }, cost: 5 },
+      { from: { row: 4, col: 40 }, to: { row: 5, col: 41 }, cost: 5 },
+      { from: { row: 5, col: 41 }, to: { row: 6, col: 41 }, cost: 5 },
+      { from: { row: 6, col: 41 }, to: { row: 7, col: 42 }, cost: 5 },
+      { from: { row: 7, col: 42 }, to: { row: 8, col: 42 }, cost: 5 }, // total 25M
+    ]);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Stockholm')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      position: startCoord,
+      speed: 9,
+      money: 12, // < 20M turn budget cap → a3Budget = min(20, 12) = 12 → fits 2 segments at 5M each
+      turnBuildCost: 0,
+    });
+    const snapshot = makeSnapshot();
+    (snapshot.bot as any).money = 12;
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, snapshot, context, trace);
+
+    expect(trace.a3.terminationReason).toBe('a3_build_origin_is_current_pos');
+    const buildPlans = result.accumulatedPlans.filter(p => p.type === AIActionType.BuildTrack);
+    expect(buildPlans).toHaveLength(1);
+    expect((buildPlans[0] as any).segments).toHaveLength(2);
+    expect(trace.build.cost).toBe(10);
+  });
+
+  it('AC5 budget-too-small: when cheapest segment cost > a3Budget, terminationReason still set but no BuildTrack emitted', async () => {
+    const startCoord = { row: 3, col: 40 };
+    mockComputeBuildSegments.mockReturnValue([
+      { from: startCoord, to: { row: 4, col: 40 }, cost: 5 }, // 5M > 2M budget
+    ]);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Stockholm')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      position: startCoord,
+      speed: 9,
+      money: 2, // < cheapest seg cost
+      turnBuildCost: 0,
+    });
+    const snapshot = makeSnapshot();
+    (snapshot.bot as any).money = 2;
+    const trace = makeTrace();
+
+    const result = await MovementPhasePlanner.run(route, snapshot, context, trace);
+
+    expect(trace.a3.terminationReason).toBe('a3_build_origin_is_current_pos');
+    expect(trace.build.target).toBe('Stockholm');
+    // No BuildTrack committed — budget too small for cheapest segment
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.BuildTrack)).toBe(false);
+    // Critically: also no PassTurn (Phase B will run and decide)
     expect(result.accumulatedPlans.some(p => p.type === AIActionType.PassTurn)).toBe(false);
   });
 

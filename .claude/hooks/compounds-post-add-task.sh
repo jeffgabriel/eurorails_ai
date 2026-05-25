@@ -1,6 +1,6 @@
 #!/bin/bash
-# compounds-hooks v3 — installed by 'compounds init-hooks'
+# compounds-hooks v5 — installed by 'compounds init-hooks'
 # Do not edit manually — re-run 'compounds init-hooks' to update
 
-echo '{"additionalContext": "Task created. Follow the flow style from plan_change for handoff gates. In guided or implementation_gate mode (standard tier): after all tasks are added, STOP the planning session and present the handoff command. In hands_free or planning_gate mode: proceed to implement_all_tasks. For TRIVIAL tier: always proceed to implement_all_tasks."}'
+echo '{"additionalContext": "Task created (trivial-fallback path). Implement directly from .compounds/{project_id}/spec.md, then call implement_task_finalize(project_id, task_id, phase=mark_done, ...). Do NOT call implement_task or implement_all_tasks. add_task is no longer used in the standard flow — if you reached here from a standard-tier project, stop and recheck your routing."}'
 exit 0

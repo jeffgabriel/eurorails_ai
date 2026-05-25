@@ -37,6 +37,7 @@ import {
 import { cheapestUnconnectedMajorConnectorCost } from './victoryRules';
 import { updateMemory } from './BotMemory';
 import { isWinCompleting, fullWinCost } from './winCompletion';
+import { getCityMilepointKey, isPickupDeliveryBlocked } from '../restrictionPredicates';
 
 // ── Tunables ───────────────────────────────────────────────────────────
 
@@ -240,6 +241,9 @@ interface PruneStats {
   survivors: number;
   prunedByTurns: number;
   prunedByBuild: number;
+  // JIRA-259: count of candidates dropped because stops[0] is at a city
+  // blocked by an active pickup/delivery restriction (e.g., Coastal Strike).
+  prunedByActiveEffect: number;
 }
 
 // ── City coordinate lookup ─────────────────────────────────────────────
@@ -1466,7 +1470,10 @@ function synthesizeReasoning(
   }
 
   reasoning += `  Survivors after spatial prune: ${stats.survivors} of ${stats.total} raw.\n`;
-  reasoning += `  Discarded by prune: ${stats.prunedByTurns} (turns > ${opts.pruneMaxTurns}) | ${stats.prunedByBuild} (build > ${opts.pruneMaxBuildM}M).`;
+  const activeEffectDiscardNote = stats.prunedByActiveEffect > 0
+    ? ` | ${stats.prunedByActiveEffect} (stop 0 at city blocked by active event)`
+    : '';
+  reasoning += `  Discarded by prune: ${stats.prunedByTurns} (turns > ${opts.pruneMaxTurns}) | ${stats.prunedByBuild} (build > ${opts.pruneMaxBuildM}M)${activeEffectDiscardNote}.`;
 
   // JIRA-230 BE-004: per-replan enumeration telemetry
   if (enumerationMs !== undefined) {
@@ -1713,9 +1720,29 @@ export function planTripDeterministic(
   // Spatial prune
   let prunedByTurns = 0;
   let prunedByBuild = 0;
+  // JIRA-259: pre-filter candidates whose stops[0] is at a city blocked by an
+  // active pickup/delivery restriction (e.g. coastal Strike). Only stops[0]
+  // is checked — Strikes typically expire within 1-2 turns, so later stops
+  // may be fine. The bot's immediate-next action, however, must be feasible.
+  let prunedByActiveEffect = 0;
+  const pickupDeliveryRestrictions = (snapshot.activeEffects ?? [])
+    .flatMap(e => e.restrictions.pickupDelivery);
+  const hasActivePickupDeliveryRestriction = pickupDeliveryRestrictions.length > 0;
   const survivors: Candidate[] = [];
 
   for (const cand of allCandidates) {
+    if (hasActivePickupDeliveryRestriction) {
+      const stop0 = cand.stops[0];
+      if (stop0 && (stop0.action === 'pickup' || stop0.action === 'deliver')) {
+        const cityKey = getCityMilepointKey(stop0.city) ?? '';
+        if (cityKey && isPickupDeliveryBlocked(pickupDeliveryRestrictions, cityKey).blocked) {
+          prunedByActiveEffect++;
+          continue;
+        }
+      }
+    }
+    // JIRA-255: cheapPrune carries memory + context so the win-completion
+    // carve-out can spare cash-completing routes from the turns/build caps.
     const { keep, estTurns, estBuild } = cheapPrune(cand, startPos, speed, opts, snapshot, memory, context);
     if (keep) {
       survivors.push(cand);
@@ -1745,14 +1772,18 @@ export function planTripDeterministic(
     survivors: survivors.length,
     prunedByTurns,
     prunedByBuild,
+    prunedByActiveEffect,
   };
 
   // All pruned check (R8)
   if (survivors.length === 0) {
     const latencyMs = Date.now() - startMs;
+    const activeEffectNote = prunedByActiveEffect > 0
+      ? ` | ${prunedByActiveEffect} (stop 0 at city blocked by active event)`
+      : '';
     const reasoning =
       `[deterministic-top-1] All ${allCandidates.length} candidates pruned.\n` +
-      `  Discarded by prune: ${prunedByTurns} (turns > ${opts.pruneMaxTurns}) | ${prunedByBuild} (build > ${opts.pruneMaxBuildM}M).\n` +
+      `  Discarded by prune: ${prunedByTurns} (turns > ${opts.pruneMaxTurns}) | ${prunedByBuild} (build > ${opts.pruneMaxBuildM}M)${activeEffectNote}.\n` +
       `  Survivors after spatial prune: 0 of ${allCandidates.length} raw.\n` +
       `  Candidates: raw=${rawCount} survivors=0 enumerationMs=${enumerationMs}`;
     return {

@@ -28,6 +28,7 @@ import {
 import { TerrainType } from '../../shared/types/GameTypes';
 import { AreaOfEffectService } from './AreaOfEffectService';
 import { TrackService } from './trackService';
+import { emitToGame } from './socketService';
 
 // ── EventCardService ──────────────────────────────────────────────────────────
 
@@ -390,6 +391,25 @@ export class EventCardService {
       details: `Flood on ${effect.river}: ${r.removedCount} segment(s) removed, new total cost ${r.newTotalCost}`,
       amount: r.removedCount,
     }));
+
+    // Notify clients so they can remove the erased segments from the map.
+    // Best-effort: a socket failure does not undo the DB mutation.
+    for (const r of removalResults) {
+      try {
+        emitToGame(gameId, 'track:updated', {
+          gameId,
+          playerId: r.playerId,
+          reason: 'flood',
+          river: effect.river,
+          timestamp: Date.now(),
+        });
+      } catch (emitError) {
+        console.error(
+          `[EventCardService] track:updated emit failed for player ${r.playerId}:`,
+          emitError instanceof Error ? emitError.message : emitError,
+        );
+      }
+    }
 
     const floodSegmentsRemoved = removalResults.map(r => ({
       playerId: r.playerId,

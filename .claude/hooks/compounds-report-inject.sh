@@ -1,5 +1,5 @@
 #!/bin/bash
-# compounds-hooks v3 — installed by 'compounds init-hooks'
+# compounds-hooks v5 — installed by 'compounds init-hooks'
 # Do not edit manually — re-run 'compounds init-hooks' to update
 
 # Plain text stdout is added visibly to the model's transcript.

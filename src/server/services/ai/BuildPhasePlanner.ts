@@ -32,6 +32,8 @@ import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
 import type { PhaseAResult } from './schemas';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
+import { isBuildBlockedAtMilepost, isFloodRebuildBlocked } from '../../services/restrictionPredicates';
+import { BuildRestriction } from '../../../shared/types/EventCard';
 
 // ── PhaseBResult ──────────────────────────────────────────────────────────
 
@@ -167,9 +169,56 @@ export class BuildPhasePlanner {
       }
     }
 
+    // ── Flood rebuild pre-step ────────────────────────────────────────────
+    // When the bot has pending Flood rebuild segments, prioritise rebuilding
+    // the first segment (FIFO) that is no longer blocked by an active Flood
+    // event.  If a rebuildable segment exists, return immediately with only
+    // the BuildTrack plan — normal routing is deferred to the next turn.
+    const pendingRebuilds = snapshot.bot.pendingFloodRebuilds ?? [];
+    if (pendingRebuilds.length > 0 && !phaseAResult.hasDelivery) {
+      const activeEffects = snapshot.activeEffects ?? [];
+      for (const seg of pendingRebuilds) {
+        const floodStillActive = isFloodRebuildBlocked(activeEffects, seg);
+        if (!floodStillActive.blocked) {
+          // Flood has cleared — this segment can be rebuilt now
+          const rebuildPlan: TurnPlan = {
+            type: AIActionType.BuildTrack,
+            segments: [seg],
+          };
+          console.info(
+            `[BuildPhasePlanner] Flood rebuild pre-step: rebuilding erased segment (${seg.from.row},${seg.from.col})→(${seg.to.row},${seg.to.col})`,
+          );
+          trace.outputPlan = [AIActionType.BuildTrack];
+          return {
+            plans: [...phaseAResult.accumulatedPlans, rebuildPlan],
+            updatedRoute: activeRoute,
+            hasDelivery: phaseAResult.hasDelivery,
+            routeComplete: false,
+            routeAbandoned: false,
+            replanLlmLog: phaseAResult.replanLlmLog,
+            replanSystemPrompt: phaseAResult.replanSystemPrompt,
+            replanUserPrompt: phaseAResult.replanUserPrompt,
+            pendingUpgradeAction: phaseAResult.pendingUpgradeAction,
+            upgradeSuppressionReason: phaseAResult.upgradeSuppressionReason,
+          };
+        }
+      }
+    }
+
     // ── Phase B: Build ────────────────────────────────────────────────────
-    const buildTarget = resolveBuildTarget(activeRoute, context);
-    if (!buildTarget) {
+    // JIRA-247: When Phase A's A3 origin-is-current-pos branch already
+    // committed a BuildTrack into the plan list, skip Phase B's independent
+    // build attempt — Phase B's computeBuildSegments invocation can return []
+    // at medium-city outer mileposts and produce a no-op PassTurn that masks
+    // the already-committed build.
+    const phaseAEmittedBuild = phaseAResult.accumulatedPlans.some(
+      p => p.type === AIActionType.BuildTrack,
+    );
+    const buildTarget = phaseAEmittedBuild ? null : resolveBuildTarget(activeRoute, context);
+    if (phaseAEmittedBuild) {
+      // trace.build.target was set by Phase A's A3 fix.
+      trace.build.skipped = true;
+    } else if (!buildTarget) {
       trace.build.skipped = true;
       trace.build.target = null;
     } else {

@@ -335,6 +335,45 @@ describe('BuildPhasePlanner.run — build target resolved', () => {
       expect.anything(),
     );
   });
+
+  // JIRA-247: Phase B must SKIP its independent build when Phase A's A3
+  // origin-is-current-pos fix already committed a BuildTrack. Without the
+  // skip, Phase B's independent computeBuildSegments call at a medium-city
+  // outer milepost returns [] and produces a no-op PassTurn that masks the
+  // already-committed build (observed in game f3ed7b8f T95).
+  it('JIRA-247: skips executeBuildPhase when Phase A already emitted a BuildTrack', async () => {
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Stockholm',
+      stopIndex: 1,
+      isVictoryBuild: false,
+    });
+    const phaseABuildPlan = {
+      type: AIActionType.BuildTrack,
+      segments: [{ from: { row: 4, col: 61 }, to: { row: 4, col: 62 }, cost: 3 }],
+      targetCity: 'Stockholm',
+    } as unknown as import('../../../shared/types/GameTypes').TurnPlan;
+
+    const phaseA = makePhaseAResult({ accumulatedPlans: [phaseABuildPlan] });
+    const trace = makeTrace();
+
+    const result = await BuildPhasePlanner.run(
+      phaseA,
+      makeSnapshot(),
+      makeContext(),
+      trace,
+    );
+
+    // Phase B did NOT call executeBuildPhase (skipped)
+    expect(mockExecuteBuildPhase).not.toHaveBeenCalled();
+    // build flagged as skipped in trace
+    expect(trace.build.skipped).toBe(true);
+    // Phase A's BuildTrack is preserved in the final plan list
+    const buildPlans = result.plans.filter(p => p.type === AIActionType.BuildTrack);
+    expect(buildPlans).toHaveLength(1);
+    expect((buildPlans[0] as any).segments).toEqual([
+      { from: { row: 4, col: 61 }, to: { row: 4, col: 62 }, cost: 3 },
+    ]);
+  });
 });
 
 // ── JIRA-187 capped-city: 2a handled path ─────────────────────────────────

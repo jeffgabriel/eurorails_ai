@@ -61,6 +61,7 @@ import { NewRoutePlanner } from './NewRoutePlanner';
 import { UPGRADE_DELIVERY_THRESHOLD } from './context/UpgradeGatingConstants';
 import { RECENT_DELIVERIES_WINDOW } from './StrategicConstants';
 import { detectVictoryClinch, findFinalVictoryRoute } from './victoryRules';
+import { isBotInPendingLostTurns } from '../../services/restrictionPredicates';
 
 /**
  * @deprecated Use UPGRADE_DELIVERY_THRESHOLD from UpgradeGatingConstants instead.
@@ -174,6 +175,22 @@ export interface BotTurnResult {
   initialBuildOptions?: InitialBuildPlan['evaluatedOptions'];
   // Double delivery pairings evaluated during initial build
   initialBuildPairings?: InitialBuildPlan['evaluatedPairings'];
+  /** Populated when a PlayerService action was rejected by an event card restriction */
+  rejectionReason?: { code: string; message: string };
+  /**
+   * JIRA-262: Per-turn snapshot of active event cards (Strike / Snow / Flood /
+   * Derailment with their restriction zones, pendingLostTurns, expiry turns).
+   * Empty array means no event cards active. Mirrors snapshot.activeEffects at
+   * the moment of turn execution; downstream consumers (NDJSON log, analytics)
+   * use this to correlate bot decisions with which events were in force.
+   */
+  activeEffects?: import('../../../shared/types/EventCard').ActiveEffect[];
+  /**
+   * JIRA-262: Per-turn snapshot of the bot's pending Flood-rebuild segments
+   * (track erased by an active Flood event that the bot has not yet rebuilt).
+   * Empty when no pending rebuilds.
+   */
+  pendingFloodRebuilds?: import('../../../shared/types/GameTypes').TrackSegment[];
 }
 
 export class AIStrategyEngine {
@@ -204,6 +221,39 @@ export class AIStrategyEngine {
       // Auto-place bot if no position and has track (skip during initialBuild — no train placement yet)
       if (!snapshot.bot.position && snapshot.bot.existingSegments.length > 0 && snapshot.gameStatus !== 'initialBuild') {
         await AIStrategyEngine.autoPlaceBot(snapshot, memory.activeRoute);
+      }
+
+      // ── Event card: Lost-turn pre-emption ──────────────────────────────────
+      // If a Derailment event recorded a pending lost turn for this bot,
+      // skip the entire turn and emit PassTurn immediately.  We check
+      // activeEffects from the snapshot so the decision is based on the same
+      // point-in-time read as all other planner decisions (no extra DB query).
+      if (isBotInPendingLostTurns(snapshot.activeEffects ?? [], botPlayerId)) {
+        const lostTurnCardId = snapshot.activeEffects
+          ?.find(e => e.pendingLostTurns.some(p => p.playerId === botPlayerId))
+          ?.cardId;
+        const lostTurnReasoning =
+          `Lost turn due to Derailment event card${lostTurnCardId != null ? ` #${lostTurnCardId}` : ''}.`;
+        console.info(`${tag} Lost-turn pre-emption: ${lostTurnReasoning}`);
+        const durationMs = Date.now() - startTime;
+        await updateMemory(gameId, botPlayerId, {
+          lastAction: AIActionType.PassTurn,
+          consecutiveDiscards: 0,
+          turnNumber: memory.turnNumber + 1,
+        });
+        flushTurnLog();
+        return {
+          action: AIActionType.PassTurn,
+          segmentsBuilt: 0,
+          cost: 0,
+          durationMs,
+          success: true,
+          reasoning: lostTurnReasoning,
+          actor: 'system' as const,
+          actorDetail: 'lost-turn-pre-emption',
+          llmLatencyMs: 0,
+          retried: false,
+        };
       }
 
       const botConfig = snapshot.bot.botConfig as BotConfig | null;
@@ -251,15 +301,17 @@ export class AIStrategyEngine {
       if (!context.isInitialBuild) {
         const finalVictoryRoute = findFinalVictoryRoute(snapshot, context, memory);
         if (finalVictoryRoute) {
-          // Idempotency: do not replace the route if the bot is already targeting
-          // the first stop of the returned route (same pattern as JIRA-243).
-          const currentStop = activeRoute?.stops[activeRoute.currentStopIndex];
-          const firstStop = finalVictoryRoute.stops[0];
-          const alreadyTargeted =
-            currentStop?.action === firstStop.action &&
-            currentStop.loadType === firstStop.loadType &&
-            currentStop.city === firstStop.city;
-          if (!alreadyTargeted) {
+          // JIRA-261: Idempotency check compares the full remaining-stops
+          // sequence, not just the first stop. The earlier first-stop-only check
+          // suppressed override at game 8350cffa s3 T68 onwards: an existing
+          // 4-stop deterministic route shared its first stop (`pickup Ham@Warszawa`)
+          // with the victory route, so the override never fired — even though
+          // the victory route diverged at stop 3 to add the critical
+          // `pickup Oranges@Sevilla → deliver Oranges@London` leg that would
+          // have connected the 4th-of-7 major and clinched the game. With the
+          // full-sequence comparison, that divergence (and the missing London
+          // leg in the existing route) now correctly triggers the override.
+          if (!AIStrategyEngine.routesMatch(activeRoute, finalVictoryRoute.stops)) {
             activeRoute = {
               stops: finalVictoryRoute.stops,
               currentStopIndex: 0,
@@ -848,7 +900,17 @@ export class AIStrategyEngine {
       const loadsPickedUp: Array<{ loadType: string; city: string }> = [];
       const allSteps = finalPlan.type === 'MultiAction' ? finalPlan.steps : [finalPlan];
       const majorCityLookupForLog = getMajorCityLookup();
-      for (const step of allSteps) {
+      // JIRA-258: walk only steps that actually executed. When result.success
+      // is false, result.failedStepIndex marks the step that the rule layer
+      // rejected; steps before it committed normally and stay in the log,
+      // and steps at-or-after it are skipped from the success-claim fields
+      // (loadsDelivered / loadsPickedUp / milepostsMoved / movementPath).
+      const failedStepIndex = result.failedStepIndex;
+      const lastExecutedIndex = !result.success && failedStepIndex !== undefined
+        ? failedStepIndex - 1
+        : allSteps.length - 1;
+      for (let i = 0; i <= lastExecutedIndex; i++) {
+        const step = allSteps[i];
         if (step.type === AIActionType.MoveTrain) {
           milepostsMoved = (milepostsMoved ?? 0) + (step.path.length > 0 ? computeEffectivePathLength(step.path, majorCityLookupForLog) : 0);
           trackUsageFee = (trackUsageFee ?? 0) + step.totalFee;
@@ -875,8 +937,14 @@ export class AIStrategyEngine {
         }
       }
 
-      // Build structured action timeline for animated partial turn movements
-      const actionTimeline = AIStrategyEngine.buildActionTimeline(allSteps);
+      // Build structured action timeline for animated partial turn movements.
+      // JIRA-258: pass execution outcome so the failed step is marked rejected
+      // and unattempted later steps are dropped from the timeline.
+      const actionTimeline = AIStrategyEngine.buildActionTimeline(
+        allSteps,
+        result.success ? undefined : failedStepIndex,
+        result.success ? undefined : result.rejectionReason?.code,
+      );
 
       // JIRA-143: Map model → actor metadata
       const actorMeta = AIStrategyEngine.mapActorMetadata(decision.model, guardrailResult.overridden);
@@ -1016,6 +1084,17 @@ export class AIStrategyEngine {
           phaseBStripped: phaseBWasStripped,
           lockupTerminationReason,
         },
+        rejectionReason: result.rejectionReason,
+        // JIRA-262: per-turn observability for post-hoc event-card impact
+        // analysis. snapshot.activeEffects / pendingFloodRebuilds reflect the
+        // state the planners just consumed; serializing them here lets
+        // analytics correlate bot decisions with active event restrictions.
+        activeEffects: snapshot.activeEffects && snapshot.activeEffects.length > 0
+          ? snapshot.activeEffects
+          : undefined,
+        pendingFloodRebuilds: snapshot.bot.pendingFloodRebuilds && snapshot.bot.pendingFloodRebuilds.length > 0
+          ? snapshot.bot.pendingFloodRebuilds
+          : undefined,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;
@@ -1107,14 +1186,67 @@ export class AIStrategyEngine {
     }
   }
 
-  /** Build a structured action timeline from composed plan steps. */
-  static buildActionTimeline(allSteps: TurnPlan[]): TimelineStep[] {
+  /**
+   * JIRA-261: Idempotency helper for the findFinalVictoryRoute override.
+   *
+   * Returns true iff the existing activeRoute's REMAINING stops (from
+   * `currentStopIndex` onward) are identical in length and content to
+   * `proposedStops`. Action / loadType / city are compared structurally.
+   *
+   * Why full-sequence equality (not first-stop equality):
+   *   The earlier first-stop-only check suppressed override at game 8350cffa
+   *   s3 T68+: an existing 4-stop deterministic route shared its first stop
+   *   (`pickup Ham@Warszawa`) with a 6-stop victory route, so the override
+   *   never fired even though the routes diverged at stop 3 to add the
+   *   victory-critical `pickup Oranges@Sevilla → deliver Oranges@London` leg.
+   *   This helper now distinguishes those cases — divergent routes correctly
+   *   trigger override, identical plans correctly suppress (no churn).
+   */
+  private static routesMatch(
+    existing: StrategicRoute | null | undefined,
+    proposedStops: RouteStop[],
+  ): boolean {
+    if (!existing) return false;
+    const remaining = existing.stops.slice(existing.currentStopIndex);
+    if (remaining.length !== proposedStops.length) return false;
+    for (let i = 0; i < remaining.length; i++) {
+      const a = remaining[i];
+      const b = proposedStops[i];
+      if (a.action !== b.action) return false;
+      if (a.loadType !== b.loadType) return false;
+      if (a.city !== b.city) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Build a structured action timeline from composed plan steps.
+   *
+   * JIRA-258: when an execution failure is reported, the step at
+   * `failedStepIndex` is annotated with `outcome: 'rejected'` (and the
+   * provided `rejectionCode`); steps at indices > failedStepIndex are
+   * dropped because executeMultiAction stops at the first failure and
+   * those steps were never attempted.
+   */
+  static buildActionTimeline(
+    allSteps: TurnPlan[],
+    failedStepIndex?: number,
+    rejectionCode?: string,
+  ): TimelineStep[] {
     const timeline: TimelineStep[] = [];
-    for (const step of allSteps) {
+    const lastIncludedIndex = failedStepIndex !== undefined
+      ? failedStepIndex
+      : allSteps.length - 1;
+    for (let i = 0; i <= lastIncludedIndex && i < allSteps.length; i++) {
+      const step = allSteps[i];
+      const rejected = failedStepIndex !== undefined && i === failedStepIndex;
+      const annotation = rejected
+        ? { outcome: 'rejected' as const, rejectionCode }
+        : {};
       switch (step.type) {
         case AIActionType.MoveTrain:
           if (step.path && step.path.length > 0) {
-            timeline.push({ type: 'move', path: step.path.map(p => ({ row: p.row, col: p.col })) });
+            timeline.push({ type: 'move', path: step.path.map(p => ({ row: p.row, col: p.col })), ...annotation });
           }
           break;
         case AIActionType.DeliverLoad:
@@ -1124,6 +1256,7 @@ export class AIStrategyEngine {
             city: (step as any).city ?? '',
             payment: (step as any).payout ?? 0,
             cardId: (step as any).cardId ?? 0,
+            ...annotation,
           });
           break;
         case AIActionType.PickupLoad:
@@ -1131,6 +1264,7 @@ export class AIStrategyEngine {
             type: 'pickup',
             loadType: (step as any).load ?? '',
             city: (step as any).city ?? '',
+            ...annotation,
           });
           break;
         case AIActionType.BuildTrack:
@@ -1138,6 +1272,7 @@ export class AIStrategyEngine {
             type: 'build',
             segmentsBuilt: (step as any).segments?.length ?? 0,
             cost: (step as any).cost ?? 0,
+            ...annotation,
           });
           break;
         case AIActionType.UpgradeTrain:

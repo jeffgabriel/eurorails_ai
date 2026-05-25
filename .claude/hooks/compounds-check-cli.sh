@@ -1,5 +1,5 @@
 #!/bin/bash
-# compounds-hooks v3 — installed by 'compounds init-hooks'
+# compounds-hooks v5 — installed by 'compounds init-hooks'
 # Do not edit manually — re-run 'compounds init-hooks' to update
 
 # Plain text stdout is added visibly to the model's transcript.
@@ -25,25 +25,37 @@ This repo uses Compounds MCP tools. You MUST use them:
 
 2. Follow the FULL workflow for the tier — never skip steps:
 
-   TRIVIAL:  plan_change → gen_spec → add_task → implement_all_tasks
-             → implement_task → implement_task_finalize
+   TRIVIAL (preferred): plan_change(start) → plan_change(start_trivial) →
+                        [direct edit + git commit] → create_project(status="DONE")
 
-   STANDARD: plan_change → gen_spec → add_task(s) → HANDOFF (see rule 3)
-             → implement_all_tasks → implement_task → implement_task_finalize
+   TRIVIAL (fallback):  plan_change → … → gen_spec(tier="trivial") →
+                        create_project → upload → add_task → [direct edit] →
+                        implement_task_finalize
+                        (NO implement_task, NO implement_all_tasks)
 
-   LARGE:    plan_change → gen_spec → gen_master_spec → validate_master_spec
-             → gen_project_spec → validate_project_specs → create_project
-             → generate_tasks → HANDOFF (see rule 3)
-             → implement_all_tasks → implement_task → implement_task_finalize
+   STANDARD:            plan_change(start) → plan_change(start_standard) →
+                        locate/impact/classify/route → gen_spec(tier="standard") →
+                        gen_master_spec → validate_master_spec →
+                        wc -c master-spec.md →
+                        Branch A (≤ MAX_SPEC_CHARS_STANDARD):
+                          create_project → upload
+                        Branch B (> MAX_SPEC_CHARS_STANDARD):
+                          gen_project_spec ×2 → validate_project_specs →
+                          create_project ×2 → upload ×2
+                        → HANDOFF (per flow style: STOP or auto-proceed)
+                        → [implementation session]
+                          generate_tasks → implement_all_tasks →
+                          implement_task → implement_task_finalize
+
+   HANDOFF (Standard, used in guided/implementation_gate flow styles):
+     "Compounds, create tasks and then implement project <title>: <id>"
 
 3. HANDOFF RULE: Follow the flow style from plan_change for handoff gates.
    Flow styles control where the workflow stops:
    - hands_free: No gates — skips spec review AND implementation handoff, auto-implements
    - planning_gate: Gates at spec review only, then auto-proceeds through implementation
-   - implementation_gate: Skips spec review, gates at implementation handoff (standard/large)
+   - implementation_gate: Skips spec review, gates at implementation handoff (standard)
    - guided (default): Gates at spec review, implementation handoff, and implementation approval
-   Handoff prompts — Standard: "Compounds, implement all tasks in project <title>: <id>"
-   Large: "Compounds, create tasks and then implement project <title>: <id>"
 
 4. implement_all_tasks is the implementation entry point. After each
    implement_task_finalize, call implement_all_tasks again to sync
