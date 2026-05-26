@@ -82,6 +82,32 @@ export const PRUNE_MAX_BUILD_M = 130;
 export const HOP_AVG_COST_M = 1.3;
 
 /**
+ * Wall-clock budget for the cheapPrune loop inside planTripDeterministic.
+ *
+ * The pre-existing perf-budget alarm at the end of enumeration only LOGS when
+ * enumerationMs > 200 — it never aborts. On late-game dense networks the loop
+ * can run for many minutes (smoke-game T73: 928 seconds entirely in this
+ * loop) as each candidate's cheapPrune fires estimateGraphPathCost (Dijkstra)
+ * per leg. Once we cross this budget we stop pruning and proceed with the
+ * survivors we already have; the bot picks a still-valid plan instead of
+ * stalling the turn for 15 minutes. Set comfortably above typical 200ms runs
+ * but well below the multi-minute pathological cases.
+ */
+export const PRUNE_WALL_CLOCK_BUDGET_MS = 5000;
+
+/**
+ * Per-iteration wall-clock budget for a single cheapPrune call (which fans out
+ * to N estimateGraphPathCost → findBuildPath Dijkstras for an N-stop route).
+ * Bounds the worst-case work for ONE candidate so a single pathological
+ * Dijkstra doesn't burn the entire shared PRUNE_WALL_CLOCK_BUDGET_MS and
+ * cause every subsequent iteration to see "deadline past" and falsely mark
+ * its candidates unreachable. Smoke#6 stalled at turn 400 with all bots at
+ * $190-198M after a shared deadline caused 234 false-unreachable cap-hits;
+ * a per-iter budget isolates the damage to the truly slow candidate.
+ */
+export const CHEAP_PRUNE_PER_ITER_BUDGET_MS = 500;
+
+/**
  * JIRA-255 Layer B: Hard ceiling on turn count for win-completing candidates
  * exempted from the standard PRUNE_MAX_TURNS gate when endGameLocked is true.
  * Guards against pathological estimates (e.g., 50-turn candidates that the
@@ -972,6 +998,7 @@ export function cheapPrune(
   snapshot: WorldSnapshot,
   memory?: Pick<BotMemoryState, 'endGameLocked'>,
   context?: Pick<GameContext, 'unconnectedMajorCities' | 'connectedMajorCities'>,
+  deadlineMs?: number,
 ): { keep: boolean; estTurns: number; estBuild: number } {
   let totalBuild = 0;
   let totalTurns = 0;
@@ -988,7 +1015,7 @@ export function cheapPrune(
   // mildly inflated estBuild here is the right trade given the loose
   // 130M / 12-turn thresholds — false-negatives at those bounds are rare.
   for (const s of candidate.stops) {
-    const leg = estimateGraphPathCost(prevCity, s.city, snapshot, speed);
+    const leg = estimateGraphPathCost(prevCity, s.city, snapshot, speed, deadlineMs);
     if (!leg.reachable) return { keep: false, estTurns: 999, estBuild: 999 };
     totalBuild += leg.buildCost;
     totalTurns += leg.estimatedTurns;
@@ -1719,8 +1746,11 @@ export function planTripDeterministic(
     .flatMap(e => e.restrictions.pickupDelivery);
   const hasActivePickupDeliveryRestriction = pickupDeliveryRestrictions.length > 0;
   const survivors: Candidate[] = [];
+  let prunedByWallClock = 0;
+  let wallClockExceeded = false;
 
-  for (const cand of allCandidates) {
+  for (let candIdx = 0; candIdx < allCandidates.length; candIdx++) {
+    const cand = allCandidates[candIdx];
     if (hasActivePickupDeliveryRestriction) {
       const stop0 = cand.stops[0];
       if (stop0 && (stop0.action === 'pickup' || stop0.action === 'deliver')) {
@@ -1733,7 +1763,16 @@ export function planTripDeterministic(
     }
     // JIRA-255: cheapPrune carries memory + context so the win-completion
     // carve-out can spare cash-completing routes from the turns/build caps.
-    const { keep, estTurns, estBuild } = cheapPrune(cand, startPos, speed, opts, snapshot, memory, context);
+    // Wall-clock deadline is PER-ITERATION, not shared across the whole
+    // prune loop. Smoke#6 demonstrated that a shared deadline causes
+    // subsequent iterations to see "deadline past" and falsely abort their
+    // Dijkstras after one slow iteration, marking many candidates falsely
+    // unreachable (234 false aborts → bot stalled at $198M, $52M short of
+    // win). Per-iter budget isolates the slow Dijkstra to that one bad
+    // candidate; the outer loop break still caps total time at
+    // PRUNE_WALL_CLOCK_BUDGET_MS.
+    const pruneDeadline = Date.now() + CHEAP_PRUNE_PER_ITER_BUDGET_MS;
+    const { keep, estTurns, estBuild } = cheapPrune(cand, startPos, speed, opts, snapshot, memory, context, pruneDeadline);
     if (keep) {
       survivors.push(cand);
     } else {
@@ -1745,15 +1784,30 @@ export function planTripDeterministic(
         prunedByBuild++;
       }
     }
+
+    // Wall-clock budget: bail out if the cheapPrune loop has been running
+    // longer than PRUNE_WALL_CLOCK_BUDGET_MS. The remaining candidates are
+    // not evaluated and are NOT counted as survivors; the planner proceeds
+    // with what we have. Without this, a single turn on a dense late-game
+    // network could spend 10+ minutes here (smoke-game T73: 928s).
+    if (Date.now() - enumStartMs > PRUNE_WALL_CLOCK_BUDGET_MS) {
+      prunedByWallClock = allCandidates.length - candIdx - 1;
+      wallClockExceeded = true;
+      break;
+    }
   }
 
   const enumerationMs = Date.now() - enumStartMs;
   const rawCount = allCandidates.length;
 
-  // JIRA-230 BE-004: perf budget alarm
-  if (rawCount > 5000 || enumerationMs > 200) {
+  // JIRA-230 BE-004: perf budget alarm. Now also fires when wall-clock cap
+  // truncated the loop, surfacing the abort plus the cut count.
+  if (rawCount > 5000 || enumerationMs > 200 || wallClockExceeded) {
+    const wcNote = wallClockExceeded
+      ? ` WALL-CLOCK-CAP-HIT cutCandidates=${prunedByWallClock}`
+      : '';
     console.warn(
-      `[perf-budget] planTripDeterministic overrun: raw=${rawCount} survivors=${survivors.length} enumerationMs=${enumerationMs}`,
+      `[perf-budget] planTripDeterministic overrun: raw=${rawCount} survivors=${survivors.length} enumerationMs=${enumerationMs}${wcNote}`,
     );
   }
 
