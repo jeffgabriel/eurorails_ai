@@ -483,7 +483,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       // Need botConfig with skillLevel for createBrain
       const snapshotWithConfig = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshotWithConfig);
@@ -563,7 +563,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       };
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Coal'],
         resolvedDemands: [
           { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 25 }] },
@@ -615,7 +615,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext({ isInitialBuild: true, canBuild: true });
 
@@ -655,7 +655,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext({ isInitialBuild: true, canBuild: true });
 
@@ -696,7 +696,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       // Use non-initial-build context so planRoute is called
       const context = makeContext({ canBuild: true });
@@ -771,7 +771,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -871,7 +871,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -929,7 +929,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       };
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -980,7 +980,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -1022,7 +1022,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -1083,7 +1083,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       snapshot.gameStatus = 'initialBuild';
       const context = makeContext({ isInitialBuild: true, canBuild: true });
@@ -1140,7 +1140,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -1181,7 +1181,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -1222,7 +1222,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -1281,7 +1281,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Steel'],
       } as any);
       const context = makeContext({ loads: ['Steel'] });
@@ -1345,7 +1345,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Wine'],
       } as any);
       const context = makeContext({ loads: ['Wine'] });
@@ -1403,7 +1403,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Coal'],
       } as any);
       // JIRA-97 covers route-completion bookkeeping. The default viable demand
@@ -1470,7 +1470,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Coal'],
       } as any);
       const context = makeContext({ loads: ['Coal'] });
@@ -1521,7 +1521,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Coal'],
       } as any);
       const context = makeContext({ loads: ['Coal'] });
@@ -1581,7 +1581,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        botConfig: { skillLevel: 'easy', provider: 'anthropic' },
         loads: ['Tourists'],
       } as any);
       const context = makeContext({ loads: ['Tourists'] });
@@ -1661,7 +1661,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -1718,7 +1718,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Coal'],
       } as any);
       const context = makeContext({ loads: ['Coal'] });
@@ -1802,7 +1802,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Coal'],
       } as any);
       const context = makeContext({ loads: ['Coal'] });
@@ -1856,7 +1856,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -1905,7 +1905,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -1970,7 +1970,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -2043,7 +2043,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -2210,7 +2210,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       } as any);
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Coal'],
       } as any);
       const context = makeContext({ loads: ['Coal'] });
@@ -2271,7 +2271,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       } as any);
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -2352,7 +2352,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       } as any);
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Coal'],
       } as any);
       const context = makeContext({ loads: ['Coal'] });
@@ -2402,7 +2402,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       } as any);
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -2449,7 +2449,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -2520,7 +2520,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -2680,7 +2680,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Steel'],
       } as any);
       const context = makeContext({
@@ -2773,7 +2773,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Wine'],
       } as any);
       const context = makeContext({
@@ -2853,7 +2853,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -2929,7 +2929,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         consecutiveLlmFailures: 0,
       });
 
-      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium', provider: 'anthropic' }, loads: ['Potatoes'] } as any);
+      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'easy', provider: 'anthropic' }, loads: ['Potatoes'] } as any);
       const context = makeContext({
         loads: ['Potatoes'],
         demands: [{
@@ -3047,14 +3047,14 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       // Pre-delivery snapshot: carrying Beer, old demand card
       const preDeliverySnap = makeSnapshot({
-        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        botConfig: { skillLevel: 'easy', provider: 'anthropic' },
         loads: ['Beer'],
         money: 50,
       } as any);
 
       // Post-delivery snapshot: no Beer, new demand card, updated money
       const postDeliverySnap = makeSnapshot({
-        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        botConfig: { skillLevel: 'easy', provider: 'anthropic' },
         loads: [],
         money: 60,
         demandCards: [1, 50], // card 50 is the newly drawn replacement
@@ -3213,7 +3213,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         position: { row: 10, col: 10 },
         loads: ['Hops', 'Wine'],
         resolvedDemands: [{ cardId: 1, demands: [{ city: 'Berlin', loadType: 'Steel', payment: 20 }] }],
@@ -3293,7 +3293,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         position: { row: 5, col: 5 },
         loads: ['Hops'],
         resolvedDemands: [],
@@ -3369,11 +3369,11 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const preDeliverySnap = makeSnapshot({
-        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        botConfig: { skillLevel: 'easy', provider: 'anthropic' },
         loads: ['Beer'], money: 50,
       } as any);
       const postDeliverySnap = makeSnapshot({
-        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        botConfig: { skillLevel: 'easy', provider: 'anthropic' },
         loads: [], money: 60, demandCards: [1, 50],
       } as any);
 
@@ -3527,7 +3527,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         consecutiveLlmFailures: 0,
       });
 
-      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'easy' } } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
@@ -3631,7 +3631,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         { id: '0,0', row: 0, col: 0, x: 0, y: 0, terrain: 2, city: { type: 2, name: 'Berlin', availableLoads: [] } },
         { id: '1,0', row: 1, col: 0, x: 0, y: 50, terrain: 0, city: undefined },
       ];
-      const snapshot = { ...makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any), hexGrid };
+      const snapshot = { ...makeSnapshot({ botConfig: { skillLevel: 'easy' } } as any), hexGrid };
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
@@ -3694,7 +3694,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       // Snapshot without hexGrid → gridPoints = []
-      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'easy' } } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
@@ -3743,7 +3743,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       const hexGrid = [
         { id: '0,0', row: 0, col: 0, x: 0, y: 0, terrain: 2, city: { type: 2, name: 'Berlin', availableLoads: [] } },
       ];
-      const snapshot = { ...makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any), hexGrid };
+      const snapshot = { ...makeSnapshot({ botConfig: { skillLevel: 'easy' } } as any), hexGrid };
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
@@ -3850,14 +3850,14 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       };
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Coal'],
         resolvedDemands: [
           { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 25 }] },
         ],
       } as any);
       const freshSnapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: [],
         resolvedDemands: [
           { cardId: 99, demands: [{ city: 'Paris', loadType: 'Steel', payment: 30 }] },
@@ -3942,13 +3942,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       };
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Steel'],
         resolvedDemands: [
           { cardId: 77, demands: [{ city: 'Berlin', loadType: 'Steel', payment: 30 }] },
         ],
       } as any);
-      const freshSnapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+      const freshSnapshot = makeSnapshot({ botConfig: { skillLevel: 'easy' } } as any);
 
       mockCapture
         .mockResolvedValueOnce(snapshot)
@@ -3986,7 +3986,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       };
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Coal'],
         resolvedDemands: [
           { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 25 }] },
@@ -4043,7 +4043,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnRoute: 1,
       });
 
-      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'easy' } } as any);
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(makeContext({
         canDeliver: [{ loadType: 'Coal', deliveryCity: 'Berlin', payout: 25, cardIndex: 42 }],
@@ -4068,7 +4068,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
 
     it('AC6: bot not at delivery city (canDeliver empty) → normal TripPlanner flow unchanged', async () => {
-      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'easy' } } as any);
       const context = makeContext({ canDeliver: [] }); // No deliveries available
 
       mockCapture.mockResolvedValue(snapshot);
@@ -4112,14 +4112,14 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       ];
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         loads: ['Coal', 'Steel'],
         resolvedDemands: [
           { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 25 }] },
           { cardId: 43, demands: [{ city: 'Berlin', loadType: 'Steel', payment: 20 }] },
         ],
       } as any);
-      const freshSnapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+      const freshSnapshot = makeSnapshot({ botConfig: { skillLevel: 'easy' } } as any);
 
       mockCapture
         .mockResolvedValueOnce(snapshot)
@@ -4182,7 +4182,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         money: 100,
       } as any);
       const context = makeContext({ money: 100 });
@@ -4272,7 +4272,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
+        botConfig: { skillLevel: 'easy' },
         money: 50,
       } as any);
       const context = makeContext({ money: 50 });
