@@ -1480,6 +1480,11 @@ export class AIStrategyEngine {
 
   private static hasLLMApiKey(botConfig: BotConfig | null): boolean {
     if (!botConfig) return false;
+    // JIRA-220 / JIRA-268: Medium skill is fully deterministic; never construct
+    // an LLM brain regardless of credential availability. Predicate name is
+    // kept for caller compatibility — semantically it now answers "should this
+    // bot use an LLM brain?" rather than "is a credential present?".
+    if (botConfig.skillLevel === BotSkillLevel.Medium) return false;
     const provider = (botConfig.provider as LLMProvider) ?? LLMProvider.Anthropic;
     if (provider === LLMProvider.Anthropic) {
       return AIStrategyEngine.resolveAnthropicCredential() !== null;
