@@ -180,6 +180,7 @@ export function estimateRouteSegment(
   from: GridCoord,
   to: GridCoord,
   snapshot: SnapshotInput,
+  deadlineMs?: number,
 ): RouteSegmentEstimate {
   const existingEdges = buildExistingEdgeSet(snapshot.bot.existingSegments);
   // existingTrackIndex: segments-only node set (no start hex) — feeds the
@@ -191,6 +192,7 @@ export function estimateRouteSegment(
   const { path, segments: newSegments, totalCost: buildCost } = findBuildPath(
     from, to,
     existingEdges, existingTrackIndex, opponentEdges,
+    { deadlineMs },
   );
 
   if (path.length === 0) {
