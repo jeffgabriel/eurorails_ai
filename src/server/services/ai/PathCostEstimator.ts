@@ -131,6 +131,7 @@ export function estimateGraphPathCost(
   to: string | GridCoord,
   snapshot: WorldSnapshot,
   trainSpeed: number,
+  deadlineMs?: number,
 ): PathCost {
   const segmentsHash = hashSegments(snapshot.bot.existingSegments);
   const cacheKey = makeCacheKey(from, to, segmentsHash, trainSpeed);
@@ -140,8 +141,15 @@ export function estimateGraphPathCost(
     return cached;
   }
 
-  const result = computePathCost(from, to, snapshot, trainSpeed);
-  cache.set(cacheKey, result);
+  const result = computePathCost(from, to, snapshot, trainSpeed, deadlineMs);
+  // When a deadline was supplied AND the result came back unreachable, skip
+  // caching: the unreachability might be a false-negative caused by the
+  // Dijkstra aborting on the wall-clock deadline rather than a real
+  // unreachable-target finding. Caching it would poison subsequent (deadline-
+  // free) callers. Reachable results are always safe to cache.
+  if (result.reachable || deadlineMs === undefined) {
+    cache.set(cacheKey, result);
+  }
   return result;
 }
 
@@ -153,6 +161,7 @@ function computePathCost(
   to: string | GridCoord,
   snapshot: WorldSnapshot,
   trainSpeed: number,
+  deadlineMs?: number,
 ): PathCost {
   // Resolve inputs to arrays of coords
   const fromCoords: Array<{ row: number; col: number }> =
@@ -194,7 +203,7 @@ function computePathCost(
         continue;
       }
 
-      const estimate = estimateRouteSegment(fromCoord, toCoord, snapshotInput);
+      const estimate = estimateRouteSegment(fromCoord, toCoord, snapshotInput, deadlineMs);
 
       if (!estimate.reachable) {
         // This pair is blocked; continue trying other outpost combinations
