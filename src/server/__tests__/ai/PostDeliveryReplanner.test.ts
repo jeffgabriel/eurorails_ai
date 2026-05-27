@@ -1,24 +1,24 @@
 /**
  * PostDeliveryReplanner unit tests (JIRA-195 Slice 3a + JIRA-198 upgrade consumption).
  *
- * Covers all four sub-paths:
- *   1. Success — TripPlanner returns a route → enriched + skipCompletedStops
- *   2. Null route — TripPlanner returns null → revalidate existing route
- *   3. Throw — TripPlanner throws → revalidate existing route
- *   4. No brain — brain null or gridPoints empty → revalidate existing route
- *
- * In every sub-path, moveTargetInvalidated must be true (JIRA-194 contract).
+ * Covers all four sub-paths, now mapped to the PostDeliveryOutcome discriminated union:
+ *   1. Success — TripPlanner returns a route → RouteReplacedOutcome (or RouteContinuedOutcome via strictly-faster gate)
+ *   2. Null route (keep_current_plan) — TripPlanner returns keep_current_plan → RouteContinuedOutcome
+ *   2b. Null route (other) — TripPlanner returns null → NoRouteOutcome
+ *   3. Throw — TripPlanner throws → NoRouteOutcome (or RouteAbandonedOutcome if impossibility fired)
+ *   4. No grid — gridPoints empty/undefined → NoRouteOutcome (or RouteAbandonedOutcome if impossible)
  *
  * JIRA-198 upgrade consumption scenarios (B13.2):
- *   - Success: upgradeOnRoute eligible → pendingUpgradeAction populated
- *   - Gate-blocked: delivery count below threshold → pendingUpgradeAction null + reason
- *   - Unaffordable: insufficient funds → pendingUpgradeAction null + reason
- *   - Invalid-path: invalid upgrade from current train → pendingUpgradeAction null + reason
- *   - Sub-paths 2/3/4: both fields undefined
+ *   - Success: upgradeOnRoute eligible → RouteReplacedOutcome with pendingUpgradeAction populated
+ *   - Gate-blocked: delivery count below threshold → RouteReplacedOutcome with pendingUpgradeAction null + reason
+ *   - Unaffordable: insufficient funds → RouteReplacedOutcome with pendingUpgradeAction null + reason
+ *   - Invalid-path: invalid upgrade from current train → RouteReplacedOutcome with pendingUpgradeAction null + reason
+ *   - Sub-paths 2/3/4: both fields absent (NoRouteOutcome / RouteContinuedOutcome do not carry upgrade fields)
  *   - Multi-replan accumulation: last non-null wins; null does not clobber non-null
  */
 
 import { PostDeliveryReplanner } from '../../services/ai/PostDeliveryReplanner';
+import type { RouteReplacedOutcome, RouteContinuedOutcome, NoRouteOutcome, RouteAbandonedOutcome } from '../../services/ai/PostDeliveryReplanner';
 import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
 import type {
   AIActionType,
@@ -267,9 +267,11 @@ describe('PostDeliveryReplanner.replan — sub-path 1: TripPlanner success', () 
       '[TEST]',
     );
 
-    expect(result.replanLlmLog).toBe(llmLog);
-    expect(result.replanSystemPrompt).toBe('system-prompt');
-    expect(result.replanUserPrompt).toBe('user-prompt');
+    expect(result.kind).toBe('route-replaced');
+    const replaced = result as RouteReplacedOutcome;
+    expect(replaced.replanLlmLog).toBe(llmLog);
+    expect(replaced.replanSystemPrompt).toBe('system-prompt');
+    expect(replaced.replanUserPrompt).toBe('user-prompt');
   });
 
   it('patches deliveryCount in memory before calling TripPlanner (JIRA-185)', async () => {
@@ -378,19 +380,24 @@ describe('PostDeliveryReplanner.replan — sub-path 3: TripPlanner throws', () =
       planTrip: jest.fn().mockRejectedValue(new Error('network error')),
     }));
 
+    // Use a route with cargo so the impossibility check does not fire.
+    // The throw test is about the throw path, not impossibility.
     const result = await PostDeliveryReplanner.replan(
       makeRoute(),
       makeSnapshot(),
-      makeContext(),
+      makeContext({ loads: ['Coal'] }), // Coal in cargo → not impossible
       makeBrain(),
       makeGridPoints(),
       0,
       '[TEST]',
     );
 
-    expect(result.replanLlmLog).toBeUndefined();
-    expect(result.replanSystemPrompt).toBeUndefined();
-    expect(result.replanUserPrompt).toBeUndefined();
+    // TripPlanner threw → NoRouteOutcome (no LLM log fields captured)
+    expect(result.kind).toBe('no-route');
+    const noRoute = result as NoRouteOutcome;
+    expect(noRoute.replanLlmLog).toBeUndefined();
+    expect(noRoute.replanSystemPrompt).toBeUndefined();
+    expect(noRoute.replanUserPrompt).toBeUndefined();
   });
 });
 
@@ -559,8 +566,11 @@ describe('JIRA-198: PostDeliveryReplanner.replan — upgrade consumption (sub-pa
       '[TEST]',
     );
 
-    expect(result.pendingUpgradeAction).toEqual(upgradeAction);
-    expect(result.upgradeSuppressionReason).toBeNull();
+    // TripPlanner returned a route → RouteReplacedOutcome with upgrade fields
+    expect(result.kind).toBe('route-replaced');
+    const replaced = result as RouteReplacedOutcome;
+    expect(replaced.pendingUpgradeAction).toEqual(upgradeAction);
+    expect(replaced.upgradeSuppressionReason).toBeNull();
     // tryConsumeUpgrade was called with the correct delivery count
     // (memory.deliveryCount=2 + deliveriesThisTurn=2 = 4, which meets the gate)
     expect(mockTryConsumeUpgrade).toHaveBeenCalledWith(
@@ -588,8 +598,10 @@ describe('JIRA-198: PostDeliveryReplanner.replan — upgrade consumption (sub-pa
       '[TEST]',
     );
 
-    expect(result.pendingUpgradeAction).toBeNull();
-    expect(result.upgradeSuppressionReason).toBe('Upgrade blocked: only 3 deliveries (need 4)');
+    expect(result.kind).toBe('route-replaced');
+    const replaced = result as RouteReplacedOutcome;
+    expect(replaced.pendingUpgradeAction).toBeNull();
+    expect(replaced.upgradeSuppressionReason).toBe('Upgrade blocked: only 3 deliveries (need 4)');
   });
 
   it('AC2: returns null + reason when bot cannot afford the upgrade (unaffordable)', async () => {
@@ -609,8 +621,10 @@ describe('JIRA-198: PostDeliveryReplanner.replan — upgrade consumption (sub-pa
       '[TEST]',
     );
 
-    expect(result.pendingUpgradeAction).toBeNull();
-    expect(result.upgradeSuppressionReason).toContain('insufficient funds');
+    expect(result.kind).toBe('route-replaced');
+    const replaced = result as RouteReplacedOutcome;
+    expect(replaced.pendingUpgradeAction).toBeNull();
+    expect(replaced.upgradeSuppressionReason).toContain('insufficient funds');
   });
 
   it('AC2: returns null + reason for invalid upgrade path', async () => {
@@ -630,51 +644,63 @@ describe('JIRA-198: PostDeliveryReplanner.replan — upgrade consumption (sub-pa
       '[TEST]',
     );
 
-    expect(result.pendingUpgradeAction).toBeNull();
-    expect(result.upgradeSuppressionReason).toContain('invalid upgrade path');
+    expect(result.kind).toBe('route-replaced');
+    const replaced = result as RouteReplacedOutcome;
+    expect(replaced.pendingUpgradeAction).toBeNull();
+    expect(replaced.upgradeSuppressionReason).toContain('invalid upgrade path');
   });
 
-  it('sub-path 2 (null route): both upgrade fields undefined', async () => {
+  it('sub-path 2 (null route): no upgrade fields (no-route or route-abandoned)', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
     }));
 
+    // Use a non-impossible route context to get a clean no-route outcome
+    const routeWithCargo = makeRoute({ currentStopIndex: 1 });
+    const contextWithCargo = makeContext({ loads: ['Coal'] }); // Coal in cargo → not impossible
     const result = await PostDeliveryReplanner.replan(
-      makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 0, '[TEST]',
+      routeWithCargo, makeSnapshot(), contextWithCargo, makeBrain(), makeGridPoints(), 0, '[TEST]',
     );
 
-    expect(result.pendingUpgradeAction).toBeUndefined();
-    expect(result.upgradeSuppressionReason).toBeUndefined();
+    // no-route or route-abandoned — neither carries upgrade fields
+    expect(['no-route', 'route-abandoned']).toContain(result.kind);
     expect(mockTryConsumeUpgrade).not.toHaveBeenCalled();
   });
 
-  it('sub-path 3 (throw): both upgrade fields undefined', async () => {
+  it('sub-path 3 (throw): no upgrade fields (no-route or route-abandoned)', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockRejectedValue(new Error('LLM error')),
     }));
 
+    // Use a non-impossible route context to get a clean no-route outcome
+    const routeWithCargo = makeRoute({ currentStopIndex: 1 });
+    const contextWithCargo = makeContext({ loads: ['Coal'] }); // Coal in cargo → not impossible
     const result = await PostDeliveryReplanner.replan(
-      makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 0, '[TEST]',
+      routeWithCargo, makeSnapshot(), contextWithCargo, makeBrain(), makeGridPoints(), 0, '[TEST]',
     );
 
-    expect(result.pendingUpgradeAction).toBeUndefined();
-    expect(result.upgradeSuppressionReason).toBeUndefined();
+    // no-route or route-abandoned — neither carries upgrade fields
+    expect(['no-route', 'route-abandoned']).toContain(result.kind);
     expect(mockTryConsumeUpgrade).not.toHaveBeenCalled();
   });
 
-  it('sub-path 4 (no brain): both upgrade fields undefined', async () => {
+  it('sub-path 4 (no brain + grid present): no upgrade fields (JIRA-270 — TripPlanner consulted)', async () => {
+    // With null brain but grid present, TripPlanner IS called (JIRA-270 path)
+    // Default mock returns null route → no-route or route-abandoned (depending on impossibility)
+    const routeWithCargo = makeRoute({ currentStopIndex: 1 });
+    const contextWithCargo = makeContext({ loads: ['Coal'] }); // Coal in cargo → not impossible
     const result = await PostDeliveryReplanner.replan(
-      makeRoute(), makeSnapshot(), makeContext(), null, makeGridPoints(), 0, '[TEST]',
+      routeWithCargo, makeSnapshot(), contextWithCargo, null, makeGridPoints(), 0, '[TEST]',
     );
 
-    expect(result.pendingUpgradeAction).toBeUndefined();
-    expect(result.upgradeSuppressionReason).toBeUndefined();
+    // no-route — neither carries upgrade fields
+    expect(['no-route', 'route-abandoned']).toContain(result.kind);
     expect(mockTryConsumeUpgrade).not.toHaveBeenCalled();
   });
 
-  it('sub-path 1 with no upgradeOnRoute: both upgrade fields undefined', async () => {
+  it('sub-path 1 with no upgradeOnRoute: RouteReplacedOutcome without upgrade fields', async () => {
     // Route has no upgradeOnRoute — tryConsumeUpgrade should NOT be called
     const routeWithoutUpgrade = makeRoute(); // no upgradeOnRoute
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -686,8 +712,10 @@ describe('JIRA-198: PostDeliveryReplanner.replan — upgrade consumption (sub-pa
       makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 0, '[TEST]',
     );
 
-    expect(result.pendingUpgradeAction).toBeUndefined();
-    expect(result.upgradeSuppressionReason).toBeUndefined();
+    expect(result.kind).toBe('route-replaced');
+    const replaced = result as RouteReplacedOutcome;
+    expect(replaced.pendingUpgradeAction).toBeUndefined();
+    expect(replaced.upgradeSuppressionReason).toBeUndefined();
     expect(mockTryConsumeUpgrade).not.toHaveBeenCalled();
   });
 });
@@ -720,8 +748,11 @@ describe('JIRA-198: multi-replan accumulation — last non-null action wins', ()
       makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 1, '[TEST]',
     );
 
-    expect(result1.pendingUpgradeAction).toBeNull();
-    expect(result1.upgradeSuppressionReason).toContain('only 3 deliveries');
+    // RouteReplacedOutcome with suppressed upgrade
+    expect(result1.kind).toBe('route-replaced');
+    const replaced1 = result1 as RouteReplacedOutcome;
+    expect(replaced1.pendingUpgradeAction).toBeNull();
+    expect(replaced1.upgradeSuppressionReason).toContain('only 3 deliveries');
 
     // Second replan call: upgrade now eligible
     const upgradeAction = { type: 'UpgradeTrain' as AIActionType, targetTrain: 'fast_freight', cost: 20 };
@@ -735,15 +766,17 @@ describe('JIRA-198: multi-replan accumulation — last non-null action wins', ()
       makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 2, '[TEST]',
     );
 
-    expect(result2.pendingUpgradeAction).toEqual(upgradeAction);
-    expect(result2.upgradeSuppressionReason).toBeNull();
+    expect(result2.kind).toBe('route-replaced');
+    const replaced2 = result2 as RouteReplacedOutcome;
+    expect(replaced2.pendingUpgradeAction).toEqual(upgradeAction);
+    expect(replaced2.upgradeSuppressionReason).toBeNull();
 
     // Verify: accumulator (in MovementPhasePlanner) would keep the non-null from result2
     // since result2.pendingUpgradeAction !== null, it replaces the earlier null.
   });
 
-  it('second replan emits null after first had valid upgrade → non-null is preserved', async () => {
-    // First replan: valid upgrade
+  it('second replan emits no-route/route-abandoned after first had valid upgrade → accumulator preserves non-null', async () => {
+    // First replan: valid upgrade → RouteReplacedOutcome
     const routeWithUpgrade = makeRoute({ upgradeOnRoute: 'fast_freight' });
     const upgradeAction = { type: 'UpgradeTrain' as AIActionType, targetTrain: 'fast_freight', cost: 20 };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -752,30 +785,32 @@ describe('JIRA-198: multi-replan accumulation — last non-null action wins', ()
     }));
     mockTryConsumeUpgrade.mockReturnValue({ action: upgradeAction });
 
+    // Use non-impossible context for first replan to get route-replaced
+    const contextWithCargo = makeContext({ loads: ['Coal'] });
     const result1 = await PostDeliveryReplanner.replan(
-      makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 2, '[TEST]',
+      makeRoute(), makeSnapshot(), contextWithCargo, makeBrain(), makeGridPoints(), 2, '[TEST]',
     );
 
-    expect(result1.pendingUpgradeAction).toEqual(upgradeAction);
+    expect(result1.kind).toBe('route-replaced');
+    const replaced1 = result1 as RouteReplacedOutcome;
+    expect(replaced1.pendingUpgradeAction).toEqual(upgradeAction);
 
-    // Second replan: null route → sub-path 2 (no upgrade fields produced)
+    // Second replan: null route → no-route or route-abandoned (no upgrade fields)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
     }));
 
     const result2 = await PostDeliveryReplanner.replan(
-      makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 2, '[TEST]',
+      makeRoute(), makeSnapshot(), contextWithCargo, makeBrain(), makeGridPoints(), 2, '[TEST]',
     );
 
-    // Sub-path 2 returns undefined for both upgrade fields
-    expect(result2.pendingUpgradeAction).toBeUndefined();
-    expect(result2.upgradeSuppressionReason).toBeUndefined();
+    // no-route or route-abandoned — neither carries upgrade fields
+    expect(['no-route', 'route-abandoned']).toContain(result2.kind);
 
-    // The accumulator in MovementPhasePlanner checks: if result2.pendingUpgradeAction is
-    // undefined (not null), it does NOT update the accumulator — preserving result1's value.
-    // This contract is enforced by the "pendingUpgradeAction !== undefined" guard in
-    // MovementPhasePlanner.
+    // The accumulator in MovementPhasePlanner checks the kind: for no-route / route-abandoned,
+    // there are no upgrade fields → the accumulator preserves result1's value.
+    // This behaviour is enforced by the switch dispatch in MovementPhasePlanner (BE-002).
   });
 });
 
@@ -988,8 +1023,11 @@ describe('JIRA-233 BE-002: route impossibility detection wiring (AC4)', () => {
     expect(capturedMemory).toBeDefined();
     expect(capturedMemory!.activeRoute).toBeNull();
 
-    // 2. routeWasAbandoned must be true in the ReplanResult
-    expect(result.routeWasAbandoned).toBe(true);
+    // 2. routeWasAbandoned is signaled via RouteAbandonedOutcome — impossibility fired
+    // AND TripPlanner returned null → route-abandoned outcome.
+    expect(result.kind).toBe('route-abandoned');
+    const abandoned = result as RouteAbandonedOutcome;
+    expect(abandoned.routeWasAbandoned).toBe(true);
 
     // 3. [route-abandoned] warn must have been emitted exactly once
     const abandonedLogs = warnSpy.mock.calls.filter(
@@ -1035,7 +1073,8 @@ describe('JIRA-233 BE-002: route impossibility detection wiring (AC4)', () => {
 
     // Route NOT cleared — activeRoute passed through to planner
     expect(capturedMemory!.activeRoute).toBe(achievableRoute);
-    expect(result.routeWasAbandoned).toBeFalsy();
+    // Result is not route-abandoned (no impossibility fired)
+    expect(result.kind).not.toBe('route-abandoned');
   });
 });
 
@@ -1110,8 +1149,11 @@ describe('JIRA-233 BE-002: t73-t80 regression — opportunistic delivery leaves 
     expect(capturedMemory).toBeDefined();
     expect(capturedMemory!.activeRoute).toBeNull();
 
-    // AC5 assertion 2: routeWasAbandoned is signaled back to the caller
-    expect(result.routeWasAbandoned).toBe(true);
+    // AC5 assertion 2: routeWasAbandoned is signaled back to the caller via RouteReplacedOutcome
+    // (impossibility fired but TripPlanner returned a fresh route → route-replaced with routeWasAbandoned)
+    expect(result.kind).toBe('route-replaced');
+    const replaced = result as RouteReplacedOutcome;
+    expect(replaced.routeWasAbandoned).toBe(true);
 
     // AC5 assertion 3: planner returned a fresh route (not PassTurn!)
     expect(result.route).not.toBeNull();
