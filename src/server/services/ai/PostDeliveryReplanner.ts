@@ -146,9 +146,12 @@ export class PostDeliveryReplanner {
     deliveriesThisTurn: number,
     tag: string,
   ): Promise<ReplanResult> {
-    // Sub-path 4: No brain available — revalidate existing route.
-    // Also check for impossibility even in the no-brain path (JIRA-233).
-    if (!brain || !gridPoints || gridPoints.length === 0) {
+    // Sub-path 4: gridPoints unavailable — cannot plan, revalidate existing route.
+    // JIRA-270: brain may be null (Medium-skill bot); TripPlanner.planTrip
+    // dispatches Medium deterministically per JIRA-269, so brain presence is
+    // not a precondition for planning. Only an empty grid blocks the replan.
+    // Impossibility check is preserved in this branch (JIRA-233).
+    if (!gridPoints || gridPoints.length === 0) {
       const revalidated = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
       const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);
       if (skipped.currentStopIndex < skipped.stops.length && isRouteImpossible(skipped, context)) {
@@ -163,7 +166,7 @@ export class PostDeliveryReplanner {
       return { route: skipped, moveTargetInvalidated: true };
     }
 
-    // Sub-paths 1–3: brain is available.
+    // Sub-paths 1–3: planner path (brain may be null; TripPlanner handles skill dispatch).
     // JIRA-233: Compute impossibility check OUTSIDE the try block so routeWasAbandoned
     // is accessible from both the try body and the catch handler.
     let postDeliveryRoute: StrategicRoute | null = activeRoute.currentStopIndex < activeRoute.stops.length
@@ -188,7 +191,7 @@ export class PostDeliveryReplanner {
 
     try {
       const memory = await getMemory(snapshot.gameId, snapshot.bot.playerId);
-      const tripPlanner = new TripPlanner(brain);
+      const tripPlanner = new TripPlanner(brain ?? null);
 
       const replanMemory: BotMemoryState = {
         ...memory,
