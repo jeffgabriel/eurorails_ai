@@ -218,7 +218,11 @@ export type FinalVictoryOutcomeSkipReason =
   | 'no_demands'
   | 'victory_met'
   | 'no_feasible_demands'
-  | 'no_route_covers_gap';
+  | 'no_route_covers_gap'
+  // JIRA-273: emitted by AIStrategyEngine when the override's route fails
+  // validateRouteCarryPreconditions against snapshot.bot.loads. The override
+  // had a fire candidate but its carry assumptions didn't match actual cargo.
+  | 'carry_precondition_fail';
 
 export type FinalVictoryOutcome =
   | { outcome: 'fire'; route: FinalVictoryRoute; cashGap: number; majorsGap: number; connectorCost: number }
@@ -657,6 +661,51 @@ export function findFinalVictoryOutcome(
     reasoning,
   };
   return { outcome: 'fire', route, cashGap, majorsGap, connectorCost };
+}
+
+/**
+ * JIRA-273: Verify that every `deliver` stop in `route.stops` is satisfiable
+ * given the bot's actual cargo. A deliver is satisfiable when (a) a preceding
+ * `pickup` for the same loadType exists in the route, or (b) the loadType has
+ * a remaining slot in `cargoLoads`. Multiplicity-aware: two delivers of the
+ * same loadType require two carries (across cargo + pickups), not just one.
+ *
+ * Used at the override-application site in AIStrategyEngine to reject victory
+ * routes whose carry preconditions don't match snapshot.bot.loads — preventing
+ * the c73cccf8-style stuck-route-abandon loop where the override repeatedly
+ * commits the bot to a deliver-only route for loads it never carries.
+ */
+export function validateRouteCarryPreconditions(
+  route: StrategicRoute,
+  cargoLoads: string[],
+): { ok: true } | { ok: false; reason: string } {
+  // Initial available "slots" per loadType from cargo, then grow via pickups.
+  const available = new Map<string, number>();
+  for (const load of cargoLoads) {
+    available.set(load, (available.get(load) ?? 0) + 1);
+  }
+  for (let i = 0; i < route.stops.length; i++) {
+    const stop = route.stops[i];
+    if (stop.action === 'pickup') {
+      available.set(stop.loadType, (available.get(stop.loadType) ?? 0) + 1);
+    } else if (stop.action === 'deliver') {
+      const count = available.get(stop.loadType) ?? 0;
+      if (count <= 0) {
+        return {
+          ok: false,
+          reason:
+            `deliver ${stop.loadType}@${stop.city} at stop ${i} requires carry, ` +
+            `but no prior pickup and no remaining cargo slot ` +
+            `(cargoLoads=[${cargoLoads.join(',')}])`,
+        };
+      }
+      available.set(stop.loadType, count - 1);
+    }
+    // 'drop' actions release the load but do not affect deliver feasibility
+    // for this validator's purpose; future delivers of the same loadType
+    // would still need another pickup/cargo slot.
+  }
+  return { ok: true };
 }
 
 /**
