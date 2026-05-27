@@ -394,40 +394,12 @@ describe('PostDeliveryReplanner.replan — sub-path 3: TripPlanner throws', () =
   });
 });
 
-// ── Sub-path 4: No brain available ────────────────────────────────────────
+// ── Sub-path 4: gridPoints unavailable ────────────────────────────────────
+// JIRA-270: brain-null no longer skips the planner. TripPlanner.planTrip
+// dispatches Medium deterministically per JIRA-269, so brain presence is
+// not a precondition for planning. Only an empty/missing grid blocks replan.
 
-describe('PostDeliveryReplanner.replan — sub-path 4: no brain or no gridPoints', () => {
-  it('returns moveTargetInvalidated=true when brain is null', async () => {
-    const result = await PostDeliveryReplanner.replan(
-      makeRoute(),
-      makeSnapshot(),
-      makeContext(),
-      null, // no brain
-      makeGridPoints(),
-      0,
-      '[TEST]',
-    );
-
-    expect(result.moveTargetInvalidated).toBe(true);
-    expect(MockTripPlannerClass).not.toHaveBeenCalled();
-    expect(mockRevalidate).toHaveBeenCalledTimes(1);
-  });
-
-  it('returns moveTargetInvalidated=true when brain is undefined', async () => {
-    const result = await PostDeliveryReplanner.replan(
-      makeRoute(),
-      makeSnapshot(),
-      makeContext(),
-      undefined,
-      makeGridPoints(),
-      0,
-      '[TEST]',
-    );
-
-    expect(result.moveTargetInvalidated).toBe(true);
-    expect(MockTripPlannerClass).not.toHaveBeenCalled();
-  });
-
+describe('PostDeliveryReplanner.replan — sub-path 4: gridPoints unavailable', () => {
   it('returns moveTargetInvalidated=true when gridPoints is empty', async () => {
     const result = await PostDeliveryReplanner.replan(
       makeRoute(),
@@ -459,19 +431,57 @@ describe('PostDeliveryReplanner.replan — sub-path 4: no brain or no gridPoints
     expect(MockTripPlannerClass).not.toHaveBeenCalled();
   });
 
-  it('handles null brain gracefully (revalidation path)', async () => {
+  it('returns moveTargetInvalidated=true when brain is null AND gridPoints empty', async () => {
     const result = await PostDeliveryReplanner.replan(
       makeRoute(),
       makeSnapshot(),
       makeContext(),
       null,
+      [], // both conditions for the bail
+      0,
+      '[TEST]',
+    );
+
+    expect(result.moveTargetInvalidated).toBe(true);
+    expect(MockTripPlannerClass).not.toHaveBeenCalled();
+  });
+});
+
+// ── JIRA-270: Null-brain bots still replan via TripPlanner ─────────────────
+// Medium-skill bots (and any future deterministic skill) have null brain but
+// must still consult TripPlanner after every delivery. TripPlanner's internal
+// Medium dispatch (JIRA-269) handles the deterministic path.
+
+describe('PostDeliveryReplanner.replan — JIRA-270: null brain consults TripPlanner', () => {
+  it('calls TripPlanner when brain is null and gridPoints are present', async () => {
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(),
+      makeSnapshot(),
+      makeContext(),
+      null, // Medium-skill bot
       makeGridPoints(),
       0,
       '[TEST]',
     );
 
-    // Without brain, falls back to revalidation path
-    expect(result).toBeDefined();
+    // TripPlanner IS consulted — JIRA-269 made it nullable-brain-safe.
+    expect(MockTripPlannerClass).toHaveBeenCalledTimes(1);
+    expect(result.moveTargetInvalidated).toBe(true);
+  });
+
+  it('calls TripPlanner when brain is undefined and gridPoints are present', async () => {
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(),
+      makeSnapshot(),
+      makeContext(),
+      undefined,
+      makeGridPoints(),
+      0,
+      '[TEST]',
+    );
+
+    expect(MockTripPlannerClass).toHaveBeenCalledTimes(1);
+    expect(result.moveTargetInvalidated).toBe(true);
   });
 });
 
