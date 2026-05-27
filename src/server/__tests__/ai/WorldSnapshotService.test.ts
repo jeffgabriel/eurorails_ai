@@ -76,6 +76,13 @@ describe('WorldSnapshotService.capture — ferryHalfSpeed', () => {
 
   afterEach(() => jest.clearAllMocks());
 
+  beforeEach(() => {
+    // ActiveEffectManager.getActiveEffects (added by JIRA-256) makes a second
+    // db.query for `active_event_effects`. Default to empty rows so per-test
+    // mockResolvedValueOnce for the bot row is consumed first.
+    mockQuery.mockResolvedValue({ rows: [] });
+  });
+
   it('should set ferryHalfSpeed=true when bot is at a FerryPort (JIRA-108)', async () => {
     const botRow = makeBotRow(10, 20);
     mockQuery.mockResolvedValueOnce({ rows: [botRow] });
