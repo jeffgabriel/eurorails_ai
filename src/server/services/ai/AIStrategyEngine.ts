@@ -398,44 +398,48 @@ export class AIStrategyEngine {
         // ── Auto-execute from active route (delegated to ActiveRouteContinuer) ──
         const partial = await ActiveRouteContinuer.run(activeRoute, snapshot, context, brain, gridPoints, tag, memory);
         ({ decision, activeRoute, routeWasCompleted, routeWasAbandoned, hasDelivery, execCompositionTrace, pendingUpgradeAction, upgradeSuppressionReason } = partial);
-      } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
-        // ── No active route, LLM available — delegated to NewRoutePlanner (JIRA-195b sub-slice D) ──
-        // NewRoutePlanner owns sub-stages D1-D7 + E. Returns the full Stage3Result
-        // including reassigned snapshot and context (the JIRA-170 boundary becomes
-        // explicit in the type system) plus autoDeliveredLoads and tripPlanResult
+      } else {
+        // ── No active route — delegated to NewRoutePlanner (JIRA-195b sub-slice D / JIRA-269) ──
+        // NewRoutePlanner owns sub-stages D1-D7 + E and all LLM-vs-deterministic dispatch (ADR-1).
+        // brain may be null — NewRoutePlanner handles the no-api-key case internally.
+        // Returns the full Stage3Result including reassigned snapshot and context (the JIRA-170
+        // boundary becomes explicit in the type system) plus autoDeliveredLoads and tripPlanResult
         // for downstream game/LLM logging.
         const stage3Partial = await NewRoutePlanner.run(
-          snapshot, context, brain!, gridPoints, memory, tag,
+          snapshot, context, brain, gridPoints, memory, tag,
           gameId, botPlayerId, skillLevel,
         );
-        ({
-          decision, activeRoute, routeWasCompleted, routeWasAbandoned, hasDelivery,
-          secondaryDeliveryLog, pendingUpgradeAction, upgradeSuppressionReason,
-          execCompositionTrace,
-        } = stage3Partial);
-        snapshot = stage3Partial.snapshot;
-        context = stage3Partial.context;
-        if (stage3Partial.deadLoadDropActions.length > 0) {
-          deadLoadDropActions.push(...stage3Partial.deadLoadDropActions);
+
+        if (stage3Partial.cannotPlan) {
+          // ADR-2: cannotPlan is a typed discriminator — emit PassTurn with preserved reasoning.
+          console.error(`${tag} [LLM] No API key configured — passing turn`);
+          decision = {
+            plan: { type: AIActionType.PassTurn },
+            reasoning: '[no-api-key] No LLM API key configured — passing turn',
+            planHorizon: 'Immediate',
+            model: 'no-api-key',
+            latencyMs: 0,
+            retried: false,
+            userPrompt: '[No API key] Passing turn — no LLM provider configured',
+          };
+        } else {
+          ({
+            decision, activeRoute, routeWasCompleted, routeWasAbandoned, hasDelivery,
+            secondaryDeliveryLog, pendingUpgradeAction, upgradeSuppressionReason,
+            execCompositionTrace,
+          } = stage3Partial);
+          snapshot = stage3Partial.snapshot;
+          context = stage3Partial.context;
+          if (stage3Partial.deadLoadDropActions.length > 0) {
+            deadLoadDropActions.push(...stage3Partial.deadLoadDropActions);
+          }
+          if (stage3Partial.autoDeliveredLoads.length > 0) {
+            autoDeliveredLoads.push(...stage3Partial.autoDeliveredLoads);
+          }
+          if (stage3Partial.tripPlanResult) {
+            tripPlanResult = stage3Partial.tripPlanResult;
+          }
         }
-        if (stage3Partial.autoDeliveredLoads.length > 0) {
-          autoDeliveredLoads.push(...stage3Partial.autoDeliveredLoads);
-        }
-        if (stage3Partial.tripPlanResult) {
-          tripPlanResult = stage3Partial.tripPlanResult;
-        }
-      } else {
-        // No LLM key — pass turn with debug logging
-        console.error(`${tag} [LLM] No API key configured — passing turn`);
-        decision = {
-          plan: { type: AIActionType.PassTurn },
-          reasoning: '[no-api-key] No LLM API key configured — passing turn',
-          planHorizon: 'Immediate',
-          model: 'no-api-key',
-          latencyMs: 0,
-          retried: false,
-          userPrompt: '[No API key] Passing turn — no LLM provider configured',
-        };
       }
 
       // ── JIRA-195b sub-slice A: Assemble Stage3Result from four-branch locals ──

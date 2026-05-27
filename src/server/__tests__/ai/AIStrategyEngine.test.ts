@@ -529,10 +529,16 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
   });
 
   describe('successful turn — PassTurn (no API key)', () => {
-    it('should pass turn directly when no LLM API key is available', async () => {
+    it('should pass turn directly when no LLM API key is available for an LLM skill level', async () => {
+      // Remove ALL credential paths so hasLLMApiKey returns false for anthropic provider
+      const savedUseClaudeCode = process.env.ANTHROPIC_USE_CLAUDE_CODE;
       delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.ANTHROPIC_USE_CLAUDE_CODE;
 
-      const snapshot = makeSnapshot({ botConfig: null } as any);
+      // Use Easy skill — requires LLM, has no key → NewRoutePlanner returns cannotPlan
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: BotSkillLevel.Easy, provider: 'anthropic' } as any,
+      });
       const context = makeContext();
 
       mockCapture.mockResolvedValue(snapshot);
@@ -540,7 +546,10 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // Without API key, should PassTurn directly (no heuristic fallback)
+      // Restore env
+      if (savedUseClaudeCode !== undefined) process.env.ANTHROPIC_USE_CLAUDE_CODE = savedUseClaudeCode;
+
+      // Without API key for LLM skill, should PassTurn via cannotPlan path
       expect(result.action).toBe(AIActionType.PassTurn);
       expect(result.reasoning).toContain('no-api-key');
 
@@ -1992,13 +2001,16 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(result.retried).toBe(false);
     });
 
-    it('should set model="no-api-key" when no LLM API key configured', async () => {
+    it('should set model="no-api-key" when no LLM API key configured for LLM skill level', async () => {
+      // Remove ALL credential paths so hasLLMApiKey returns false for anthropic provider
+      const savedUseClaudeCode = process.env.ANTHROPIC_USE_CLAUDE_CODE;
       delete process.env.ANTHROPIC_API_KEY;
       delete process.env.GOOGLE_AI_API_KEY;
+      delete process.env.ANTHROPIC_USE_CLAUDE_CODE;
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        
+
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -2011,12 +2023,18 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         consecutiveLlmFailures: 0,
       });
 
-      const snapshot = makeSnapshot({ botConfig: null } as any);
+      // Use Easy skill — requires LLM, has no key → cannotPlan → model='no-api-key'
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: BotSkillLevel.Easy, provider: 'anthropic' } as any,
+      });
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Restore env
+      if (savedUseClaudeCode !== undefined) process.env.ANTHROPIC_USE_CLAUDE_CODE = savedUseClaudeCode;
 
       expect(result.model).toBe('no-api-key');
       expect(result.llmLatencyMs).toBe(0);
@@ -2542,13 +2560,16 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
     });
 
-    it('should have no llmLog when no API key configured', async () => {
+    it('should have no llmLog when no API key configured for LLM skill level', async () => {
+      // Remove ALL credential paths so hasLLMApiKey returns false for anthropic provider
+      const savedUseClaudeCode = process.env.ANTHROPIC_USE_CLAUDE_CODE;
       delete process.env.ANTHROPIC_API_KEY;
       delete process.env.GOOGLE_AI_API_KEY;
+      delete process.env.ANTHROPIC_USE_CLAUDE_CODE;
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        
+
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -2561,12 +2582,18 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         consecutiveLlmFailures: 0,
       });
 
-      const snapshot = makeSnapshot({ botConfig: null } as any);
+      // Use Easy skill — requires LLM, has no key → cannotPlan → no llmLog
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: BotSkillLevel.Easy, provider: 'anthropic' } as any,
+      });
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Restore env
+      if (savedUseClaudeCode !== undefined) process.env.ANTHROPIC_USE_CLAUDE_CODE = savedUseClaudeCode;
 
       expect(result.llmLog).toBeUndefined();
     });
