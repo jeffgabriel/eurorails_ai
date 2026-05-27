@@ -19,6 +19,7 @@ import {
   findFinalVictoryOutcome,
   buildEndGameTrace,
   buildEffectiveCarrySet,
+  validateRouteCarryPreconditions,
   type FinalVictoryOutcome,
 } from '../../services/ai/victoryRules';
 import { GameState, GameContext, TrainType, WorldSnapshot } from '../../../shared/types/GameTypes';
@@ -1102,5 +1103,99 @@ describe('findFinalVictoryOutcome — JIRA-267 distance-aware + multiplicity-awa
     if (result.outcome === 'fire') {
       expect(result.route.estimatedTurns).toBeGreaterThanOrEqual(2);
     }
+  });
+});
+
+// ── JIRA-273: validateRouteCarryPreconditions ─────────────────────────────
+
+describe('validateRouteCarryPreconditions (JIRA-273)', () => {
+  function makeRoute(stops: Array<{ action: 'pickup' | 'deliver' | 'drop'; loadType: string; city: string }>) {
+    return {
+      stops,
+      currentStopIndex: 0,
+      phase: 'travel' as const,
+      createdAtTurn: 0,
+    };
+  }
+
+  it('pickup+deliver with empty cargo → ok', () => {
+    const r = makeRoute([
+      { action: 'pickup', loadType: 'Imports', city: 'Hamburg' },
+      { action: 'deliver', loadType: 'Imports', city: 'Budapest' },
+    ]);
+    expect(validateRouteCarryPreconditions(r, [])).toEqual({ ok: true });
+  });
+
+  it('deliver-only with matching cargo → ok', () => {
+    const r = makeRoute([{ action: 'deliver', loadType: 'Imports', city: 'Budapest' }]);
+    expect(validateRouteCarryPreconditions(r, ['Imports'])).toEqual({ ok: true });
+  });
+
+  it('deliver-only with empty cargo → reject', () => {
+    const r = makeRoute([{ action: 'deliver', loadType: 'Imports', city: 'Budapest' }]);
+    const result = validateRouteCarryPreconditions(r, []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain('deliver Imports@Budapest');
+      expect(result.reason).toContain('stop 0');
+    }
+  });
+
+  it('two delivers of same loadType, only one in cargo → reject second', () => {
+    const r = makeRoute([
+      { action: 'deliver', loadType: 'Imports', city: 'Budapest' },
+      { action: 'deliver', loadType: 'Imports', city: 'Wien' },
+    ]);
+    const result = validateRouteCarryPreconditions(r, ['Imports']);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain('stop 1');
+    }
+  });
+
+  it('mixed route: pickup A + deliver A + deliver B with B in cargo → ok', () => {
+    const r = makeRoute([
+      { action: 'pickup', loadType: 'Imports', city: 'Hamburg' },
+      { action: 'deliver', loadType: 'Imports', city: 'Budapest' },
+      { action: 'deliver', loadType: 'Sheep', city: 'Wroclaw' },
+    ]);
+    expect(validateRouteCarryPreconditions(r, ['Sheep'])).toEqual({ ok: true });
+  });
+
+  it('empty route → ok', () => {
+    expect(validateRouteCarryPreconditions(makeRoute([]), [])).toEqual({ ok: true });
+  });
+
+  it('multiplicity: two pickups + two delivers of same loadType, empty cargo → ok', () => {
+    const r = makeRoute([
+      { action: 'pickup', loadType: 'Imports', city: 'Hamburg' },
+      { action: 'pickup', loadType: 'Imports', city: 'Antwerpen' },
+      { action: 'deliver', loadType: 'Imports', city: 'Budapest' },
+      { action: 'deliver', loadType: 'Imports', city: 'Wien' },
+    ]);
+    expect(validateRouteCarryPreconditions(r, [])).toEqual({ ok: true });
+  });
+
+  it('JIRA-273 reproduction: c73cccf8 T244 shape — deliver Imports + deliver Sheep with cargo=[Oil] → reject', () => {
+    const r = makeRoute([
+      { action: 'deliver', loadType: 'Imports', city: 'Budapest' },
+      { action: 'deliver', loadType: 'Sheep', city: 'Wroclaw' },
+    ]);
+    const result = validateRouteCarryPreconditions(r, ['Oil']);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain('Imports');
+      expect(result.reason).toContain('Oil'); // cargoLoads is mentioned in the reason
+    }
+  });
+
+  it('drop action does not consume a slot for later delivers', () => {
+    // Drop is intentionally a no-op for the validator — present for completeness.
+    const r = makeRoute([
+      { action: 'pickup', loadType: 'Imports', city: 'Hamburg' },
+      { action: 'drop', loadType: 'Imports', city: 'Berlin' },
+      // After drop, no Imports remaining — a later deliver would fail.
+    ]);
+    expect(validateRouteCarryPreconditions(r, [])).toEqual({ ok: true });
   });
 });

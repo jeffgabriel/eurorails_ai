@@ -65,6 +65,7 @@ import {
   findFinalVictoryRoute,
   findFinalVictoryOutcome,
   buildEndGameTrace,
+  validateRouteCarryPreconditions,
   type EndGameTrace,
   type FinalVictoryOutcome,
 } from './victoryRules';
@@ -315,17 +316,39 @@ export class AIStrategyEngine {
       if (!context.isInitialBuild) {
         finalVictoryOutcome = findFinalVictoryOutcome(snapshot, context, memory);
         if (finalVictoryOutcome.outcome === 'fire') {
-          // JIRA-261: Idempotency check compares the full remaining-stops
-          // sequence, not just the first stop. The earlier first-stop-only check
-          // suppressed override at game 8350cffa s3 T68 onwards: an existing
-          // 4-stop deterministic route shared its first stop (`pickup Ham@Warszawa`)
-          // with the victory route, so the override never fired — even though
-          // the victory route diverged at stop 3 to add the critical
-          // `pickup Oranges@Sevilla → deliver Oranges@London` leg that would
-          // have connected the 4th-of-7 major and clinched the game. With the
-          // full-sequence comparison, that divergence (and the missing London
-          // leg in the existing route) now correctly triggers the override.
-          if (!AIStrategyEngine.routesMatch(activeRoute, finalVictoryOutcome.route.stops)) {
+          // JIRA-273: Validate the route's carry preconditions against the
+          // bot's actual cargo before applying. Catches cases where the
+          // override emits deliver-only stops for loads not on the train,
+          // which would otherwise loop forever (arrive → JIRA-249 guard fires
+          // → stuck-route-abandon → override re-fires same invalid route).
+          const carryCheck = validateRouteCarryPreconditions(
+            { ...finalVictoryOutcome.route, currentStopIndex: 0, phase: 'travel', createdAtTurn: snapshot.turnNumber },
+            snapshot.bot.loads,
+          );
+          if (!carryCheck.ok) {
+            console.warn(
+              `${tag} [final-victory-rejected] ${carryCheck.reason}`,
+            );
+            // Treat as skip: fall through to the existing skip-branch handling
+            // below. Replace the outcome so endGameTrace records the rejection.
+            finalVictoryOutcome = {
+              outcome: 'skip',
+              reason: 'carry_precondition_fail',
+              cashGap: finalVictoryOutcome.cashGap,
+              majorsGap: finalVictoryOutcome.majorsGap,
+              connectorCost: finalVictoryOutcome.connectorCost,
+            };
+          } else if (!AIStrategyEngine.routesMatch(activeRoute, finalVictoryOutcome.route.stops)) {
+            // JIRA-261: Idempotency check compares the full remaining-stops
+            // sequence, not just the first stop. The earlier first-stop-only check
+            // suppressed override at game 8350cffa s3 T68 onwards: an existing
+            // 4-stop deterministic route shared its first stop (`pickup Ham@Warszawa`)
+            // with the victory route, so the override never fired — even though
+            // the victory route diverged at stop 3 to add the critical
+            // `pickup Oranges@Sevilla → deliver Oranges@London` leg that would
+            // have connected the 4th-of-7 major and clinched the game. With the
+            // full-sequence comparison, that divergence (and the missing London
+            // leg in the existing route) now correctly triggers the override.
             activeRoute = {
               stops: finalVictoryOutcome.route.stops,
               currentStopIndex: 0,
@@ -335,7 +358,8 @@ export class AIStrategyEngine {
             };
             finalVictoryAppliedOverride = true;
           }
-        } else {
+        }
+        if (finalVictoryOutcome.outcome === 'skip') {
           // JIRA-243: Victory-clinch hard gate. If a carried load + matching demand
           // card delivery would satisfy both victory conditions (cash ≥ 250M AND
           // ≥ 7 majors connected) without further building, force the activeRoute
