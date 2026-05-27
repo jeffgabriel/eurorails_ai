@@ -4338,4 +4338,114 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
   });
 
+  // ── JIRA-269 TEST-001: AIStrategyEngine dispatch integration ──────────────
+  // Regression tests that verify the new single-branch dispatcher works
+  // correctly for both the deterministic (Medium) and cannotPlan (Easy+no-key)
+  // paths from the AIStrategyEngine level.
+
+  describe('JIRA-269 TEST-001: AIStrategyEngine dispatch integration', () => {
+    it('Medium bot with no active route and demands produces a non-PassTurn plan', async () => {
+      // Medium bots: hasLLMApiKey returns false → brain=null → DETERMINISTIC_SKILLS path
+      // TripPlanner.planTripDeterministic is called internally; the mock must return a
+      // route without calling brain.planRoute (which would throw for null brain).
+
+      // Explicitly reset memory so no leaked activeRoute from prior tests causes
+      // the route-executor path to fire instead of NewRoutePlanner.
+      mockGetMemory.mockResolvedValue({
+        turnNumber: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+        consecutiveLlmFailures: 0,
+      });
+
+      const { TripPlanner } = require('../../services/ai/TripPlanner');
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        reasoning: 'Deterministic route — Medium skill',
+        createdAtTurn: 1,
+      };
+      // Override TripPlanner mock for this test: planTrip returns a route directly,
+      // without calling brain.planRoute (which is null for Medium bots).
+      TripPlanner.mockImplementationOnce(() => ({
+        planTrip: jest.fn().mockResolvedValue({
+          route,
+          llmLatencyMs: 0,
+          llmTokens: { input: 0, output: 0 },
+          llmLog: [],
+        }),
+      }));
+
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Berlin (deterministic)',
+      }));
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: BotSkillLevel.Medium, provider: 'anthropic' } as any,
+      });
+      const context = makeContext({ demands: [makeViableDemand()] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Medium bot should produce a real plan, not a PassTurn
+      expect(result.action).not.toBe(AIActionType.PassTurn);
+      expect(result.reasoning).not.toContain('[no-api-key]');
+      // LLMStrategyBrain should NOT have been created (Medium never uses LLM)
+      expect(LLMStrategyBrain).not.toHaveBeenCalled();
+    });
+
+    it('Easy bot with no API key produces PassTurn with [no-api-key] reasoning', async () => {
+      // Remove ALL credential paths so hasLLMApiKey returns false for Easy → brain=null
+      const savedUseClaudeCode = process.env.ANTHROPIC_USE_CLAUDE_CODE;
+      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.ANTHROPIC_USE_CLAUDE_CODE;
+
+      // Explicitly reset memory so no leaked activeRoute from prior tests causes
+      // the route-executor path to fire instead of NewRoutePlanner (cannotPlan).
+      mockGetMemory.mockResolvedValue({
+        turnNumber: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+        consecutiveLlmFailures: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: BotSkillLevel.Easy, provider: 'anthropic' } as any,
+      });
+      const context = makeContext({ demands: [makeViableDemand()] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Restore env
+      if (savedUseClaudeCode !== undefined) process.env.ANTHROPIC_USE_CLAUDE_CODE = savedUseClaudeCode;
+
+      // ADR-5: [no-api-key] reasoning preserved verbatim
+      expect(result.action).toBe(AIActionType.PassTurn);
+      expect(result.reasoning).toContain('[no-api-key] No LLM API key configured — passing turn');
+    });
+  });
+
 });
