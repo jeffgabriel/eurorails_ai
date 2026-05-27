@@ -379,6 +379,26 @@ export interface Stage3Result {
   context: import('../../../shared/types/GameTypes').GameContext;
 }
 
+// ── NewRoutePlannerResult ─────────────────────────────────────────────────
+
+/**
+ * NewRoutePlanner.run return type — discriminated union on `cannotPlan`.
+ *
+ * When `cannotPlan` is true the planner short-circuited before any LLM call
+ * (e.g. no API key for a skill level that requires LLM).  All Stage3Result
+ * fields are absent in that variant.
+ *
+ * When `cannotPlan` is false/absent the result extends Stage3Result and adds
+ * two diagnostic fields the caller still needs for game/LLM logging.
+ */
+export type NewRoutePlannerResult =
+  | { cannotPlan: true; reason: 'no-api-key' }
+  | ({
+      cannotPlan?: false;
+      autoDeliveredLoads: Array<{ loadType: string; city: string; payment: number; cardId: number }>;
+      tripPlanResult: import('./TripPlanner').TripPlanResult | null;
+    } & Stage3Result);
+
 // ── PhaseAResult ──────────────────────────────────────────────────────────
 
 /**

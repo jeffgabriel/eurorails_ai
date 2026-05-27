@@ -120,9 +120,14 @@ const MAX_RETRIES = 2;
 // ── TripPlanner ──────────────────────────────────────────────────────
 
 export class TripPlanner {
-  private readonly brain: LLMStrategyBrain;
+  private readonly brain: LLMStrategyBrain | null;
 
-  constructor(brain: LLMStrategyBrain) {
+  /**
+   * @param brain LLM brain. May be null for deterministic skill levels (e.g. Medium).
+   *              All LLM call sites guard against null; the Medium deterministic path
+   *              does not dereference brain at all.
+   */
+  constructor(brain: LLMStrategyBrain | null) {
     this.brain = brain;
   }
 
@@ -139,10 +144,9 @@ export class TripPlanner {
     /** JIRA-253 Layer B: Route signatures to exclude from deterministic planner consideration. */
     excludeRouteSignatures?: string[],
   ): Promise<TripPlanResult> {
-    const config = this.brain.strategyConfig;
-    const adapter = this.brain.providerAdapter;
-    const model = this.brain.modelName;
-    const skillLevel = config.skillLevel;
+    // For deterministic skill levels (e.g. Medium) brain may be null.
+    // Only dereference brain fields in the LLM path (after the Medium guard below).
+    const skillLevel = this.brain?.strategyConfig.skillLevel ?? BotSkillLevel.Medium;
 
     // ── JIRA-207B (R10c): Pre-LLM short-circuit — evaluate NEW OPTIONS filter ──
     // If every demand card is either unaffordable or already a carry-load commitment, the
@@ -239,6 +243,17 @@ export class TripPlanner {
       console.warn('[TripPlanner] Medium deterministic returned no_feasible_candidates; falling through to planRoute heuristic');
       return this.heuristicFallback(snapshot, context, gridPoints, memory, [detResult.synthesizedAttempt]);
     }
+
+    // Reaching here means skillLevel is Easy or Hard (not Medium).
+    // Brain is required for the LLM path — should never be null here because
+    // NewRoutePlanner.run already short-circuits cannotPlan for null-brain LLM skills.
+    // The assertion keeps TypeScript happy and provides a runtime safety net.
+    if (!this.brain) {
+      console.error('[TripPlanner] brain is null on LLM path — returning route=null');
+      return { route: null, llmLatencyMs: 0, llmTokens: { input: 0, output: 0 }, llmLog: [] };
+    }
+    const adapter = this.brain.providerAdapter;
+    const model = this.brain.modelName;
 
     // Build strategic context for Medium skill (Task 1 foundation — now dead code for Medium,
     // preserved as dead code per JIRA-220 §"Out of scope" for potential Hard rebuild.
@@ -528,6 +543,18 @@ export class TripPlanner {
     memory: BotMemoryState,
     priorLlmLog: LlmAttempt[],
   ): Promise<TripPlanResult> {
+    // Brain is required for the heuristic fallback path. When brain is null
+    // (deterministic skill level), skip the LLM heuristic and return route=null
+    // so the caller falls through to ActionResolver.heuristicFallback.
+    if (!this.brain) {
+      console.warn('[TripPlanner] heuristicFallback skipped — no brain (deterministic skill level)');
+      return {
+        route: null,
+        llmLatencyMs: 0,
+        llmTokens: { input: 0, output: 0 },
+        llmLog: priorLlmLog,
+      };
+    }
     console.warn(`[TripPlanner] All attempts failed, falling back to planRoute()`);
     try {
       const fallback = await this.brain.planRoute(
