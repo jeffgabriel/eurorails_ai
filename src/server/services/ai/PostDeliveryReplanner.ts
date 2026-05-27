@@ -72,49 +72,119 @@ function estimateRouteTurns(
   }
 }
 
-// ── ReplanResult ──────────────────────────────────────────────────────────
+// ── PostDeliveryOutcome discriminated union ───────────────────────────────
 
 /**
- * Result returned by PostDeliveryReplanner.replan().
- *
- * `moveTargetInvalidated` is true in every code path that REPLACES the active
- * route (all four sub-paths set it true — even the no-brain fallback, because
- * revalidateRemainingDeliveries + skipCompletedStops always produce a new route
- * object, and lastMoveTargetCity from the prior route is stale regardless).
+ * The existing route still has remaining stops and the planner preserved it
+ * (keep_current_plan or strictly-faster gate rejected the candidate in End state).
+ * The movement loop continues on the existing route; lastMoveTargetCity is valid.
  */
-export interface ReplanResult {
-  /** Updated active route after replan (may be revalidated, enriched, or unchanged). */
-  route: StrategicRoute;
-  /**
-   * True whenever the activeRoute object was replaced. The caller MUST clear
-   * `lastMoveTargetCity` when this is true to prevent JIRA-194 stale-index bugs.
-   */
-  moveTargetInvalidated: boolean;
+export interface RouteContinuedOutcome {
+  readonly kind: 'route-continued';
+  /** The preserved (revalidated) route — same logical route, no replacement. */
+  readonly route: StrategicRoute;
+  /** Always false — existing stop indices remain valid. */
+  readonly moveTargetInvalidated: false;
   /** LLM log from TripPlanner, if called. */
-  replanLlmLog?: LlmAttempt[];
+  readonly replanLlmLog?: LlmAttempt[];
   /** System prompt sent to TripPlanner, if called. */
-  replanSystemPrompt?: string;
+  readonly replanSystemPrompt?: string;
   /** User prompt sent to TripPlanner, if called. */
-  replanUserPrompt?: string;
+  readonly replanUserPrompt?: string;
+}
+
+/**
+ * TripPlanner returned a new route that replaced the existing one.
+ * The movement loop continues on the new route; lastMoveTargetCity must be cleared.
+ */
+export interface RouteReplacedOutcome {
+  readonly kind: 'route-replaced';
+  /** The new route from TripPlanner (after skipCompletedStops). */
+  readonly route: StrategicRoute;
+  /** Always true — new route object, stale stop indices are no longer valid. */
+  readonly moveTargetInvalidated: true;
+  /** LLM log from TripPlanner. */
+  readonly replanLlmLog?: LlmAttempt[];
+  /** System prompt sent to TripPlanner. */
+  readonly replanSystemPrompt?: string;
+  /** User prompt sent to TripPlanner. */
+  readonly replanUserPrompt?: string;
   /**
    * Upgrade action to inject into the turn plan (JIRA-198), or null when the
    * eligibility gate blocked the LLM-requested upgrade.
-   * Undefined when the LLM did not request an upgrade (sub-paths 2/3/4 also
-   * leave this undefined because no upgradeOnRoute was emitted).
+   * Undefined when no upgradeOnRoute was emitted by TripPlanner.
    */
-  pendingUpgradeAction?: TurnPlanUpgradeTrain | null;
+  readonly pendingUpgradeAction?: TurnPlanUpgradeTrain | null;
   /**
    * Human-readable reason explaining why an upgrade was blocked (JIRA-198).
    * Undefined when no upgrade was requested or when the upgrade was accepted.
    */
-  upgradeSuppressionReason?: string | null;
+  readonly upgradeSuppressionReason?: string | null;
   /**
-   * True when the active route was abandoned because its next stop became
-   * impossible to complete (JIRA-233, R2). Callers must propagate this flag
-   * so AIStrategyEngine can record the abandonment in routeHistory.
+   * True when the route was abandoned due to impossibility before TripPlanner
+   * was called, but TripPlanner returned a new route afterwards (JIRA-233 R2/R3).
+   * The caller should propagate this to AIStrategyEngine for routeHistory recording.
    */
-  routeWasAbandoned?: boolean;
+  readonly routeWasAbandoned?: true;
 }
+
+/**
+ * The route is fully completed OR TripPlanner returned null (for reasons other
+ * than keep_current_plan). The caller MUST end the movement loop immediately —
+ * there is no viable route to continue on. This is the JIRA-271 fix: previously
+ * a fully-completed route with remaining budget would fall through and try to move
+ * on a completed route, producing spurious movements.
+ */
+export interface NoRouteOutcome {
+  readonly kind: 'no-route';
+  /** The revalidated route (may have stale indices if fully completed). */
+  readonly route: StrategicRoute;
+  /** Always true — route was replaced/revalidated. */
+  readonly moveTargetInvalidated: true;
+  /** LLM log from TripPlanner, if called. */
+  readonly replanLlmLog?: LlmAttempt[];
+  /** System prompt sent to TripPlanner, if called. */
+  readonly replanSystemPrompt?: string;
+  /** User prompt sent to TripPlanner, if called. */
+  readonly replanUserPrompt?: string;
+}
+
+/**
+ * The impossibility check (JIRA-233 R2) fired and the route was cleared. The
+ * caller MUST end the movement loop immediately and propagate routeWasAbandoned
+ * to AIStrategyEngine so it can record the event in routeHistory.
+ */
+export interface RouteAbandonedOutcome {
+  readonly kind: 'route-abandoned';
+  /** The revalidated route (next stop is impossible). */
+  readonly route: StrategicRoute;
+  /** Always true — route object was replaced/cleared. */
+  readonly moveTargetInvalidated: true;
+  /** Always true — signals the impossibility abandonment to the caller. */
+  readonly routeWasAbandoned: true;
+}
+
+/**
+ * Discriminated union returned by PostDeliveryReplanner.replan().
+ *
+ * ADR-1: The union replaces the previous ReplanResult bag so the caller's
+ *        switch dispatch is exhaustive at compile time (ADR-4).
+ * ADR-2: `no-route` and `route-abandoned` MUST end the movement loop
+ *        immediately, regardless of remaining budget (JIRA-271 fix).
+ * ADR-5: Replan-log / upgrade fields attach to specific variants only.
+ */
+export type PostDeliveryOutcome =
+  | RouteContinuedOutcome
+  | RouteReplacedOutcome
+  | NoRouteOutcome
+  | RouteAbandonedOutcome;
+
+/**
+ * @deprecated Use PostDeliveryOutcome instead. ReplanResult is kept as a
+ * type alias for backwards compatibility during the transition period.
+ * Will be removed once all callers have been updated.
+ */
+export type ReplanResult = PostDeliveryOutcome;
 
 // ── PostDeliveryReplanner ─────────────────────────────────────────────────
 
@@ -145,7 +215,7 @@ export class PostDeliveryReplanner {
     gridPoints: GridPoint[] | undefined,
     deliveriesThisTurn: number,
     tag: string,
-  ): Promise<ReplanResult> {
+  ): Promise<PostDeliveryOutcome> {
     // Sub-path 4: gridPoints unavailable — cannot plan, revalidate existing route.
     // JIRA-270: brain may be null (Medium-skill bot); TripPlanner.planTrip
     // dispatches Medium deterministically per JIRA-269, so brain presence is
@@ -161,9 +231,12 @@ export class PostDeliveryReplanner {
           `[route-abandoned] route impossible: next stop=${JSON.stringify(nextStop)}, ` +
           `cargo=${JSON.stringify(context.loads)}, remaining stops=${remainingCount}`,
         );
-        return { route: skipped, moveTargetInvalidated: true, routeWasAbandoned: true };
+        const outcome: RouteAbandonedOutcome = { kind: 'route-abandoned', route: skipped, moveTargetInvalidated: true, routeWasAbandoned: true };
+        return outcome;
       }
-      return { route: skipped, moveTargetInvalidated: true };
+      // No route returned — grid empty, movement loop must end
+      const outcome: NoRouteOutcome = { kind: 'no-route', route: skipped, moveTargetInvalidated: true };
+      return outcome;
     }
 
     // Sub-paths 1–3: planner path (brain may be null; TripPlanner handles skill dispatch).
@@ -236,14 +309,15 @@ export class PostDeliveryReplanner {
           if (candidateTurns >= currentRemaining) {
             const revalidated = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
             const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);
-            return {
+            const outcome: RouteContinuedOutcome = {
+              kind: 'route-continued',
               route: skipped,
               moveTargetInvalidated: false,
               replanLlmLog,
               replanSystemPrompt,
               replanUserPrompt,
-              routeWasAbandoned: routeWasAbandoned || undefined,
             };
+            return outcome;
           }
         }
 
@@ -263,7 +337,8 @@ export class PostDeliveryReplanner {
           upgradeSuppressionReason = upgradeResult.reason ?? null;
         }
 
-        return {
+        const outcome: RouteReplacedOutcome = {
+          kind: 'route-replaced',
           route: finalRoute,
           moveTargetInvalidated: true, // JIRA-194: new route — stale stop indices no longer valid
           replanLlmLog,
@@ -273,6 +348,7 @@ export class PostDeliveryReplanner {
           upgradeSuppressionReason,
           routeWasAbandoned: routeWasAbandoned || undefined, // JIRA-233: propagate impossibility signal
         };
+        return outcome;
       }
 
       // Sub-path 2a: JIRA-207B (R10e) — TripPlanner returned keep_current_plan.
@@ -281,38 +357,53 @@ export class PostDeliveryReplanner {
       if (!replanResult.route && replanSelection?.fallbackReason === 'keep_current_plan') {
         const revalidated = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
         const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);
-        return {
+        const outcome: RouteContinuedOutcome = {
+          kind: 'route-continued',
           route: skipped,
           moveTargetInvalidated: false, // Route unchanged — stale indices remain valid
           replanLlmLog,
           replanSystemPrompt,
           replanUserPrompt,
-          routeWasAbandoned: routeWasAbandoned || undefined,
         };
+        return outcome;
       }
 
-      // Sub-path 2b: TripPlanner returned null route (other reasons).
-      console.warn(`${tag} [PostDeliveryReplanner] TripPlanner returned null route. Continuing on existing route.`);
+      // Sub-path 2b: TripPlanner returned null route (other reasons) — no viable route.
+      // JIRA-271: movement loop MUST end when no route is available, regardless of budget.
+      console.warn(`${tag} [PostDeliveryReplanner] TripPlanner returned null route. Ending movement loop.`);
       const revalidated = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
       const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);
-      return {
+      // JIRA-233: If impossibility already fired, surface as route-abandoned so the
+      // caller can record the abandonment in routeHistory.
+      if (routeWasAbandoned) {
+        const abandonedOutcome: RouteAbandonedOutcome = { kind: 'route-abandoned', route: skipped, moveTargetInvalidated: true, routeWasAbandoned: true };
+        return abandonedOutcome;
+      }
+      const noRouteOutcome: NoRouteOutcome = {
+        kind: 'no-route',
         route: skipped,
         moveTargetInvalidated: true, // JIRA-194: route shape replaced — clear stale move target
         replanLlmLog,
         replanSystemPrompt,
         replanUserPrompt,
-        routeWasAbandoned: routeWasAbandoned || undefined,
       };
+      return noRouteOutcome;
     } catch (err) {
-      // Sub-path 3: TripPlanner threw
-      console.warn(`${tag} [PostDeliveryReplanner] Replan failed (${(err as Error).message}). Continuing on existing route.`);
+      // Sub-path 3: TripPlanner threw — no viable route.
+      // JIRA-271: movement loop MUST end when no route is available, regardless of budget.
+      console.warn(`${tag} [PostDeliveryReplanner] Replan failed (${(err as Error).message}). Ending movement loop.`);
       const revalidated = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
       const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);
-      return {
+      if (routeWasAbandoned) {
+        const outcome: RouteAbandonedOutcome = { kind: 'route-abandoned', route: skipped, moveTargetInvalidated: true, routeWasAbandoned: true };
+        return outcome;
+      }
+      const outcome: NoRouteOutcome = {
+        kind: 'no-route',
         route: skipped,
         moveTargetInvalidated: true, // JIRA-194: route shape replaced — clear stale move target
-        routeWasAbandoned: routeWasAbandoned || undefined,
       };
+      return outcome;
     }
   }
 }
