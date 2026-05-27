@@ -2239,8 +2239,11 @@ describe('JIRA-271 regression: no-route outcome immediately ends the movement lo
     // (the loop exited before the move-resolution path)
     expect(mockResolveMove).not.toHaveBeenCalled();
 
-    // Termination reason should reflect the no-route outcome
-    expect(trace.a2.terminationReason).toBe('no_route_after_replan');
+    // Termination reason: the original route was fully executed (only stop was delivered)
+    // and the replan's revalidated route is empty/exhausted, so the loop ends with
+    // route_complete. 'no_route_after_replan' is reserved for the case where stops
+    // remain in the replanned route but the planner declined to produce a new one.
+    expect(trace.a2.terminationReason).toBe('route_complete');
   });
 
   it('delivers final stop → replan returns route-abandoned → no further move emitted', async () => {

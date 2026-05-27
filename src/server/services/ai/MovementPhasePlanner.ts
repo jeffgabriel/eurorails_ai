@@ -450,21 +450,30 @@ export class MovementPhasePlanner {
               }
               break;
 
-            case 'no-route':
+            case 'no-route': {
               // No viable route (null from planner or route fully completed).
               // ADR-2/JIRA-271: End the movement loop immediately, bypassing the
               // post-loop route_complete check which would overwrite terminationReason.
               if (replanOutcome.replanLlmLog) replanLlmLog = replanOutcome.replanLlmLog;
               if (replanOutcome.replanSystemPrompt) replanSystemPrompt = replanOutcome.replanSystemPrompt;
               if (replanOutcome.replanUserPrompt) replanUserPrompt = replanOutcome.replanUserPrompt;
-              trace.a2.terminationReason = 'no_route_after_replan';
+              // When the route had all its stops executed, signal route_complete so
+              // downstream consumers (and the existing post-loop semantics) see the
+              // completion. Otherwise the planner declined to replan with stops
+              // remaining — no completion signal.
+              const routeComplete =
+                replanOutcome.route.currentStopIndex >= replanOutcome.route.stops.length;
+              trace.a2.terminationReason = routeComplete
+                ? 'route_complete'
+                : 'no_route_after_replan';
               trace.outputPlan = plans.map(p => p.type);
               return MovementPhasePlanner.makeResult(
                 replanOutcome.route, plans, hasDelivery, null, deliveriesThisTurn,
-                snapshot, context, false, false,
+                snapshot, context, routeComplete, false,
                 replanLlmLog, replanSystemPrompt, replanUserPrompt,
                 pendingUpgradeAction, upgradeSuppressionReason,
               );
+            }
 
             case 'route-abandoned':
               // Impossibility check fired (JIRA-233 R2/R3). End the movement loop.
