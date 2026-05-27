@@ -42,7 +42,15 @@ import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
 import { TurnExecutorPlanner, CompositionTrace, RouteAbandonRecord, AbandonReason } from './TurnExecutorPlanner';
 import { TurnExecutor } from './TurnExecutor';
-import { PostDeliveryReplanner } from './PostDeliveryReplanner';
+import { PostDeliveryReplanner, PostDeliveryOutcome } from './PostDeliveryReplanner';
+
+/**
+ * Exhaustiveness helper: TypeScript will flag this as a compile error if a
+ * new PostDeliveryOutcome variant is added without being handled in the switch.
+ */
+function assertNeverOutcome(outcome: never): never {
+  throw new Error(`[MovementPhasePlanner] Unhandled PostDeliveryOutcome kind: ${JSON.stringify(outcome)}`);
+}
 import { computeEffectivePathLength, getMajorCityLookup, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 import { isCoordOnNetwork } from './context/NetworkContext';
@@ -390,7 +398,7 @@ export class MovementPhasePlanner {
           }
           // Delegate post-delivery replan to PostDeliveryReplanner
           const _replanStart = Date.now();
-          const replanResult = await PostDeliveryReplanner.replan(
+          const replanOutcome: PostDeliveryOutcome = await PostDeliveryReplanner.replan(
             activeRoute,
             snapshot,
             context,
@@ -404,28 +412,86 @@ export class MovementPhasePlanner {
             trace.timing.replanCount += 1;
           }
 
-          activeRoute = replanResult.route;
-          if (replanResult.moveTargetInvalidated) {
-            lastMoveTargetCity = null; // JIRA-194: clear stale move target
-          }
-          // JIRA-233: propagate route abandonment from impossibility check
-          if (replanResult.routeWasAbandoned) {
-            routeAbandonedByImpossibility = true;
-          }
-          if (replanResult.replanLlmLog) replanLlmLog = replanResult.replanLlmLog;
-          if (replanResult.replanSystemPrompt) replanSystemPrompt = replanResult.replanSystemPrompt;
-          if (replanResult.replanUserPrompt) replanUserPrompt = replanResult.replanUserPrompt;
-          // JIRA-198: Merge upgrade signal — last non-null action wins across replans.
-          if (replanResult.pendingUpgradeAction !== undefined) {
-            if (replanResult.pendingUpgradeAction !== null) {
-              // Non-null result: always adopt the latest upgrade decision
-              pendingUpgradeAction = replanResult.pendingUpgradeAction;
-              upgradeSuppressionReason = null;
-            } else if (pendingUpgradeAction === undefined || pendingUpgradeAction === null) {
-              // Null result: only update suppression reason if we don't already have a non-null action
-              pendingUpgradeAction = null;
-              upgradeSuppressionReason = replanResult.upgradeSuppressionReason;
+          // ADR-1/ADR-2: Dispatch on the discriminated union kind. no-route and
+          // route-abandoned MUST end the movement loop immediately, regardless of
+          // remaining budget (JIRA-271 fix). The default case is exhaustive (ADR-4).
+          switch (replanOutcome.kind) {
+            case 'route-continued':
+              // Route preserved (keep_current_plan or strictly-faster gate rejection).
+              // Move target remains valid — do NOT clear lastMoveTargetCity.
+              activeRoute = replanOutcome.route;
+              if (replanOutcome.replanLlmLog) replanLlmLog = replanOutcome.replanLlmLog;
+              if (replanOutcome.replanSystemPrompt) replanSystemPrompt = replanOutcome.replanSystemPrompt;
+              if (replanOutcome.replanUserPrompt) replanUserPrompt = replanOutcome.replanUserPrompt;
+              break;
+
+            case 'route-replaced':
+              // New route from TripPlanner. Clear stale move target (JIRA-194).
+              activeRoute = replanOutcome.route;
+              lastMoveTargetCity = null;
+              if (replanOutcome.replanLlmLog) replanLlmLog = replanOutcome.replanLlmLog;
+              if (replanOutcome.replanSystemPrompt) replanSystemPrompt = replanOutcome.replanSystemPrompt;
+              if (replanOutcome.replanUserPrompt) replanUserPrompt = replanOutcome.replanUserPrompt;
+              // JIRA-233: propagate impossibility abandonment signal
+              if (replanOutcome.routeWasAbandoned) {
+                routeAbandonedByImpossibility = true;
+              }
+              // JIRA-198: Merge upgrade signal — last non-null action wins across replans.
+              if (replanOutcome.pendingUpgradeAction !== undefined) {
+                if (replanOutcome.pendingUpgradeAction !== null) {
+                  // Non-null result: always adopt the latest upgrade decision
+                  pendingUpgradeAction = replanOutcome.pendingUpgradeAction;
+                  upgradeSuppressionReason = null;
+                } else if (pendingUpgradeAction === undefined || pendingUpgradeAction === null) {
+                  // Null result: only update suppression reason if we don't already have a non-null action
+                  pendingUpgradeAction = null;
+                  upgradeSuppressionReason = replanOutcome.upgradeSuppressionReason;
+                }
+              }
+              break;
+
+            case 'no-route': {
+              // No viable route (null from planner or route fully completed).
+              // ADR-2/JIRA-271: End the movement loop immediately, bypassing the
+              // post-loop route_complete check which would overwrite terminationReason.
+              if (replanOutcome.replanLlmLog) replanLlmLog = replanOutcome.replanLlmLog;
+              if (replanOutcome.replanSystemPrompt) replanSystemPrompt = replanOutcome.replanSystemPrompt;
+              if (replanOutcome.replanUserPrompt) replanUserPrompt = replanOutcome.replanUserPrompt;
+              // When the route had all its stops executed, signal route_complete so
+              // downstream consumers (and the existing post-loop semantics) see the
+              // completion. Otherwise the planner declined to replan with stops
+              // remaining — no completion signal.
+              const routeComplete =
+                replanOutcome.route.currentStopIndex >= replanOutcome.route.stops.length;
+              trace.a2.terminationReason = routeComplete
+                ? 'route_complete'
+                : 'no_route_after_replan';
+              trace.outputPlan = plans.map(p => p.type);
+              return MovementPhasePlanner.makeResult(
+                replanOutcome.route, plans, hasDelivery, null, deliveriesThisTurn,
+                snapshot, context, routeComplete, false,
+                replanLlmLog, replanSystemPrompt, replanUserPrompt,
+                pendingUpgradeAction, upgradeSuppressionReason,
+              );
             }
+
+            case 'route-abandoned':
+              // Impossibility check fired (JIRA-233 R2/R3). End the movement loop.
+              // ADR-2: Early-return so the post-loop route_complete check cannot
+              // overwrite terminationReason or suppress the routeAbandoned flag.
+              trace.a2.terminationReason = 'route_abandoned_after_replan';
+              trace.outputPlan = plans.map(p => p.type);
+              return MovementPhasePlanner.makeResult(
+                replanOutcome.route, plans, hasDelivery, null, deliveriesThisTurn,
+                snapshot, context, false, true,
+                undefined, undefined, undefined,
+                pendingUpgradeAction, upgradeSuppressionReason,
+              );
+
+            default:
+              // ADR-4: Compile-time exhaustiveness check. TypeScript will flag this
+              // if a new variant is added without being handled above.
+              assertNeverOutcome(replanOutcome);
           }
         }
 
