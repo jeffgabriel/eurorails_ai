@@ -235,8 +235,9 @@ beforeEach(() => {
   });
 
   mockPostDeliveryReplan.mockResolvedValue({
+    kind: 'route-continued',
     route: { stops: [], currentStopIndex: 0, phase: 'travel', createdAtTurn: 10, reasoning: 'replanned' } as StrategicRoute,
-    moveTargetInvalidated: false,
+    moveTargetInvalidated: false as const,
   });
 
   jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -302,8 +303,9 @@ describe('MovementPhasePlanner — same-city replan deferral', () => {
     // would normally need a move — but since the test goal is just to count replan
     // calls, we return an empty route from the first replan to short-circuit.
     mockPostDeliveryReplan.mockResolvedValueOnce({
+      kind: 'no-route',
       route: { stops: [], currentStopIndex: 0, phase: 'travel', createdAtTurn: 10, reasoning: 'after first replan' } as StrategicRoute,
-      moveTargetInvalidated: true,
+      moveTargetInvalidated: true as const,
     });
 
     await MovementPhasePlanner.run(

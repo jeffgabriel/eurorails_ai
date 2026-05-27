@@ -447,8 +447,9 @@ describe('MovementPhasePlanner.run — delivery + PostDeliveryReplanner', () => 
 
     const replanRoute = makeRoute({ reasoning: 'replanned' });
     mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'route-replaced',
       route: replanRoute,
-      moveTargetInvalidated: true,
+      moveTargetInvalidated: true as const,
     });
 
     const result = await MovementPhasePlanner.run(
@@ -461,12 +462,11 @@ describe('MovementPhasePlanner.run — delivery + PostDeliveryReplanner', () => 
     expect(mockPostDeliveryReplan).toHaveBeenCalledTimes(1);
     expect(result.hasDelivery).toBe(true);
     expect(result.deliveriesThisTurn).toBe(1);
-    expect(result.lastMoveTargetCity).toBeNull(); // cleared by moveTargetInvalidated
+    expect(result.lastMoveTargetCity).toBeNull(); // cleared by route-replaced
   });
 
-  it('keeps lastMoveTargetCity when moveTargetInvalidated is false', async () => {
-    // Edge case: if for some reason replan returns false (shouldn't happen per spec,
-    // but testing the wiring)
+  it('keeps lastMoveTargetCity when route-continued (keep_current_plan)', async () => {
+    // route-continued outcome: route preserved — stale move target NOT cleared.
     mockIsStopComplete.mockReturnValue(false);
 
     const route = makeRoute({
@@ -485,8 +485,9 @@ describe('MovementPhasePlanner.run — delivery + PostDeliveryReplanner', () => 
 
     const replanRoute = makeRoute({ reasoning: 'replanned' });
     mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'route-continued',
       route: replanRoute,
-      moveTargetInvalidated: false,
+      moveTargetInvalidated: false as const,
     });
 
     // Pre-set lastMoveTargetCity by making bot have moved first would be complex,
@@ -499,9 +500,8 @@ describe('MovementPhasePlanner.run — delivery + PostDeliveryReplanner', () => 
     );
 
     // lastMoveTargetCity was null to begin with (no move before delivery),
-    // and moveTargetInvalidated=false means we DON'T overwrite it to null
-    // The result here depends on whether there was a prior move — there wasn't,
-    // so it stays null from initialization
+    // and route-continued means we DON'T overwrite it to null.
+    // The result here depends on whether there was a prior move — there wasn't.
     expect(result.hasDelivery).toBe(true);
   });
 
@@ -641,8 +641,9 @@ describe('MovementPhasePlanner.run — delivery + PostDeliveryReplanner', () => 
     // Wien is on network so the move branch fires
     context.citiesOnNetwork = ['Berlin', 'Wien'];
     mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'route-replaced',
       route: replanRoute,
-      moveTargetInvalidated: true,
+      moveTargetInvalidated: true as const,
     });
 
     // gridPoints: row=10,col=10 → Berlin so delivery fires on move-2 arrival
@@ -736,8 +737,9 @@ describe('MovementPhasePlanner.run — delivery + PostDeliveryReplanner', () => 
       reasoning: 'replanned-cumulative',
     });
     mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'route-replaced',
       route: replanRoute,
-      moveTargetInvalidated: true,
+      moveTargetInvalidated: true as const,
     });
 
     // gridPoints: row=10,col=10 → Berlin so delivery fires after move-2 arrival
@@ -833,8 +835,9 @@ describe('MovementPhasePlanner.run — PhaseAResult fields', () => {
     });
 
     mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'no-route',
       route: makeRoute({ stops: [], currentStopIndex: 0 }),
-      moveTargetInvalidated: true,
+      moveTargetInvalidated: true as const,
     });
 
     const result = await MovementPhasePlanner.run(
@@ -906,10 +909,11 @@ describe('JIRA-202: arrival on last milepost executes stop action', () => {
       plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin' },
     });
 
-    // Post-delivery replan returns empty route
+    // Post-delivery replan returns empty route (no-route)
     mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'no-route',
       route: makeRoute({ stops: [], currentStopIndex: 0 }),
-      moveTargetInvalidated: true,
+      moveTargetInvalidated: true as const,
     });
 
     // Provide gridPoints so position update sets city='Berlin'
@@ -2144,8 +2148,9 @@ describe('JIRA-249 Layer 3: MovementPhasePlanner runtime arrival guard', () => {
     });
 
     mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'no-route',
       route: makeRoute({ stops: [], currentStopIndex: 0 }),
-      moveTargetInvalidated: true,
+      moveTargetInvalidated: true as const,
     });
 
     const trace = makeTrace();
@@ -2178,5 +2183,262 @@ describe('JIRA-249 Layer 3: MovementPhasePlanner runtime arrival guard', () => {
 
     expect(trace.a2.terminationReason).toBe('arrived_for_deliver_but_load_not_carried');
     expect(result.accumulatedPlans.some(p => p.type === AIActionType.PassTurn)).toBe(false);
+  });
+});
+
+// ── JIRA-271 regression: no-route outcome ends movement loop ────────────────
+//
+// Bug: after a route-completing delivery, if replan returns no-route, the bot
+// continued the movement loop and emitted a return-move using leftover budget.
+// Fix: the switch dispatch `break`s the movement loop on no-route / route-abandoned.
+
+describe('JIRA-271 regression: no-route outcome immediately ends the movement loop', () => {
+  it('delivers final stop → replan returns no-route → no further move emitted despite leftover budget', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    // Bot is at Berlin (delivery city) with a single-stop deliver route.
+    // Speed = 9 mileposts; delivery itself consumes 0 movement — leftover = 9.
+    // Without the fix the loop would have continued and tried to emit a move.
+    const route = makeRoute({
+      stops: [{ action: 'deliver', city: 'Berlin', loadType: 'Wine', demandCardId: 10, payment: 18 }],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Berlin' },
+      loads: ['Wine'],
+      speed: 9,
+    });
+
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin' },
+    });
+
+    // Replan returns no-route: route is exhausted, no new route available.
+    mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'no-route',
+      route: makeRoute({ stops: [], currentStopIndex: 0 }),
+      moveTargetInvalidated: true as const,
+    });
+
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    // Delivery happened
+    expect(result.hasDelivery).toBe(true);
+    expect(result.deliveriesThisTurn).toBe(1);
+
+    // Replan was called once
+    expect(mockPostDeliveryReplan).toHaveBeenCalledTimes(1);
+
+    // JIRA-271: NO move action emitted after the delivery (loop broke on no-route)
+    const moveActions = result.accumulatedPlans.filter(p => p.type === AIActionType.MoveTrain);
+    expect(moveActions).toHaveLength(0);
+
+    // ActionResolver.resolveMove should NOT have been called at all
+    // (the loop exited before the move-resolution path)
+    expect(mockResolveMove).not.toHaveBeenCalled();
+
+    // Termination reason should reflect the no-route outcome
+    expect(trace.a2.terminationReason).toBe('no_route_after_replan');
+  });
+
+  it('delivers final stop → replan returns route-abandoned → no further move emitted', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    const route = makeRoute({
+      stops: [{ action: 'deliver', city: 'Berlin', loadType: 'Wine', demandCardId: 10, payment: 18 }],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Berlin' },
+      loads: ['Wine'],
+      speed: 9,
+    });
+
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin' },
+    });
+
+    mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'route-abandoned',
+      route: makeRoute({ stops: [], currentStopIndex: 0 }),
+      moveTargetInvalidated: true as const,
+      routeWasAbandoned: true as const,
+    });
+
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    expect(result.hasDelivery).toBe(true);
+    expect(mockPostDeliveryReplan).toHaveBeenCalledTimes(1);
+
+    const moveActions = result.accumulatedPlans.filter(p => p.type === AIActionType.MoveTrain);
+    expect(moveActions).toHaveLength(0);
+    expect(mockResolveMove).not.toHaveBeenCalled();
+
+    expect(trace.a2.terminationReason).toBe('route_abandoned_after_replan');
+    expect(result.routeAbandoned).toBe(true);
+  });
+});
+
+// ── TEST-002: Structural invariant — replan always fires before subsequent actions ─
+//
+// Invariant: every code path that emits actions after a delivery MUST go through
+// PostDeliveryReplanner.replan first. The switch dispatch enforces this structurally.
+
+describe('TEST-002: structural invariant — PostDeliveryReplanner.replan fires before any post-delivery action', () => {
+  it('route-continued: replan fires, loop continues, subsequent move is attempted', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    const route = makeRoute({
+      stops: [
+        { action: 'deliver', city: 'Berlin', loadType: 'Wine', demandCardId: 10, payment: 18 },
+        { action: 'pickup', city: 'Paris', loadType: 'Coal' },
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Berlin' },
+      loads: ['Wine'],
+      citiesOnNetwork: ['Paris'],
+    });
+
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin' },
+    });
+
+    // route-continued: route carries over — loop tries to move to Paris.
+    // Return a route with no more stops so the loop exits cleanly after the move attempt.
+    const continuedRoute = makeRoute({
+      stops: [
+        { action: 'pickup', city: 'Paris', loadType: 'Coal' },
+      ],
+      currentStopIndex: 0,
+    });
+    mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'route-continued',
+      route: continuedRoute,
+      moveTargetInvalidated: false as const,
+    });
+
+    // resolveMove returns a move action toward Paris; override path length to 9 so
+    // the budget is fully consumed after the first move and the loop exits.
+    const { computeEffectivePathLength } = jest.requireMock('../../../shared/services/majorCityGroups');
+    computeEffectivePathLength.mockReturnValue(9);
+
+    mockResolveMove.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.MoveTrain, path: [{ row: 5, col: 5 }, { row: 6, col: 5 }] },
+      budgetUsed: 9,
+    });
+
+    await MovementPhasePlanner.run(route, makeSnapshot(), context, makeTrace());
+
+    // Core invariant: replan fired exactly once (after the delivery)
+    expect(mockPostDeliveryReplan).toHaveBeenCalledTimes(1);
+    // Loop continued after replan: resolveMove was called at least once
+    expect(mockResolveMove).toHaveBeenCalledTimes(1);
+  });
+
+  it('route-replaced: replan fires, lastMoveTargetCity cleared, loop continues', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    const route = makeRoute({
+      stops: [{ action: 'deliver', city: 'Berlin', loadType: 'Wine', demandCardId: 10, payment: 18 }],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Berlin' },
+      loads: ['Wine'],
+    });
+
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin' },
+    });
+
+    const replacedRoute = makeRoute({
+      stops: [{ action: 'pickup', city: 'Hamburg', loadType: 'Steel' }],
+      currentStopIndex: 0,
+      reasoning: 'post-delivery replaced route',
+    });
+    mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'route-replaced',
+      route: replacedRoute,
+      moveTargetInvalidated: true as const,
+    });
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, makeTrace());
+
+    // replan fired
+    expect(mockPostDeliveryReplan).toHaveBeenCalledTimes(1);
+    // lastMoveTargetCity cleared (route-replaced)
+    expect(result.lastMoveTargetCity).toBeNull();
+    // delivery happened
+    expect(result.hasDelivery).toBe(true);
+  });
+
+  it('no-route: replan fires, loop terminates — ActionResolver.resolveMove NOT called', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    const route = makeRoute({
+      stops: [{ action: 'deliver', city: 'Berlin', loadType: 'Wine', demandCardId: 10, payment: 18 }],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Berlin' },
+      loads: ['Wine'],
+    });
+
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin' },
+    });
+
+    mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'no-route',
+      route: makeRoute({ stops: [], currentStopIndex: 0 }),
+      moveTargetInvalidated: true as const,
+    });
+
+    await MovementPhasePlanner.run(route, makeSnapshot(), context, makeTrace());
+
+    expect(mockPostDeliveryReplan).toHaveBeenCalledTimes(1);
+    // Loop broke immediately — no move attempted
+    expect(mockResolveMove).not.toHaveBeenCalled();
+  });
+
+  it('route-abandoned: replan fires, loop terminates — ActionResolver.resolveMove NOT called', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    const route = makeRoute({
+      stops: [{ action: 'deliver', city: 'Berlin', loadType: 'Wine', demandCardId: 10, payment: 18 }],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Berlin' },
+      loads: ['Wine'],
+    });
+
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin' },
+    });
+
+    mockPostDeliveryReplan.mockResolvedValue({
+      kind: 'route-abandoned',
+      route: makeRoute({ stops: [], currentStopIndex: 0 }),
+      moveTargetInvalidated: true as const,
+      routeWasAbandoned: true as const,
+    });
+
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, makeTrace());
+
+    expect(mockPostDeliveryReplan).toHaveBeenCalledTimes(1);
+    expect(mockResolveMove).not.toHaveBeenCalled();
+    expect(result.routeAbandoned).toBe(true);
   });
 });
