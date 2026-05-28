@@ -206,8 +206,19 @@ export class BuildPhasePlanner {
     }
 
     // ── Phase B: Build ────────────────────────────────────────────────────
-    const buildTarget = resolveBuildTarget(activeRoute, context);
-    if (!buildTarget) {
+    // JIRA-247: When Phase A's A3 origin-is-current-pos branch already
+    // committed a BuildTrack into the plan list, skip Phase B's independent
+    // build attempt — Phase B's computeBuildSegments invocation can return []
+    // at medium-city outer mileposts and produce a no-op PassTurn that masks
+    // the already-committed build.
+    const phaseAEmittedBuild = phaseAResult.accumulatedPlans.some(
+      p => p.type === AIActionType.BuildTrack,
+    );
+    const buildTarget = phaseAEmittedBuild ? null : resolveBuildTarget(activeRoute, context);
+    if (phaseAEmittedBuild) {
+      // trace.build.target was set by Phase A's A3 fix.
+      trace.build.skipped = true;
+    } else if (!buildTarget) {
       trace.build.skipped = true;
       trace.build.target = null;
     } else {
