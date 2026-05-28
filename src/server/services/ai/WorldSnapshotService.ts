@@ -12,6 +12,7 @@ import { LoadService } from '../loadService';
 import { getConnectedMajorCityCount } from './connectedMajorCities';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { loadGridPoints, gridToPixel } from '../MapTopology';
+import { activeEffectManager } from '../ActiveEffectManager';
 
 /**
  * Capture a frozen snapshot of the game world for AI evaluation.
@@ -37,7 +38,8 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
       p.is_bot,
       p.bot_config,
       p.current_turn_number,
-      COALESCE(pt.segments, '[]'::jsonb) AS segments
+      COALESCE(pt.segments, '[]'::jsonb)                AS segments,
+      COALESCE(pt.pending_flood_rebuilds, '[]'::jsonb)  AS pending_flood_rebuilds
     FROM games g
     JOIN players p ON p.game_id = g.id
     LEFT JOIN player_tracks pt ON pt.game_id = g.id AND pt.player_id = p.id
@@ -46,6 +48,9 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
     `,
     [gameId],
   );
+
+  // Fetch active event effects (read-only, no lock needed here)
+  const activeEffects = await activeEffectManager.getActiveEffects(gameId);
 
   if (result.rows.length === 0) {
     throw new Error(`No game found with id ${gameId}`);
@@ -161,10 +166,14 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
     }
   }
 
+  // Parse pending flood rebuilds for the bot player
+  const pendingFloodRebuilds = parseSegments(botRow.pending_flood_rebuilds);
+
   return {
     gameId,
     gameStatus,
     turnNumber: botRow.current_turn_number ?? 0,
+    activeEffects,
     bot: {
       playerId: botPlayerId,
       userId: botRow.user_id ?? '',
@@ -181,6 +190,7 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
       botConfig,
       connectedMajorCityCount: getConnectedMajorCityCount(botSegments),
       ferryHalfSpeed,
+      pendingFloodRebuilds,
     },
     allPlayerTracks,
     loadAvailability,
