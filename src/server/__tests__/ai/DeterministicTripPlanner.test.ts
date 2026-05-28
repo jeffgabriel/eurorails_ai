@@ -1326,6 +1326,120 @@ describe('planTripDeterministic', () => {
   });
 });
 
+// ── JIRA-259: active pickup/delivery restriction filter ──────────────
+
+describe('planTripDeterministic — JIRA-259 active-effect candidate filter', () => {
+  function makeStrikeEffect(zone: string[]): any {
+    return {
+      cardId: 121,
+      cardType: 'Strike',
+      drawingPlayerId: 'player-2',
+      drawingPlayerIndex: 1,
+      drawingPlayerTurnNumber: 4,
+      expiresAfterTurnNumber: 6,
+      affectedZone: new Set(zone),
+      restrictions: {
+        movement: [],
+        build: [],
+        pickupDelivery: [{ type: 'no_pickup_delivery_in_zone', zone }],
+      },
+      pendingLostTurns: [],
+    };
+  }
+
+  it('drops candidate whose stops[0] is a deliver at a Strike-blocked city (AC1)', () => {
+    // single-carry candidate: deliver Ham at DeliveryCity (key '7,7'). Strike blocks '7,7'.
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 1, totalBuildCost: 0, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
+    const demands = [
+      makeDemand({
+        cardIndex: 1,
+        loadType: 'Ham',
+        supplyCity: null,
+        deliveryCity: 'DeliveryCity',
+        payout: 31,
+        isLoadOnTrain: true,
+      }),
+    ];
+    const snapshot = makeSnapshot({ loads: ['Ham'] });
+    snapshot.activeEffects = [makeStrikeEffect(['7,7'])];
+    const context = makeContext(demands);
+    const memory = makeMemory();
+
+    const result = planTripDeterministic(snapshot, context, memory);
+
+    expect(result.outcome).toBe('no_feasible_candidates');
+    expect(result.route).toBeNull();
+    expect(result.reasoning).toContain('stop 0 at city blocked by active event');
+  });
+
+  it('regression guard: same fixture with no active Strike → route IS selected (AC2)', () => {
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 1, totalBuildCost: 0, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
+    const demands = [
+      makeDemand({
+        cardIndex: 1,
+        loadType: 'Ham',
+        supplyCity: null,
+        deliveryCity: 'DeliveryCity',
+        payout: 31,
+        isLoadOnTrain: true,
+      }),
+    ];
+    const snapshot = makeSnapshot({ loads: ['Ham'] });
+    snapshot.activeEffects = [];
+    const context = makeContext(demands);
+    const memory = makeMemory();
+
+    const result = planTripDeterministic(snapshot, context, memory);
+
+    expect(result.outcome).toBe('success');
+    expect(result.route).not.toBeNull();
+    expect(result.route!.stops[0]).toMatchObject({ action: 'deliver', city: 'DeliveryCity' });
+  });
+
+  it('returns no_feasible_candidates when ALL enumerated candidates lead with a blocked stop (AC3)', () => {
+    // Two demands, both delivering to DeliveryCity. All enumerated candidates have stops[0] = deliver at DeliveryCity.
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 1, totalBuildCost: 0, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Ham', supplyCity: null, deliveryCity: 'DeliveryCity', payout: 31, isLoadOnTrain: true }),
+    ];
+    const snapshot = makeSnapshot({ loads: ['Ham'] });
+    snapshot.activeEffects = [makeStrikeEffect(['7,7'])];
+    const context = makeContext(demands);
+    const memory = makeMemory();
+
+    const result = planTripDeterministic(snapshot, context, memory);
+
+    expect(result.outcome).toBe('no_feasible_candidates');
+    expect(result.route).toBeNull();
+  });
+
+  it('keeps candidate whose stops[0] is fine even if a LATER stop is at a Strike-blocked city (AC4)', () => {
+    // single-fresh candidate: pickup Coal at CityA (2,2 — not blocked), deliver Coal at DeliveryCity (7,7 — blocked).
+    // Only stops[0] is filtered, so this candidate survives.
+    mockSimulateTrip.mockReturnValue({ turnsToComplete: 2, totalBuildCost: 5, feasible: true, minCashRelative: 0, finalCashRelative: 0, builtSegments: [] });
+    const demands = [
+      makeDemand({
+        cardIndex: 1,
+        loadType: 'Coal',
+        supplyCity: 'CityA',
+        deliveryCity: 'DeliveryCity',
+        payout: 20,
+        isLoadOnTrain: false,
+      }),
+    ];
+    const snapshot = makeSnapshot();
+    snapshot.activeEffects = [makeStrikeEffect(['7,7'])]; // DeliveryCity blocked
+    const context = makeContext(demands);
+    const memory = makeMemory();
+
+    const result = planTripDeterministic(snapshot, context, memory);
+
+    expect(result.outcome).toBe('success');
+    expect(result.route).not.toBeNull();
+    expect(result.route!.stops[0]).toMatchObject({ action: 'pickup', city: 'CityA' });
+  });
+});
+
 // ── Upgrade emission (JIRA-220 follow-up) ─────────────────────────────
 
 describe('planTripDeterministic — upgrade emission', () => {
