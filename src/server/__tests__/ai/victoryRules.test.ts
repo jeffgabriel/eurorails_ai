@@ -983,7 +983,7 @@ describe('findFinalVictoryOutcome — JIRA-267 distance-aware + multiplicity-awa
     // (single short trip from a near-Aberdeen position). Holland wins on
     // turns despite the lower payout.
     const snapshot = makeSnapshot({
-      trainType: TrainType.SuperFreight,
+      trainType: TrainType.Superfreight,
       position: { row: 7, col: 29 }, // near Aberdeen, from T84 positionEnd in log
       loads: ['Fish'],
     });
@@ -1026,7 +1026,7 @@ describe('findFinalVictoryOutcome — JIRA-267 distance-aware + multiplicity-awa
     // Holland (lowest estimatedTurns) wins. This is the unchanged behavior of
     // the existing non-carry path; the test guards against regression.
     const snapshot = makeSnapshot({
-      trainType: TrainType.SuperFreight,
+      trainType: TrainType.Superfreight,
       position: { row: 7, col: 29 },
       loads: [], // Fish not yet picked up
     });
