@@ -97,14 +97,42 @@ export async function getMemory(gameId: string, playerId: string): Promise<BotMe
 }
 
 /**
+ * JIRA-253 Layer B: TTL for recentlyAbandonedRouteKeys entries.
+ * Entries older than this many turns are evicted on each memory update.
+ */
+const ABANDONED_ROUTE_KEY_TTL_TURNS = 3;
+
+/**
+ * Evict stale entries from recentlyAbandonedRouteKeys based on the current turn.
+ * Returns a new array with entries older than ABANDONED_ROUTE_KEY_TTL_TURNS removed.
+ */
+function evictStaleAbandonedRouteKeys(
+  keys: Array<{ key: string; abandonedAtTurn: number }> | undefined,
+  currentTurn: number,
+): Array<{ key: string; abandonedAtTurn: number }> {
+  if (!keys || keys.length === 0) return [];
+  return keys.filter(entry => currentTurn - entry.abandonedAtTurn <= ABANDONED_ROUTE_KEY_TTL_TURNS);
+}
+
+/**
  * Update the memory state for a bot (shallow merge).
  * Writes through to DB after updating the in-memory Map.
+ * Applies TTL eviction on recentlyAbandonedRouteKeys before persisting.
  */
 export async function updateMemory(gameId: string, playerId: string, patch: Partial<BotMemoryState>): Promise<void> {
   const key = memoryKey(gameId, playerId);
   const cached = memoryStore.get(key);
   const current = cached !== undefined ? cached : defaultState();
   const merged = { ...current, ...patch };
+
+  // Apply TTL eviction on the merged state so stale entries are cleared
+  // on every turn update regardless of whether the patch touches this field.
+  const currentTurn = merged.turnNumber ?? 0;
+  merged.recentlyAbandonedRouteKeys = evictStaleAbandonedRouteKeys(
+    merged.recentlyAbandonedRouteKeys,
+    currentTurn,
+  );
+
   memoryStore.set(key, merged);
   await saveMemoryToDB(gameId, playerId, merged);
 }

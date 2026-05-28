@@ -58,6 +58,42 @@ import { TurnExecutor } from './TurnExecutor';
 import { MovementPhasePlanner } from './MovementPhasePlanner';
 import { BuildPhasePlanner } from './BuildPhasePlanner';
 
+// ── RouteAbandonRecord ───────────────────────────────────────────────────────
+
+/**
+ * JIRA-253: Typed union of reasons a route was abandoned in Phase A (A3).
+ * Used in CompositionTrace.abandonReasons[] for structured diagnostics.
+ */
+export type AbandonReason =
+  | 'partial_structurally_blocked_carry_deliver_on_network'
+  | 'partial_budget_limited_carry_deliver_not_blocked'
+  | 'empty_path_carry_deliver_on_network'
+  | 'origin_is_current_position'
+  | 'max_iterations'
+  | 'replan_returned_no_route';
+
+/**
+ * JIRA-253: Structured record of a route abandon decision made during Phase A (A3).
+ * Stored in CompositionTrace.abandonReasons[] to replace console.warn calls and
+ * enable post-hoc diagnostics of livelock scenarios.
+ */
+export interface RouteAbandonRecord {
+  /** The reason the route was abandoned. */
+  reason: AbandonReason;
+  /** Route stop index at which the abandon was detected. */
+  atStopIndex: number;
+  /** The city the bot was trying to build toward when A3 fired. */
+  buildTargetCity: string | null;
+  /** How many segments were in the partial build path (0 if empty path). */
+  partialPathLength: number;
+  /** True when the last segment reached the target (full path, not partial). */
+  partialPathReachedTarget: boolean;
+  /** True when isStructurallyReachable confirmed the target is reachable given infinite budget. Null when not checked. */
+  structurallyReachableUnbounded: boolean | null;
+  /** Load types that are deliverable on the current network (carry-deliver candidates). */
+  carryDeliverableLoadTypes: string[];
+}
+
 // ── CompositionTrace ────────────────────────────────────────────────────────
 
 /**
@@ -117,6 +153,18 @@ export interface CompositionTrace {
     stopActionMs: number;
     stopActionCount: number;
   };
+  /**
+   * JIRA-249/250: Structured records of candidates rejected by the grammar
+   * validator (isCandidateGrammaticallyValid) before scoring. Optional —
+   * only populated when the deterministic planner is active and rejections occur.
+   */
+  candidateRejections?: import('./DeterministicTripPlanner').CandidateRejection[];
+  /**
+   * JIRA-253: Structured records of route abandon decisions made during Phase A.
+   * Each entry documents WHY a route was abandoned — distinguishes budget-limited
+   * partials from structurally blocked paths, and records carry-deliver pivot results.
+   */
+  abandonReasons?: RouteAbandonRecord[];
   /** JIRA-179: Build Route Resolver candidate comparison — only present when ENABLE_BUILD_RESOLVER=true */
   buildResolver?: {
     enabled: true;

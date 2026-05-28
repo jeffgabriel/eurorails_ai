@@ -1409,7 +1409,14 @@ export class AIStrategyEngine {
     snapshot: WorldSnapshot,
     tag: string,
     deliveryCount: number,
+    routeAbandonedThisTurn: boolean = false,
   ): { action: TurnPlanUpgradeTrain | null; reason?: string } {
+    // JIRA-253 Layer C: Suppress upgrade when route was abandoned this turn
+    if (routeAbandonedThisTurn) {
+      console.warn(`${tag} JIRA-253: upgradeOnRoute suppressed — route_abandoned_this_turn`);
+      return { action: null, reason: 'Upgrade suppressed: route_abandoned_this_turn' };
+    }
+
     const targetTrain = route.upgradeOnRoute!;
     route.upgradeOnRoute = undefined; // one-time consumption
 

@@ -183,9 +183,11 @@ function computePathCost(
 
   for (const fromCoord of fromCoords) {
     for (const toCoord of toCoords) {
-      // Skip trivial same-point case early
+      // Skip trivial same-point case early.
+      // Same-city pickups/deliveries consume zero turns per game rules — the
+      // train is already at the location, so no movement is required.
       if (fromCoord.row === toCoord.row && fromCoord.col === toCoord.col) {
-        const trivial: PathCost = { buildCost: 0, pathLength: 1, estimatedTurns: 1, reachable: true, newSegments: [] };
+        const trivial: PathCost = { buildCost: 0, pathLength: 1, estimatedTurns: 0, reachable: true, newSegments: [] };
         if (bestResult === null || trivial.pathLength < bestResult.pathLength) {
           bestResult = trivial;
         }

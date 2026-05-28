@@ -603,6 +603,20 @@ export interface BotMemoryState {
      * never reverts to Mid — even after temporary cash dips from building.
      */
     gameState?: GameState;
+    /**
+     * JIRA-253 Layer B: Recently abandoned route signatures with the turn they were abandoned.
+     * Entries are evicted after 3 turns. Used by TripPlanner to exclude re-selection of
+     * routes that were just abandoned — prevents single-turn livelock re-selection.
+     * Format: Array<{ key: string; abandonedAtTurn: number }>
+     */
+    recentlyAbandonedRouteKeys?: Array<{ key: string; abandonedAtTurn: number }>;
+    /**
+     * JIRA-255: Sticky end-game routing flag. Once set true (cash > 200M OR classifyGamePhase
+     * returns 'late'), never reverts — even after temporary cash dips from track building.
+     * When true, the trip planner switches from per-turn velocity ranking to fewest-turns-
+     * to-victory ranking for win-completing candidates.
+     */
+    endGameLocked?: boolean;
 }
 
 /** Simplified option summary for decision logging */
