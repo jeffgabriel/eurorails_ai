@@ -1115,6 +1115,7 @@ describe('validateRouteCarryPreconditions (JIRA-273)', () => {
       currentStopIndex: 0,
       phase: 'travel' as const,
       createdAtTurn: 0,
+      reasoning: 'test',
     };
   }
 
