@@ -211,8 +211,20 @@ export interface GameTurnLogEntry {
    * zones, pendingLostTurns per player, expiry turn, drawing player. Undefined
    * or omitted when no events are active. Companion to the parallel
    * `logs/events-<gameId>.ndjson` event-lifecycle log.
+   *
+   * JIRA-275: each entry is augmented with a derived `restrictionTypes` list
+   * so a reader sees `load_lost` / `turn_lost` / `speed_halved` / etc. without
+   * cross-referencing the events file. The events file's `restrictionTypes`
+   * convention is mirrored here.
    */
-  activeEffects?: import('../../../shared/types/EventCard').ActiveEffect[];
+  activeEffects?: Array<import('../../../shared/types/EventCard').ActiveEffect & { restrictionTypes?: string[] }>;
+  /**
+   * JIRA-275: Loads removed from the train this turn that were NOT delivered
+   * (event-card loss, voluntary drop, or any other non-delivery removal).
+   * City defaults to the bot's start-of-turn city since the load was on the
+   * train when the loss happened.
+   */
+  loadsLost?: Array<{ loadType: string; city: string }>;
   /**
    * JIRA-262: Per-turn snapshot of the bot's pending Flood-rebuild segments
    * (track erased by an active Flood event that this bot has not yet rebuilt).

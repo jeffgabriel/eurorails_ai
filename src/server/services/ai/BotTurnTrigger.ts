@@ -16,6 +16,69 @@ import { VictoryService } from '../victoryService';
 import { TrackService } from '../trackService';
 import { getConnectedMajorCities } from './connectedMajorCities';
 import { VICTORY_INITIAL_THRESHOLD } from '../../../shared/types/GameTypes';
+import { EventCardType, ActiveEffect } from '../../../shared/types/EventCard';
+
+// JIRA-275: track each bot's last-known carriedLoads so we can detect loads
+// that disappeared between turns (event-card loss / voluntary drop) on the
+// turn the loss becomes visible to the bot.
+const prevCarriedLoadsCache = new Map<string, string[]>();
+
+// JIRA-275: derive a flat restriction-types list per active effect so a reader
+// of game-*.ndjson sees `load_lost` / `turn_lost` / `speed_halved` / etc.
+// without consulting the parallel events file. Mirrors the events-file
+// `restrictionTypes` convention (set in playerService:207).
+function deriveRestrictionTypes(effect: ActiveEffect): string[] {
+  const set = new Set<string>();
+  switch (effect.cardType) {
+    case EventCardType.Derailment:
+      set.add('load_lost');
+      set.add('turn_lost');
+      break;
+    case EventCardType.Strike:
+      if (effect.restrictions.pickupDelivery.length > 0) set.add('no_pickup_delivery');
+      for (const r of effect.restrictions.movement) {
+        if (r.type === 'no_movement_on_player_rail') set.add('no_movement_on_player_rail');
+      }
+      for (const r of effect.restrictions.build) {
+        if (r.type === 'no_build_for_player') set.add('no_build_for_player');
+      }
+      break;
+    case EventCardType.Snow:
+      set.add('speed_halved');
+      if (effect.restrictions.build.some(r => r.type === 'blocked_terrain')
+        || effect.restrictions.movement.some(r => r.type === 'blocked_terrain')) {
+        set.add('blocked_terrain');
+      }
+      break;
+    case EventCardType.Flood:
+      set.add('track_erased');
+      break;
+    case EventCardType.ExcessProfitTax:
+      set.add('tax_paid');
+      break;
+  }
+  if (effect.pendingLostTurns.length > 0) set.add('turn_lost');
+  return Array.from(set);
+}
+
+// JIRA-275: multiset diff (prev minus current) of carried-load strings.
+// Anything that disappeared AND wasn't delivered this turn is "lost".
+function computeLostLoads(
+  prevLoads: string[],
+  currentLoads: string[],
+  deliveredLoadTypes: string[],
+): string[] {
+  const remaining = [...prevLoads];
+  for (const load of currentLoads) {
+    const idx = remaining.indexOf(load);
+    if (idx >= 0) remaining.splice(idx, 1);
+  }
+  for (const delivered of deliveredLoadTypes) {
+    const idx = remaining.indexOf(delivered);
+    if (idx >= 0) remaining.splice(idx, 1);
+  }
+  return remaining;
+}
 
 /**
  * All possible outcomes of a single victory check.
@@ -273,6 +336,27 @@ export async function onTurnChange(
       console.log(`[BotTurnTrigger] Bot ${currentPlayerId} declared victory in game ${gameId}`);
     }
 
+    // JIRA-275: compute lost-loads diff against this bot's previous turn and
+    // augment activeEffects entries with derived restrictionTypes before
+    // writing the NDJSON entry.
+    const loadsCacheKey = `${gameId}:${currentPlayerId}`;
+    const prevLoads = prevCarriedLoadsCache.get(loadsCacheKey) ?? [];
+    const currentLoads = result.carriedLoads ?? [];
+    const deliveredLoadTypes = (result.loadsDelivered ?? []).map(d => d.loadType);
+    const lostLoadTypes = computeLostLoads(prevLoads, currentLoads, deliveredLoadTypes);
+    const lossCity = result.positionStart?.cityName
+      ?? result.positionEnd?.cityName
+      ?? 'unknown';
+    const loadsLost = lostLoadTypes.length > 0
+      ? lostLoadTypes.map(loadType => ({ loadType, city: lossCity }))
+      : undefined;
+    prevCarriedLoadsCache.set(loadsCacheKey, currentLoads);
+
+    const activeEffectsEnriched = result.activeEffects?.map(e => ({
+      ...e,
+      restrictionTypes: deriveRestrictionTypes(e),
+    }));
+
     // JIRA-32: Append structured turn log to NDJSON game file
     try {
       appendTurn(gameId, {
@@ -344,7 +428,9 @@ export async function onTurnChange(
         // Event card restriction rejection reason (if applicable)
         rejectionReason: result.rejectionReason,
         // JIRA-262: per-turn event-card observability for post-hoc analysis
-        activeEffects: result.activeEffects,
+        // JIRA-275: activeEffects entries carry derived restrictionTypes
+        activeEffects: activeEffectsEnriched,
+        loadsLost,
         pendingFloodRebuilds: result.pendingFloodRebuilds,
       });
     } catch (logError) {

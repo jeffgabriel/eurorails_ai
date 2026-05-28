@@ -22,6 +22,7 @@ import {
   StrategicRoute,
   GridPoint,
   BotMemoryState,
+  RouteStop,
 } from '../../../shared/types/GameTypes';
 import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
@@ -34,6 +35,17 @@ import type { Stage3Result } from './schemas';
  * bot PassTurn forever.
  */
 const STUCK_ROUTE_PASSTURN_THRESHOLD = 3;
+
+// JIRA-275: render the route plan inline in the route-executor reasoning so
+// a reader scanning game-*.ndjson sees the full plan without cross-referencing
+// activeRoute.stops. ▶ = current stop, ✓ = completed, • = upcoming.
+function renderRoutePlan(stops: ReadonlyArray<RouteStop>, currentStopIndex: number): string {
+  const parts = stops.map((s, i) => {
+    const marker = i < currentStopIndex ? '✓' : i === currentStopIndex ? '▶' : '•';
+    return `${marker} ${s.action.toUpperCase()} ${s.loadType} @ ${s.city}`;
+  });
+  return `Route: ${parts.join(' → ')}`;
+}
 
 // ── ActiveRouteContinuer ──────────────────────────────────────────────────
 
@@ -118,7 +130,7 @@ export class ActiveRouteContinuer {
 
     const baseReasoning = isStuck
       ? `[stuck-route-abandon] no progress for ${turnsOnRoute + 1} turns (a2=${execResult.compositionTrace.a2.terminationReason || 'none'}); abandoning so TripPlanner can replan`
-      : `[route-executor] stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}`;
+      : `[route-executor] ${renderRoutePlan(activeRoute.stops, activeRoute.currentStopIndex)}, phase=${activeRoute.phase}`;
 
     const reasoning = replanRouteReasoning.trim().length > 0
       ? `${baseReasoning}; replan triggered\n\n${replanRouteReasoning}`
