@@ -16,6 +16,10 @@ import {
   cheapestNUnconnectedMajorConnectorCost,
   detectVictoryClinch,
   findFinalVictoryRoute,
+  findFinalVictoryOutcome,
+  buildEndGameTrace,
+  buildEffectiveCarrySet,
+  type FinalVictoryOutcome,
 } from '../../services/ai/victoryRules';
 import { GameState, GameContext, TrainType, WorldSnapshot } from '../../../shared/types/GameTypes';
 import type { BotMemoryState, DemandContext } from '../../../shared/types/GameTypes';
@@ -695,5 +699,408 @@ describe('findFinalVictoryRoute', () => {
     const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
     expect(result).not.toBeNull();
     expect(result!.reasoning).toMatch(/^\[final-victory\]/);
+  });
+});
+
+// ── findFinalVictoryOutcome (JIRA-265) ───────────────────────────────────────
+
+describe('findFinalVictoryOutcome', () => {
+  // JIRA-265 AC2: skip-reason exposure on the null path
+  it('returns skip:not_in_end_state when context.gameState is not End', () => {
+    const snapshot = makeSnapshot();
+    const ctx = makeEndContext({ gameState: GameState.Mid, demands: [makeDemand()] });
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+    expect(result.outcome).toBe('skip');
+    if (result.outcome === 'skip') expect(result.reason).toBe('not_in_end_state');
+  });
+
+  it('returns skip:no_demands when demand hand is empty', () => {
+    const snapshot = makeSnapshot();
+    const ctx = makeEndContext({ demands: [] });
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+    expect(result.outcome).toBe('skip');
+    if (result.outcome === 'skip') expect(result.reason).toBe('no_demands');
+  });
+
+  it('returns skip:victory_met when both gaps are zero (game should have ended)', () => {
+    const snapshot = makeSnapshot();
+    const ctx = makeEndContext({
+      money: 250,
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+      demands: [makeDemand()],
+    });
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+    expect(result.outcome).toBe('skip');
+    if (result.outcome === 'skip') expect(result.reason).toBe('victory_met');
+  });
+
+  it('returns skip:no_route_covers_gap when no candidate clears the cashGap', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    // cashGap = 250 - 200 = 50M. Only demand pays $10M with on-network supply/delivery.
+    const ctx = makeEndContext({
+      money: 200,
+      demands: [
+        makeDemand({ payout: 10, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true }),
+      ],
+    });
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+    expect(result.outcome).toBe('skip');
+    if (result.outcome === 'skip') {
+      expect(result.reason).toBe('no_route_covers_gap');
+      expect(result.cashGap).toBe(50);
+    }
+  });
+
+  it('returns fire with route + gap details when a feasible candidate exists', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const ctx = makeEndContext({
+      money: 241,
+      demands: [
+        makeDemand({
+          payout: 10, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2,
+        }),
+      ],
+    });
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+    expect(result.outcome).toBe('fire');
+    if (result.outcome === 'fire') {
+      expect(result.route.reasoning).toMatch(/^\[final-victory\]/);
+      expect(result.cashGap).toBe(9);
+    }
+  });
+
+  it('legacy findFinalVictoryRoute still returns route on fire and null on skip', () => {
+    const snapshot = makeSnapshot();
+    const ctxSkip = makeEndContext({ demands: [] });
+    expect(findFinalVictoryRoute(snapshot, ctxSkip, makeEndMemory())).toBeNull();
+
+    const ctxFire = makeEndContext({
+      money: 241,
+      demands: [
+        makeDemand({ payout: 10, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
+      ],
+    });
+    expect(findFinalVictoryRoute(snapshot, ctxFire, makeEndMemory())).not.toBeNull();
+  });
+});
+
+// ── buildEndGameTrace (JIRA-265) ─────────────────────────────────────────────
+
+describe('buildEndGameTrace', () => {
+  it('JIRA-265 AC1: trace populated with cashGap/majorsGap/cheapestConnectors/fullWinCostM', () => {
+    const ctx = makeEndContext({
+      money: 210,
+      connectedMajorCities: ['Ruhr', 'Berlin', 'Madrid', 'London'],
+      unconnectedMajorCities: [
+        { cityName: 'Holland', estimatedCost: 20 },
+        { cityName: 'Paris', estimatedCost: 15 },
+        { cityName: 'Wien', estimatedCost: 25 },
+        { cityName: 'Milano', estimatedCost: 30 },
+      ],
+    });
+    const memory = makeEndMemory();
+    const skipOutcome: FinalVictoryOutcome = { outcome: 'skip', reason: 'no_route_covers_gap', cashGap: 40, majorsGap: 3, connectorCost: 60 };
+    const trace = buildEndGameTrace(ctx, memory, skipOutcome, false, null);
+
+    expect(trace.inEndGame).toBe(true);
+    expect(trace.cashGapM).toBe(40);
+    expect(trace.majorsGap).toBe(3);
+    expect(trace.cheapestConnectors).toEqual([
+      { cityName: 'Holland', costM: 20 },
+      { cityName: 'Paris', costM: 15 },
+      { cityName: 'Wien', costM: 25 },
+    ]);
+    expect(trace.fullWinCostM).toBe(100); // 40 + 20 + 15 + 25
+  });
+
+  it('JIRA-265 AC2: victoryRouteProjection carries skip reason', () => {
+    const ctx = makeEndContext({ money: 210 });
+    const skipOutcome: FinalVictoryOutcome = { outcome: 'skip', reason: 'no_feasible_demands' };
+    const trace = buildEndGameTrace(ctx, makeEndMemory(), skipOutcome, false, null);
+    expect(trace.victoryRouteProjection.outcome).toBe('skip');
+    if (trace.victoryRouteProjection.outcome === 'skip') {
+      expect(trace.victoryRouteProjection.reason).toBe('no_feasible_demands');
+    }
+  });
+
+  it('JIRA-265 AC3: victoryRouteProjection carries fire details + appliedOverride flag', () => {
+    const ctx = makeEndContext({ money: 241 });
+    const fireOutcome: FinalVictoryOutcome = {
+      outcome: 'fire',
+      cashGap: 9, majorsGap: 0, connectorCost: 0,
+      route: {
+        stops: [
+          { action: 'pickup', loadType: 'Beer', city: 'Munchen' },
+          { action: 'deliver', loadType: 'Beer', city: 'Hamburg', demandCardId: 1, payment: 9 },
+        ],
+        estimatedTurns: 3, buildCost: 0, totalPayout: 9,
+        cashAtVictory: 250, majorsAtVictory: 7,
+        majorConnectors: [],
+        reasoning: '[final-victory] Beer→Hamburg, turns=3, build=0M, payout=9M, cash@victory=250M, majors@victory=7',
+      },
+    };
+    const trace = buildEndGameTrace(ctx, makeEndMemory(), fireOutcome, true, null);
+    expect(trace.victoryRouteProjection.outcome).toBe('fire');
+    if (trace.victoryRouteProjection.outcome === 'fire') {
+      expect(trace.victoryRouteProjection.turns).toBe(3);
+      expect(trace.victoryRouteProjection.payoutM).toBe(9);
+      expect(trace.victoryRouteProjection.cashAtVictory).toBe(250);
+      expect(trace.victoryRouteProjection.appliedOverride).toBe(true);
+      expect(trace.victoryRouteProjection.stops).toEqual([
+        'pickup:Beer@Munchen',
+        'deliver:Beer@Hamburg',
+      ]);
+    }
+  });
+
+  it('JIRA-265 AC7-component: activePlanProjection.willClinch reflects route payouts + connector deliveries', () => {
+    const ctx = makeEndContext({
+      money: 228,
+      connectedMajorCities: ['Ruhr', 'Berlin', 'Madrid', 'London', 'Wien', 'Paris', 'Milano'], // 7 already
+      unconnectedMajorCities: [{ cityName: 'Holland', estimatedCost: 20 }],
+    });
+    const activeRoute = {
+      stops: [
+        { action: 'deliver' as const, loadType: 'Copper', city: 'Cardiff', demandCardId: 99, payment: 31 },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel' as const,
+      createdAtTurn: 76,
+      reasoning: 'test',
+    };
+    const skipOutcome: FinalVictoryOutcome = { outcome: 'skip', reason: 'no_route_covers_gap' };
+    const trace = buildEndGameTrace(ctx, makeEndMemory(), skipOutcome, false, activeRoute);
+    expect(trace.activePlanProjection).toBeDefined();
+    expect(trace.activePlanProjection!.projectedCash).toBe(259); // 228 + 31
+    expect(trace.activePlanProjection!.projectedMajors).toBe(7); // already 7, Cardiff not a major
+    expect(trace.activePlanProjection!.willClinch).toBe(true); // 259 >= 250 AND 7 >= 7
+    expect(trace.activePlanProjection!.remainingStops).toBe(1);
+  });
+
+  it('activePlanProjection.willClinch=false when projectedCash insufficient', () => {
+    const ctx = makeEndContext({
+      money: 200,
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+    });
+    const activeRoute = {
+      stops: [
+        { action: 'deliver' as const, loadType: 'X', city: 'CityX', demandCardId: 1, payment: 10 },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel' as const,
+      createdAtTurn: 50,
+      reasoning: 'test',
+    };
+    const skipOutcome: FinalVictoryOutcome = { outcome: 'skip', reason: 'no_route_covers_gap' };
+    const trace = buildEndGameTrace(ctx, makeEndMemory(), skipOutcome, false, activeRoute);
+    expect(trace.activePlanProjection!.projectedCash).toBe(210);
+    expect(trace.activePlanProjection!.willClinch).toBe(false); // 210 < 250
+  });
+
+  it('activePlanProjection undefined when activeRoute is null', () => {
+    const ctx = makeEndContext({ money: 210 });
+    const skipOutcome: FinalVictoryOutcome = { outcome: 'skip', reason: 'no_route_covers_gap' };
+    const trace = buildEndGameTrace(ctx, makeEndMemory(), skipOutcome, false, null);
+    expect(trace.activePlanProjection).toBeUndefined();
+  });
+});
+
+// ── buildEffectiveCarrySet (JIRA-267 Fix B) ──────────────────────────────────
+
+describe('buildEffectiveCarrySet — multiplicity-aware carry detection', () => {
+  it('AC3: one Fish chip + three Fish demands → only highest-payout demand is effectively carried', () => {
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Fish', deliveryCity: 'Bern', payout: 37 }),
+      makeDemand({ cardIndex: 2, loadType: 'Fish', deliveryCity: 'Milano', payout: 27 }),
+      makeDemand({ cardIndex: 3, loadType: 'Fish', deliveryCity: 'Holland', payout: 23 }),
+    ];
+    const effective = buildEffectiveCarrySet(demands, ['Fish']);
+    expect(effective.has(1)).toBe(true);  // Fish→Bern wins the slot (highest payout)
+    expect(effective.has(2)).toBe(false); // Fish→Milano not carried
+    expect(effective.has(3)).toBe(false); // Fish→Holland not carried
+  });
+
+  it('AC4: three Fish chips + three Fish demands → all three marked carried', () => {
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Fish', deliveryCity: 'Bern', payout: 37 }),
+      makeDemand({ cardIndex: 2, loadType: 'Fish', deliveryCity: 'Milano', payout: 27 }),
+      makeDemand({ cardIndex: 3, loadType: 'Fish', deliveryCity: 'Holland', payout: 23 }),
+    ];
+    const effective = buildEffectiveCarrySet(demands, ['Fish', 'Fish', 'Fish']);
+    expect(effective.has(1)).toBe(true);
+    expect(effective.has(2)).toBe(true);
+    expect(effective.has(3)).toBe(true);
+  });
+
+  it('mixed cargo + mixed demands: each loadType handled independently', () => {
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Fish', deliveryCity: 'Bern', payout: 37 }),
+      makeDemand({ cardIndex: 2, loadType: 'Fish', deliveryCity: 'Holland', payout: 23 }),
+      makeDemand({ cardIndex: 3, loadType: 'Coal', deliveryCity: 'Berlin', payout: 30 }),
+      makeDemand({ cardIndex: 4, loadType: 'Coal', deliveryCity: 'Paris', payout: 18 }),
+    ];
+    // One Fish chip → only Bern (higher payout). One Coal chip → only Berlin.
+    const effective = buildEffectiveCarrySet(demands, ['Fish', 'Coal']);
+    expect(effective.has(1)).toBe(true);
+    expect(effective.has(2)).toBe(false);
+    expect(effective.has(3)).toBe(true);
+    expect(effective.has(4)).toBe(false);
+  });
+
+  it('empty cargo → no effective carries', () => {
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Fish', deliveryCity: 'Bern', payout: 37 }),
+    ];
+    const effective = buildEffectiveCarrySet(demands, []);
+    expect(effective.size).toBe(0);
+  });
+
+  it('more chips than matching demands → only as many cards as exist get marked', () => {
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Fish', deliveryCity: 'Bern', payout: 37 }),
+    ];
+    // 3 chips, but only 1 demand exists for the loadType
+    const effective = buildEffectiveCarrySet(demands, ['Fish', 'Fish', 'Fish']);
+    expect(effective.size).toBe(1);
+    expect(effective.has(1)).toBe(true);
+  });
+});
+
+// ── findFinalVictoryOutcome carry-deliver distance + multiplicity (JIRA-267) ─
+
+describe('findFinalVictoryOutcome — JIRA-267 distance-aware + multiplicity-aware carry handling', () => {
+  it('AC2 replay (game 29c0255f Sonnet T85) — picks Holland (closest) not Bern (farthest) when carrying one Fish chip', () => {
+    // Reconstructed from logs/game-29c0255f-1374-4304-a003-8f2dfc4ed257.ndjson
+    // Sonnet T85 turn-start state: bot near Aberdeen at (7,29) post-pickup,
+    // one Fish chip on board, three Fish demand cards, all delivery cities
+    // on-network. Pre-JIRA-267: all three carry-deliver candidates estimate
+    // at 1 turn → tiebreak on cashAtVictory DESC picks Bern (highest payout).
+    // After JIRA-267: only the highest-payout Fish demand (Bern) is marked
+    // effective-carry; Milano/Holland become pickup+deliver candidates with
+    // path-aware turn estimates. For Bern's single-carry candidate, the
+    // distance from (7,29) to Bern (37,40) is ~30 hex / 12 speed = 3 turns.
+    // For Holland's pickup+deliver candidate, d.estimatedTurns is ~2 turns
+    // (single short trip from a near-Aberdeen position). Holland wins on
+    // turns despite the lower payout.
+    const snapshot = makeSnapshot({
+      trainType: TrainType.Superfreight,
+      position: { row: 7, col: 29 }, // near Aberdeen, from T84 positionEnd in log
+      loads: ['Fish'],
+    });
+    const ctx = makeEndContext({
+      money: 228,
+      // Sonnet had 7 majors at T84 — city condition met; this turn is about closing cashGap.
+      connectedMajorCities: ['Paris', 'Holland', 'Ruhr', 'Berlin', 'London', 'Wien', 'Madrid'],
+      unconnectedMajorCities: [],
+      demands: [
+        makeDemand({
+          cardIndex: 1, loadType: 'Fish', supplyCity: 'Aberdeen', deliveryCity: 'Bern',
+          payout: 37, isLoadOnTrain: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+          estimatedTurns: 4, // path-aware (irrelevant for carry branch post-fix)
+        }),
+        makeDemand({
+          cardIndex: 2, loadType: 'Fish', supplyCity: 'Aberdeen', deliveryCity: 'Milano',
+          payout: 27, isLoadOnTrain: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+          estimatedTurns: 5,
+        }),
+        makeDemand({
+          cardIndex: 3, loadType: 'Fish', supplyCity: 'Aberdeen', deliveryCity: 'Holland',
+          payout: 23, isLoadOnTrain: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+          estimatedTurns: 2, // path-aware (used by Holland's pickup+deliver candidate post-fix)
+        }),
+      ],
+    });
+
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+
+    expect(result.outcome).toBe('fire');
+    if (result.outcome === 'fire') {
+      const deliveryStop = result.route.stops.find(s => s.action === 'deliver');
+      expect(deliveryStop?.city).toBe('Holland'); // closest, beats Bern on turns
+    }
+  });
+
+  it('AC6 (no regression — Sonnet T84 pre-pickup): picks Holland via path-aware pickup+deliver turns', () => {
+    // Same demand cards, but Fish NOT yet on the train. All three Fish demands
+    // become pickup+deliver candidates with d.estimatedTurns from ContextBuilder.
+    // Holland (lowest estimatedTurns) wins. This is the unchanged behavior of
+    // the existing non-carry path; the test guards against regression.
+    const snapshot = makeSnapshot({
+      trainType: TrainType.Superfreight,
+      position: { row: 7, col: 29 },
+      loads: [], // Fish not yet picked up
+    });
+    const ctx = makeEndContext({
+      money: 228,
+      connectedMajorCities: ['Paris', 'Holland', 'Ruhr', 'Berlin', 'London', 'Wien', 'Madrid'],
+      unconnectedMajorCities: [],
+      demands: [
+        makeDemand({
+          cardIndex: 1, loadType: 'Fish', supplyCity: 'Aberdeen', deliveryCity: 'Bern',
+          payout: 37, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+          estimatedTurns: 9,
+        }),
+        makeDemand({
+          cardIndex: 2, loadType: 'Fish', supplyCity: 'Aberdeen', deliveryCity: 'Milano',
+          payout: 27, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+          estimatedTurns: 8,
+        }),
+        makeDemand({
+          cardIndex: 3, loadType: 'Fish', supplyCity: 'Aberdeen', deliveryCity: 'Holland',
+          payout: 23, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+          estimatedTurns: 6,
+        }),
+      ],
+    });
+
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+
+    expect(result.outcome).toBe('fire');
+    if (result.outcome === 'fire') {
+      const deliveryStop = result.route.stops.find(s => s.action === 'deliver');
+      expect(deliveryStop?.city).toBe('Holland'); // wins on lowest estimatedTurns
+    }
+  });
+
+  it('distance-aware carry estimate distinguishes near vs far delivery cities', () => {
+    // Same payout for two carry-deliver candidates — only distance should
+    // determine the winner. Pre-JIRA-267 both would tie at 1 turn and the
+    // tiebreak on cashAtVictory DESC would be arbitrary. After: closer city wins.
+    const snapshot = makeSnapshot({
+      trainType: TrainType.Freight, // speed 9
+      position: { row: 10, col: 10 },
+      loads: ['Wine'],
+    });
+    const ctx = makeEndContext({
+      money: 230, // cashGap = 20
+      connectedMajorCities: ['Paris', 'Holland', 'Ruhr', 'Berlin', 'London', 'Wien', 'Madrid'],
+      unconnectedMajorCities: [],
+      demands: [
+        // Holland at (20,38) — distance ~28 from (10,10) = ceil(28/9) = 4 turns
+        makeDemand({
+          cardIndex: 1, loadType: 'Wine', deliveryCity: 'Holland', payout: 30,
+          isLoadOnTrain: true, isDeliveryOnNetwork: true,
+        }),
+        // Aberdeen at (2,34) — distance ~24 from (10,10) = ceil(24/9) = 3 turns
+        // (closer than Holland from this position; same payout)
+        makeDemand({
+          cardIndex: 2, loadType: 'Wine', deliveryCity: 'Aberdeen', payout: 30,
+          isLoadOnTrain: true, isDeliveryOnNetwork: true,
+        }),
+      ],
+    });
+
+    // Only one chip → buildEffectiveCarrySet marks only one as effective carry
+    // (tiebreak on payout — both 30M; insertion order or first match). The other
+    // becomes a pickup+deliver candidate, which loses because supply/delivery
+    // distance would be larger than the carry case. Whichever wins, the
+    // outcome.route.stops should have at least one carry delivery.
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+    expect(result.outcome).toBe('fire');
+    // The key assertion: distance-aware estimate runs; the chosen route has
+    // turns > 1 (proving the constant-1 bug is gone).
+    if (result.outcome === 'fire') {
+      expect(result.route.estimatedTurns).toBeGreaterThanOrEqual(2);
+    }
   });
 });

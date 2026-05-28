@@ -9,6 +9,7 @@ import { mkdirSync, appendFile } from 'fs';
 import { join } from 'path';
 import { AIActionType, GameState, TimelineStep } from '../../../shared/types/GameTypes';
 import { VictoryCheckResult } from './BotTurnTrigger';
+import type { EndGameTrace } from './victoryRules';
 
 const LOGS_DIR = join(process.cwd(), 'logs');
 
@@ -176,14 +177,20 @@ export interface GameTurnLogEntry {
   // Populated on every bot turn that runs checkBotVictory; omitted when check was skipped.
   victoryCheck?: VictoryCheckResult;
 
-  // JIRA-255: End-game routing diagnostics.
-  // Only populated when end-game routing is active (endGameLocked=true) to prevent log noise.
-  /** True when the end-game lock is active for this turn; absent when not engaged. */
-  endGameLocked?: boolean;
-  /** Minimum cash required to win (ECU millions) including cheapest unconnected major city connections. */
-  fullWinCost?: number;
-  /** Number of candidates in the feasible set that would complete the win condition. */
-  winCompleterCount?: number;
+  /**
+   * JIRA-265: Per-turn end-game state. Populated on every turn where
+   * `gameState === 'end'`; absent when the bot is not in end-game state.
+   *
+   * Subsumes the prior dead fields `endGameLocked` / `fullWinCost` /
+   * `winCompleterCount` (never written by any producer) with a single
+   * structured object whose fields a reader can grep on:
+   *   - `cashGapM` / `majorsGap` / `fullWinCostM` — what's left to win
+   *   - `cheapestConnectors` — the unconnected majors needed to close the city condition
+   *   - `victoryRouteProjection` — the per-turn fire-or-skip outcome of findFinalVictoryRoute
+   *   - `endGameLocked` — current state of the planner's ranking carve-out flag
+   *   - `activePlanProjection` — whether the current activeRoute will clinch, when, with what cash
+   */
+  endGame?: EndGameTrace;
 
   // Execution Results
   success: boolean;

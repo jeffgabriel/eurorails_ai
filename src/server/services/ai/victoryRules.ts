@@ -16,11 +16,14 @@ import {
   END_GAME_ENTRY_CASH,
   VICTORY_CITY_COUNT,
   VICTORY_INITIAL_THRESHOLD,
+  DemandContext,
   RouteStop,
+  StrategicRoute,
   TrainType,
   TRAIN_PROPERTIES,
   WorldSnapshot,
 } from '../../../shared/types/GameTypes';
+import { loadGridPoints, hexDistance, GridPointData } from '../MapTopology';
 
 /**
  * A "victory clinch" — a currently-carried load + matching demand card whose
@@ -203,6 +206,73 @@ export interface FinalVictoryRoute {
 }
 
 /**
+ * JIRA-265: Discriminated-union outcome of a victory-route search.
+ * `findFinalVictoryRoute` returns a `FinalVictoryRoute | null` for callers that
+ * only care about the route. `findFinalVictoryOutcome` exposes the same
+ * computation but with the skip reason preserved so per-turn NDJSON logging can
+ * answer "why did this turn not produce a victory route override?" without
+ * re-running the search with stdout capture.
+ */
+export type FinalVictoryOutcomeSkipReason =
+  | 'not_in_end_state'
+  | 'no_demands'
+  | 'victory_met'
+  | 'no_feasible_demands'
+  | 'no_route_covers_gap';
+
+export type FinalVictoryOutcome =
+  | { outcome: 'fire'; route: FinalVictoryRoute; cashGap: number; majorsGap: number; connectorCost: number }
+  | { outcome: 'skip'; reason: FinalVictoryOutcomeSkipReason; cashGap?: number; majorsGap?: number; connectorCost?: number };
+
+/**
+ * JIRA-265: Per-turn end-game trace for the NDJSON log. Surfaces everything a
+ * post-game reader needs to answer "what does the bot need to win, and what's
+ * its plan to get there?" without re-running the search with stdout capture.
+ *
+ * Populated by AIStrategyEngine on every turn where `gameState === 'end'`.
+ */
+export interface EndGameTrace {
+  /** Always true when this trace is emitted (the GameLogger field is absent otherwise). */
+  inEndGame: true;
+  /** Snapshot of memory.endGameLocked AFTER this turn's latch decision. */
+  endGameLocked: boolean;
+  /** max(0, 250 − cash). Zero when cash already meets the victory threshold. */
+  cashGapM: number;
+  /** max(0, 7 − connectedMajorCities.length). Zero when city condition already met. */
+  majorsGap: number;
+  /** The cheapest `majorsGap` unconnected majors, sorted ascending by estimated track-cost. */
+  cheapestConnectors: Array<{ cityName: string; costM: number }>;
+  /** cashGapM + Σ cheapestConnectors.costM. Lower bound on the spend required to win. */
+  fullWinCostM: number;
+  /** Per-turn outcome of findFinalVictoryRoute, including the skip reason when no route fires. */
+  victoryRouteProjection:
+    | {
+        outcome: 'fire';
+        /** "pickup:Beer@Munchen, deliver:Beer@Hamburg" style stop summary. */
+        stops: string[];
+        turns: number;
+        buildM: number;
+        payoutM: number;
+        cashAtVictory: number;
+        majorsAtVictory: number;
+        /** True when AIStrategyEngine replaced activeRoute with this projection; false when JIRA-261 routesMatch suppressed the override. */
+        appliedOverride: boolean;
+      }
+    | { outcome: 'skip'; reason: FinalVictoryOutcomeSkipReason };
+  /** Projection of the bot's CURRENT activeRoute outcome, if any. Absent when no activeRoute. */
+  activePlanProjection?: {
+    /** True when the route's deliveries + connector closures would meet both victory conditions. */
+    willClinch: boolean;
+    /** money + Σ deliveries.payment in the remaining route. */
+    projectedCash: number;
+    /** connectedMajorCities.length + count of route deliveries to unconnected majors. */
+    projectedMajors: number;
+    /** Best-effort estimate of remaining stops; uses route length as a proxy until a turn estimator is wired. */
+    remainingStops: number;
+  };
+}
+
+/**
  * Internal candidate structure during route search.
  */
 interface VictoryCandidate {
@@ -237,40 +307,102 @@ function buildTurns(cost: number): number {
 }
 
 /**
+ * JIRA-267 Fix B: multiplicity-aware effective-carry set.
+ *
+ * `DemandContext.isLoadOnTrain` is keyed by loadType: `bot.loads.includes(loadType)`.
+ * So one Fish chip on board flags ALL Fish demand cards as carried, even though
+ * only one card can actually be fulfilled by that chip. This local helper builds
+ * a Set<cardIndex> matching JIRA-233's "highest-payout-wins-the-slot" semantics
+ * from `DeterministicTripPlanner.normalizeRows`, but without the cross-module
+ * dependency.
+ *
+ * For each loadType with chip count N in cargo, mark the top-N demand rows by
+ * payout (DESC) as effectively carried; the rest are NOT carried for the purpose
+ * of victory-route candidate enumeration.
+ */
+export function buildEffectiveCarrySet(
+  demands: DemandContext[],
+  cargoLoads: string[],
+): Set<number> {
+  const cargoCount = new Map<string, number>();
+  for (const load of cargoLoads) {
+    cargoCount.set(load, (cargoCount.get(load) ?? 0) + 1);
+  }
+  const effective = new Set<number>();
+  for (const [loadType, count] of cargoCount.entries()) {
+    const matching = demands
+      .filter((d) => d.loadType === loadType)
+      .sort((a, b) => b.payout - a.payout);
+    for (let i = 0; i < Math.min(count, matching.length); i++) {
+      effective.add(matching[i].cardIndex);
+    }
+  }
+  return effective;
+}
+
+/**
+ * JIRA-267 Fix A helper: find a delivery city's coords in the grid for the
+ * carry-deliver distance estimate. Linear scan — gridPoints typically holds
+ * ~2000 entries; called once per Fish demand per turn so it's not a hotspot.
+ */
+function findCityCoord(
+  cityName: string,
+  gridPoints: Map<string, GridPointData>,
+): { row: number; col: number } | null {
+  for (const [, point] of gridPoints) {
+    if (point.name === cityName) return { row: point.row, col: point.col };
+  }
+  return null;
+}
+
+/**
  * Estimate total turns for a single-demand route (pickup + deliver).
  *
- * When isLoadOnTrain the pickup turn is skipped.
- * estimatedTurns from DemandContext already encodes pathfinding-derived
- * turn estimates — reuse when available.
+ * When `isCarry` is true, the pickup leg is skipped and the delivery leg's
+ * travel cost uses the actual distance from the bot's current position to the
+ * delivery city (JIRA-267 Fix A — the previous implementation returned a
+ * constant 1-turn estimate, which caused the ranker to fall to a payout-based
+ * tiebreak across all carry-deliver candidates).
+ *
+ * `isCarry` is the multiplicity-aware effective carry from `buildEffectiveCarrySet`
+ * (JIRA-267 Fix B), not the raw `d.isLoadOnTrain` per-loadType flag.
  */
 function estimateSingleDemandTurns(
-  d: import('../../../shared/types/GameTypes').DemandContext,
+  d: DemandContext,
   speed: number,
+  isCarry: boolean,
+  botPosition: { row: number; col: number } | null,
+  gridPoints: Map<string, GridPointData>,
 ): number {
-  // DemandContext.estimatedTurns already incorporates travel costs.
-  // We use it as-is and add any extra build turns for off-network supply/delivery.
-  let turns = d.estimatedTurns ?? 3; // fallback when field missing
-  turns += buildTurns(d.isSupplyOnNetwork ? 0 : d.estimatedTrackCostToSupply);
-  turns += buildTurns(d.isDeliveryOnNetwork ? 0 : d.estimatedTrackCostToDelivery);
-  // For carried loads we skip the supply leg travel.
-  if (d.isLoadOnTrain) {
-    // estimatedTurns from ContextBuilder counts supply travel; subtract 1 trip leg.
-    // Use speed-based estimate for the carry case to avoid double-counting.
-    turns = travelTurns(1, speed); // at least 1 turn to deliver
+  // Non-carry: pickup+deliver. d.estimatedTurns is the path-aware turn count
+  // from ContextBuilder; add any extra build turns for off-network stops.
+  if (!isCarry) {
+    let turns = d.estimatedTurns ?? 3; // fallback when field missing
+    turns += buildTurns(d.isSupplyOnNetwork ? 0 : d.estimatedTrackCostToSupply);
     turns += buildTurns(d.isDeliveryOnNetwork ? 0 : d.estimatedTrackCostToDelivery);
+    return Math.max(1, turns);
   }
-  return Math.max(1, turns);
+
+  // Carry-deliver (JIRA-267 Fix A): travel from current bot position to the
+  // delivery city, plus build turns for any off-network delivery spur.
+  const deliveryCoord = findCityCoord(d.deliveryCity, gridPoints);
+  const travel = botPosition && deliveryCoord
+    ? travelTurns(hexDistance(botPosition.row, botPosition.col, deliveryCoord.row, deliveryCoord.col), speed)
+    : 1; // conservative fallback when position or city coord unavailable
+  const build = buildTurns(d.isDeliveryOnNetwork ? 0 : d.estimatedTrackCostToDelivery);
+  return Math.max(1, travel + build);
 }
 
 /**
  * Build stops for a pickup-then-deliver route for a demand d.
- * When isLoadOnTrain, only the deliver stop is emitted.
+ * When `isCarry` is true, only the deliver stop is emitted.
  */
 function buildStopsForDemand(
-  d: import('../../../shared/types/GameTypes').DemandContext,
+  d: DemandContext,
+  isCarry: boolean,
 ): RouteStop[] {
   const stops: RouteStop[] = [];
-  if (!d.isLoadOnTrain && d.supplyCity) {
+  if (!isCarry && d.supplyCity) {
     stops.push({ action: 'pickup', loadType: d.loadType, city: d.supplyCity });
   }
   stops.push({
@@ -288,9 +420,10 @@ function buildStopsForDemand(
  * Carried loads contribute 0 to supply build cost.
  */
 function demandBuildCost(
-  d: import('../../../shared/types/GameTypes').DemandContext,
+  d: DemandContext,
+  isCarry: boolean,
 ): number {
-  const supplyCost = d.isLoadOnTrain ? 0 : (d.isSupplyOnNetwork ? 0 : d.estimatedTrackCostToSupply);
+  const supplyCost = isCarry ? 0 : (d.isSupplyOnNetwork ? 0 : d.estimatedTrackCostToSupply);
   const deliveryCost = d.isDeliveryOnNetwork ? 0 : d.estimatedTrackCostToDelivery;
   return supplyCost + deliveryCost;
 }
@@ -318,19 +451,37 @@ function demandBuildCost(
  * @param memory   - Persistent bot memory (for gameState latch).
  * @returns The fastest feasible victory route, or null.
  */
-export function findFinalVictoryRoute(
+/**
+ * JIRA-265: Outcome-returning variant of findFinalVictoryRoute. Preserves the
+ * skip reason on the null path so callers (e.g. the per-turn NDJSON endGame
+ * trace in AIStrategyEngine) can record WHY no override fired without
+ * re-running the search.
+ *
+ * Skip reasons:
+ *   not_in_end_state       — context.gameState !== End
+ *   no_demands             — context.demands empty
+ *   victory_met            — both gaps zero (game should already have ended)
+ *   no_feasible_demands    — every demand has unreachable supply/delivery
+ *   no_route_covers_gap    — at least one feasible demand exists but no
+ *                            single/pair/triple combination has
+ *                            payout − buildCost − connectorCost ≥ cashGap
+ *
+ * `findFinalVictoryRoute` is a thin wrapper that maps fire→route, skip→null
+ * for backward compatibility with existing call sites and tests.
+ */
+export function findFinalVictoryOutcome(
   snapshot: WorldSnapshot,
   context: GameContext,
   memory: BotMemoryState,
-): FinalVictoryRoute | null {
+): FinalVictoryOutcome {
   // Gate: only in End state.
   if (context.gameState !== GameState.End) {
-    return null;
+    return { outcome: 'skip', reason: 'not_in_end_state' };
   }
 
   if (!context.demands || context.demands.length === 0) {
     console.log('[final-victory] skip: no demands in hand');
-    return null;
+    return { outcome: 'skip', reason: 'no_demands' };
   }
 
   const cashGap = Math.max(0, VICTORY_INITIAL_THRESHOLD - context.money);
@@ -342,7 +493,7 @@ export function findFinalVictoryRoute(
   // should have ended — log a warning and fall through.
   if (cashGap === 0 && majorsGap === 0) {
     console.log('[final-victory] skip: victory conditions already met — game should have ended');
-    return null;
+    return { outcome: 'skip', reason: 'victory_met', cashGap, majorsGap, connectorCost };
   }
 
   // Determine train properties.
@@ -351,34 +502,44 @@ export function findFinalVictoryRoute(
   const trainSpeed = trainProps.speed;
   const trainCap = trainProps.capacity;
 
-  // Filter feasible demands: supply on network (or carried), delivery on/buildable network.
-  // We accept off-network supply/delivery when cost is affordable (estimatedTrackCostToSupply ≥ 0).
+  // JIRA-267: pre-compute the multiplicity-aware effective-carry set + grid
+  // points + bot position for distance-aware turn estimates. `isCarry(d)` is
+  // an inline helper closing over the set so the candidate enumeration loops
+  // below stay readable.
+  const effectiveCarrySet = buildEffectiveCarrySet(context.demands, snapshot.bot.loads);
+  const isCarry = (d: DemandContext): boolean => effectiveCarrySet.has(d.cardIndex);
+  const gridPoints = loadGridPoints();
+  const botPosition = snapshot.bot.position;
+
+  // Filter feasible demands: supply on network (or effectively carried),
+  // delivery on/buildable network. Off-network supply/delivery is acceptable
+  // when `estimatedTrackCostTo*` is non-negative (the cost has been computed).
   const feasibleDemands = context.demands.filter((d) => {
-    // Feasible if supply is on network, load is on train, or we can estimate a build cost.
-    const supplyFeasible = d.isLoadOnTrain || d.isSupplyOnNetwork || d.estimatedTrackCostToSupply >= 0;
+    const supplyFeasible = isCarry(d) || d.isSupplyOnNetwork || d.estimatedTrackCostToSupply >= 0;
     const deliveryFeasible = d.isDeliveryOnNetwork || d.estimatedTrackCostToDelivery >= 0;
     return supplyFeasible && deliveryFeasible;
   });
 
   if (feasibleDemands.length === 0) {
     console.log('[final-victory] skip: no feasible demands (supply/delivery unreachable)');
-    return null;
+    return { outcome: 'skip', reason: 'no_feasible_demands', cashGap, majorsGap, connectorCost };
   }
 
   const candidates: VictoryCandidate[] = [];
 
   // ── Single-delivery candidates ──────────────────────────────────────────
   for (const d of feasibleDemands) {
-    const buildCost = demandBuildCost(d) + connectorCost;
+    const dCarry = isCarry(d);
+    const buildCost = demandBuildCost(d, dCarry) + connectorCost;
     const netPayout = d.payout - buildCost;
     if (netPayout < cashGap) continue; // infeasible: can't close the cash gap
 
     const cashAtVictory = context.money + d.payout - buildCost;
     const majorsAtVictory = context.connectedMajorCities.length + connectorCityNames.length;
-    const turns = estimateSingleDemandTurns(d, trainSpeed);
+    const turns = estimateSingleDemandTurns(d, trainSpeed, dCarry, botPosition, gridPoints);
 
     candidates.push({
-      stops: buildStopsForDemand(d),
+      stops: buildStopsForDemand(d, dCarry),
       estimatedTurns: turns,
       buildCost,
       totalPayout: d.payout,
@@ -394,17 +555,19 @@ export function findFinalVictoryRoute(
       for (let j = i + 1; j < feasibleDemands.length; j++) {
         const d1 = feasibleDemands[i];
         const d2 = feasibleDemands[j];
+        const d1Carry = isCarry(d1);
+        const d2Carry = isCarry(d2);
         const totalPayout = d1.payout + d2.payout;
-        const buildCost = demandBuildCost(d1) + demandBuildCost(d2) + connectorCost;
+        const buildCost = demandBuildCost(d1, d1Carry) + demandBuildCost(d2, d2Carry) + connectorCost;
         const netPayout = totalPayout - buildCost;
         if (netPayout < cashGap) continue;
 
         const cashAtVictory = context.money + totalPayout - buildCost;
         const majorsAtVictory = context.connectedMajorCities.length + connectorCityNames.length;
-        const turns = estimateSingleDemandTurns(d1, trainSpeed) +
-          estimateSingleDemandTurns(d2, trainSpeed);
+        const turns = estimateSingleDemandTurns(d1, trainSpeed, d1Carry, botPosition, gridPoints) +
+          estimateSingleDemandTurns(d2, trainSpeed, d2Carry, botPosition, gridPoints);
 
-        const stops = [...buildStopsForDemand(d1), ...buildStopsForDemand(d2)];
+        const stops = [...buildStopsForDemand(d1, d1Carry), ...buildStopsForDemand(d2, d2Carry)];
         candidates.push({
           stops,
           estimatedTurns: turns,
@@ -426,21 +589,25 @@ export function findFinalVictoryRoute(
           const d1 = feasibleDemands[i];
           const d2 = feasibleDemands[j];
           const d3 = feasibleDemands[k];
+          const d1Carry = isCarry(d1);
+          const d2Carry = isCarry(d2);
+          const d3Carry = isCarry(d3);
           const totalPayout = d1.payout + d2.payout + d3.payout;
-          const buildCost = demandBuildCost(d1) + demandBuildCost(d2) + demandBuildCost(d3) + connectorCost;
+          const buildCost =
+            demandBuildCost(d1, d1Carry) + demandBuildCost(d2, d2Carry) + demandBuildCost(d3, d3Carry) + connectorCost;
           const netPayout = totalPayout - buildCost;
           if (netPayout < cashGap) continue;
 
           const cashAtVictory = context.money + totalPayout - buildCost;
           const majorsAtVictory = context.connectedMajorCities.length + connectorCityNames.length;
-          const turns = estimateSingleDemandTurns(d1, trainSpeed) +
-            estimateSingleDemandTurns(d2, trainSpeed) +
-            estimateSingleDemandTurns(d3, trainSpeed);
+          const turns = estimateSingleDemandTurns(d1, trainSpeed, d1Carry, botPosition, gridPoints) +
+            estimateSingleDemandTurns(d2, trainSpeed, d2Carry, botPosition, gridPoints) +
+            estimateSingleDemandTurns(d3, trainSpeed, d3Carry, botPosition, gridPoints);
 
           const stops = [
-            ...buildStopsForDemand(d1),
-            ...buildStopsForDemand(d2),
-            ...buildStopsForDemand(d3),
+            ...buildStopsForDemand(d1, d1Carry),
+            ...buildStopsForDemand(d2, d2Carry),
+            ...buildStopsForDemand(d3, d3Carry),
           ];
           candidates.push({
             stops,
@@ -460,7 +627,7 @@ export function findFinalVictoryRoute(
     console.log(
       `[final-victory] skip: no route covers cashGap=${cashGap}M + connectorCost=${connectorCost}M`,
     );
-    return null;
+    return { outcome: 'skip', reason: 'no_route_covers_gap', cashGap, majorsGap, connectorCost };
   }
 
   // Rank: minimum estimatedTurns ASC; tiebreak maximum cashAtVictory DESC.
@@ -479,7 +646,7 @@ export function findFinalVictoryRoute(
 
   console.log(reasoning);
 
-  return {
+  const route: FinalVictoryRoute = {
     stops: best.stops,
     estimatedTurns: best.estimatedTurns,
     buildCost: best.buildCost,
@@ -488,5 +655,92 @@ export function findFinalVictoryRoute(
     majorsAtVictory: best.majorsAtVictory,
     majorConnectors: best.majorConnectors,
     reasoning,
+  };
+  return { outcome: 'fire', route, cashGap, majorsGap, connectorCost };
+}
+
+/**
+ * Legacy wrapper for `findFinalVictoryOutcome` — returns the route on fire,
+ * null on any skip. Preserved for backward compatibility with existing call
+ * sites and tests that don't need the skip reason.
+ */
+export function findFinalVictoryRoute(
+  snapshot: WorldSnapshot,
+  context: GameContext,
+  memory: BotMemoryState,
+): FinalVictoryRoute | null {
+  const result = findFinalVictoryOutcome(snapshot, context, memory);
+  return result.outcome === 'fire' ? result.route : null;
+}
+
+/**
+ * JIRA-265: Compose the per-turn EndGameTrace from the outcome of
+ * findFinalVictoryOutcome + the current context, memory, and (optionally) the
+ * activeRoute that will execute this turn. AIStrategyEngine calls this once
+ * per turn when context.gameState === End and threads the result into the
+ * NDJSON turn-log entry's `endGame` field.
+ *
+ * `appliedOverride` is supplied by the caller because the override decision is
+ * made in AIStrategyEngine (after the JIRA-261 routesMatch check), not here.
+ */
+export function buildEndGameTrace(
+  context: GameContext,
+  memory: BotMemoryState,
+  outcome: FinalVictoryOutcome,
+  appliedOverride: boolean,
+  activeRoute: StrategicRoute | null,
+): EndGameTrace {
+  const cashGapM = Math.max(0, VICTORY_INITIAL_THRESHOLD - context.money);
+  const majorsGap = Math.max(0, VICTORY_CITY_COUNT - context.connectedMajorCities.length);
+  const cheapestConnectors = (context.unconnectedMajorCities ?? [])
+    .slice(0, majorsGap)
+    .map((e) => ({ cityName: e.cityName, costM: e.estimatedCost }));
+  const fullWinCostM = cashGapM + cheapestConnectors.reduce((s, c) => s + c.costM, 0);
+
+  let victoryRouteProjection: EndGameTrace['victoryRouteProjection'];
+  if (outcome.outcome === 'fire') {
+    const stops = outcome.route.stops.map((s) => `${s.action}:${s.loadType}@${s.city}`);
+    victoryRouteProjection = {
+      outcome: 'fire',
+      stops,
+      turns: outcome.route.estimatedTurns,
+      buildM: outcome.route.buildCost,
+      payoutM: outcome.route.totalPayout,
+      cashAtVictory: outcome.route.cashAtVictory,
+      majorsAtVictory: outcome.route.majorsAtVictory,
+      appliedOverride,
+    };
+  } else {
+    victoryRouteProjection = { outcome: 'skip', reason: outcome.reason };
+  }
+
+  let activePlanProjection: EndGameTrace['activePlanProjection'];
+  if (activeRoute && activeRoute.stops.length > activeRoute.currentStopIndex) {
+    const remaining = activeRoute.stops.slice(activeRoute.currentStopIndex);
+    const remainingStops = remaining.length;
+    const connectorCitySet = new Set(cheapestConnectors.map((c) => c.cityName));
+    let projectedPayout = 0;
+    let connectorAdds = 0;
+    for (const s of remaining) {
+      if (s.action === 'deliver') {
+        projectedPayout += s.payment ?? 0;
+        if (connectorCitySet.has(s.city)) connectorAdds += 1;
+      }
+    }
+    const projectedCash = context.money + projectedPayout;
+    const projectedMajors = context.connectedMajorCities.length + connectorAdds;
+    const willClinch = projectedCash >= VICTORY_INITIAL_THRESHOLD && projectedMajors >= VICTORY_CITY_COUNT;
+    activePlanProjection = { willClinch, projectedCash, projectedMajors, remainingStops };
+  }
+
+  return {
+    inEndGame: true,
+    endGameLocked: !!memory.endGameLocked,
+    cashGapM,
+    majorsGap,
+    cheapestConnectors,
+    fullWinCostM,
+    victoryRouteProjection,
+    activePlanProjection,
   };
 }

@@ -12,6 +12,7 @@ import {
   BotSkillLevel,
   GameStatus,
   TrainType,
+  GameState,
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 
@@ -321,6 +322,52 @@ describe('NetworkContext.computePhase', () => {
     const snapshot = makeSnapshot({ money: 235 });
     const result = NetworkContext.computePhase(snapshot, ['a', 'b', 'c', 'd', 'e', 'f']);
     expect(result).toBe('Victory Imminent');
+  });
+
+  // ── JIRA-265 Layer 3: gameState-aware display ──
+
+  it('JIRA-265 AC6: returns "End Game" when gameState=End but few majors (would have shown "Mid Game" before)', () => {
+    // Replays game 086fa2ce s1 T65: cash $255M, only 4 majors. Old logic
+    // returned "Mid Game" because the major-city thresholds (5+/$150M for
+    // Late, 3+/$80M for Mid) ignored the cash-latched end-game state.
+    const snapshot = makeSnapshot({ money: 255 });
+    const result = NetworkContext.computePhase(
+      snapshot,
+      ['Milano', 'Ruhr', 'Berlin', 'London'],
+      GameState.End,
+    );
+    expect(result).toBe('End Game');
+  });
+
+  it('JIRA-265 Layer 3: still returns "Victory Imminent" with 7+ majors and 250M+ even when gameState=End', () => {
+    const snapshot = makeSnapshot({ money: 260 });
+    const result = NetworkContext.computePhase(
+      snapshot,
+      ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+      GameState.End,
+    );
+    expect(result).toBe('Victory Imminent');
+  });
+
+  it('JIRA-265 Layer 3: gameState=Mid preserves legacy thresholds (does NOT force End Game)', () => {
+    const snapshot = makeSnapshot({ money: 100 });
+    const result = NetworkContext.computePhase(
+      snapshot,
+      ['Berlin', 'Paris', 'Wien'],
+      GameState.Mid,
+    );
+    expect(result).toBe('Mid Game');
+  });
+
+  it('JIRA-265 Layer 3: omitting gameState arg preserves legacy behavior', () => {
+    // Back-compat — callers that don't pass gameState (e.g. the internal
+    // NetworkContext.compute facade) see the original output.
+    const snapshot = makeSnapshot({ money: 255 });
+    const result = NetworkContext.computePhase(
+      snapshot,
+      ['Milano', 'Ruhr', 'Berlin', 'London'],
+    );
+    expect(result).toBe('Mid Game'); // legacy: 3+ majors → Mid Game
   });
 });
 

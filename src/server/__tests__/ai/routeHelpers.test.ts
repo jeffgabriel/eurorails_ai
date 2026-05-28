@@ -573,10 +573,11 @@ describe('resolveBuildTarget — route-based targets', () => {
 });
 
 describe('resolveBuildTarget — victory build override', () => {
-  it('returns the cheapest unconnected major city as a victory build when bot has ≥230M and <7 connected cities', () => {
+  it('returns the cheapest unconnected major city as a victory build when gameState=End and <7 connected cities', () => {
     const route = makeRoute({ currentStopIndex: 0 });
     const context = makeContext({
       money: 230,
+      gameState: GameState.End,
       connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
       // Only 6 connected, need 7
       unconnectedMajorCities: [
@@ -594,22 +595,31 @@ describe('resolveBuildTarget — victory build override', () => {
     expect(result!.stopIndex).toBe(-1);
   });
 
-  it('fires at 230M boundary (was 250M before; lowered to give cash-build lead time)', () => {
+  it('JIRA-266 AC2 — fires sub-$230M when gameState=End (cash gate replaced by latch)', () => {
+    // The pre-JIRA-266 gate was money >= 230M; the new gate is gameState === End.
+    // Latching happens at cash > 200M, so this fixture (cash 207, End) should fire
+    // even though cash is well below the old 230M trigger.
     const route = makeRoute({ currentStopIndex: 0 });
     const context = makeContext({
-      money: 230,
+      money: 207,
+      gameState: GameState.End,
       connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
       unconnectedMajorCities: [{ cityName: 'Moskva', estimatedCost: 5 }],
       citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
     });
     const result = resolveBuildTarget(route, context);
     expect(result!.isVictoryBuild).toBe(true);
+    expect(result!.targetCity).toBe('Moskva');
   });
 
-  it('does NOT use victory override when bot has <230M', () => {
+  it('JIRA-266 AC3 — does NOT fire when gameState=Mid even at high cash (changed from prior cash-only gate)', () => {
+    // Before JIRA-266: this fixture (money=240, gameState=Mid) would have fired
+    // the victory branch. After JIRA-266: only gameState=End fires. Cash alone
+    // is no longer sufficient.
     const route = makeRoute({ currentStopIndex: 0 });
     const context = makeContext({
-      money: 229,
+      money: 240,
+      gameState: GameState.Mid,
       connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
       unconnectedMajorCities: [{ cityName: 'Moskva', estimatedCost: 5 }],
       citiesOnNetwork: [],
@@ -984,8 +994,9 @@ describe('resolveBuildTarget — JIRA-246: cash-floor gate removed (was JIRA-165
     expect(result!.targetCity).toBe('Berlin');
   });
 
-  it('returns victory build target when bot has low money (victory overrides route target)', () => {
-    // Victory build takes priority regardless of cash level
+  it('returns victory build target when in end-game with <7 majors (victory overrides route target)', () => {
+    // Victory build takes priority when gameState=End and majorsGap > 0
+    // (JIRA-266: replaced the prior money>=230 cash gate with the latch).
     const route = makeRoute({
       stops: [
         { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
@@ -993,7 +1004,8 @@ describe('resolveBuildTarget — JIRA-246: cash-floor gate removed (was JIRA-165
       currentStopIndex: 0,
     });
     const context = makeContext({
-      money: 230, // victory build trigger
+      money: 230,
+      gameState: GameState.End,
       citiesOnNetwork: [],
       unconnectedMajorCities: [{ cityName: 'Roma', estimatedCost: 5 }],
       connectedMajorCities: ['Paris', 'Berlin', 'München', 'Wien', 'Hamburg', 'Barcelona'],
@@ -1157,6 +1169,10 @@ const BOT_FAR_FROM_ROMA = { row: 14, col: 47 };
 function makeVictoryContext(overrides: Partial<GameContext> = {}): GameContext {
   return makeContext({
     money: 241,
+    // JIRA-266: victory-build branch gates on gameState=End (not cash). All
+    // of these tests are testing end-game victory-build behavior, so the
+    // shared fixture must be in End state.
+    gameState: GameState.End,
     connectedMajorCities: ['Holland', 'Ruhr', 'Berlin'],
     unconnectedMajorCities: [
       { cityName: 'Milano', estimatedCost: 5 },
@@ -1166,7 +1182,6 @@ function makeVictoryContext(overrides: Partial<GameContext> = {}): GameContext {
     loads: ['Wine'],
     position: BOT_NEAR_ROMA,
     speed: 12,
-    gameState: GameState.Mid,
     ...overrides,
   });
 }
@@ -1304,6 +1319,9 @@ describe('resolveBuildTarget — JIRA-239 delivery-first guard (AC1, AC2, AC5-AC
     };
     const context = makeContext({
       money: 241,
+      // JIRA-266: delivery-first guard fires inside the victory-build branch,
+      // which now gates on gameState=End rather than the old cash threshold.
+      gameState: GameState.End,
       connectedMajorCities: ['Holland', 'Ruhr', 'Berlin'],
       unconnectedMajorCities: [
         { cityName: 'Milano', estimatedCost: 5 },
@@ -1463,6 +1481,9 @@ describe('findNextRoutePickupOffNetwork — AC4: safe defaults', () => {
 function makeBundle6Context(overrides: Partial<GameContext> = {}): GameContext {
   return makeContext({
     money: 240,
+    // JIRA-266: victory-build branch gates on gameState=End. Bundling guard
+    // tests assume that branch fires, so the fixture must be in End state.
+    gameState: GameState.End,
     connectedMajorCities: ['Paris', 'Holland', 'Milano', 'Ruhr', 'Berlin', 'London'],
     unconnectedMajorCities: [
       { cityName: 'Wien', estimatedCost: 14 },
@@ -1594,7 +1615,10 @@ describe('resolveBuildTarget — JIRA-240 bundling guard (AC9-AC12)', () => {
     // Synthetic snapshot: cash=240 (triggers victory build), 6 connected cities from t71,
     // Firenze off-network with estimatedTrackCostToSupply=3 (matches demandRanking in log)
     const context = makeContext({
-      money: 240, // synthetic to trigger victory build (actual t71 was 226, but spec says 240)
+      money: 240,
+      // JIRA-266: victory-build branch gates on gameState=End. The pre-JIRA-266
+      // version of this test used money=240 to trigger via the old cash gate.
+      gameState: GameState.End,
       connectedMajorCities: ['Paris', 'Holland', 'Milano', 'Ruhr', 'Berlin', 'London'],
       unconnectedMajorCities: [
         { cityName: 'Wien', estimatedCost: 14 }, // Wien is 7th city needed
@@ -1718,7 +1742,10 @@ describe('JIRA-243: resolveBuildTarget — End-state victory-build override', ()
     expect(result!.secondaryTarget).toBe('Firenze');
   });
 
-  it('AC3 — End and Mid produce the same victory-build result for the same inputs', () => {
+  it('AC3 (JIRA-266 revision) — End fires the victory branch; Mid does NOT (gate is now the latch, not cash)', () => {
+    // Pre-JIRA-266: this test asserted Mid and End produced the same result
+    // because the gate was money >= 230M (independent of gameState). After
+    // JIRA-266 the gate is gameState === End, so only the End path fires.
     const baseContext = {
       money: 240,
       connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien'],
@@ -1731,10 +1758,74 @@ describe('JIRA-243: resolveBuildTarget — End-state victory-build override', ()
     const midResult = resolveBuildTarget(route, makeContext({ ...baseContext, gameState: GameState.Mid }));
 
     expect(endResult).not.toBeNull();
-    expect(midResult).not.toBeNull();
     expect(endResult!.isVictoryBuild).toBe(true);
-    expect(midResult!.isVictoryBuild).toBe(true);
-    expect(endResult!.targetCity).toBe(midResult!.targetCity);
+    expect(endResult!.targetCity).toBe('Moskva');
+
+    // Mid falls through to the route-based branch (no off-network route stop here,
+    // so result is the first stop or null depending on fixture).
+    expect(midResult === null || midResult!.isVictoryBuild === false).toBe(true);
+  });
+});
+
+// ── JIRA-266: Victory-build trigger gated on gameState=End, not cash ─────────
+
+describe('resolveBuildTarget — JIRA-266 end-game latch gate', () => {
+  it('AC6 replay (game 46e424ad s3 T74) — cash $207 with End and 4/7 majors fires victory build to Ruhr', () => {
+    // Reconstructed from logs/game-46e424ad-9090-4d6f-ab44-918b1fdf70d7.ndjson
+    // s3 T74: gameState=end, money=$207M, 4 majors connected (Milano, Ruhr…
+    // wait s3 had different majors here; using the recorded cheapestConnectors).
+    // Before JIRA-266: $207 < $230 → falls through → buildTarget=null for 11 turns
+    // After JIRA-266: gameState=End → fires → target=Ruhr ($6M cheapest)
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({
+      money: 207,
+      gameState: GameState.End,
+      connectedMajorCities: ['Milano', 'Hamburg', 'Madrid', 'Wien'],
+      unconnectedMajorCities: [
+        { cityName: 'Ruhr', estimatedCost: 6 },
+        { cityName: 'Berlin', estimatedCost: 9 },
+        { cityName: 'Paris', estimatedCost: 10 },
+      ],
+      citiesOnNetwork: ['Milano', 'Hamburg', 'Madrid', 'Wien'],
+    });
+    const result = resolveBuildTarget(route, context);
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+    expect(result!.targetCity).toBe('Ruhr');
+  });
+
+  it('AC7 (no regression — game 0c08d484 bot2 T86) — 7 majors already → no victory build', () => {
+    // bot2 entered end-game at T86 with majorsGap=0 (pre-built in mid-game).
+    // resolveBuildTarget must NOT fire the victory branch here; route-based
+    // branch should run unchanged.
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({
+      money: 228,
+      gameState: GameState.End,
+      // 7 majors connected
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg', 'London'],
+      unconnectedMajorCities: [],
+      citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg', 'London'],
+    });
+    const result = resolveBuildTarget(route, context);
+    // city-count gate prevents victory branch; falls through to route-based
+    expect(result === null || result!.isVictoryBuild === false).toBe(true);
+  });
+
+  it('Mid at $230M with majorsGap > 0 does NOT fire (cash alone no longer engages)', () => {
+    // Sanity: the pre-JIRA-266 trigger condition (money >= 230 in Mid state)
+    // must no longer produce a victory build. Direct test of the removed
+    // cash gate.
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({
+      money: 230,
+      gameState: GameState.Mid,
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
+      unconnectedMajorCities: [{ cityName: 'Moskva', estimatedCost: 5 }],
+      citiesOnNetwork: [],
+    });
+    const result = resolveBuildTarget(route, context);
+    expect(result!.isVictoryBuild).toBe(false);
   });
 });
 

@@ -60,7 +60,14 @@ import { InitialBuildRunner } from './InitialBuildRunner';
 import { NewRoutePlanner } from './NewRoutePlanner';
 import { UPGRADE_DELIVERY_THRESHOLD } from './context/UpgradeGatingConstants';
 import { RECENT_DELIVERIES_WINDOW } from './StrategicConstants';
-import { detectVictoryClinch, findFinalVictoryRoute } from './victoryRules';
+import {
+  detectVictoryClinch,
+  findFinalVictoryRoute,
+  findFinalVictoryOutcome,
+  buildEndGameTrace,
+  type EndGameTrace,
+  type FinalVictoryOutcome,
+} from './victoryRules';
 import { isBotInPendingLostTurns } from '../../services/restrictionPredicates';
 
 /**
@@ -94,6 +101,8 @@ export interface BotTurnResult {
   gamePhase?: string;
   /** JIRA-243 (AC3): Persistent bot game phase for post-game traceability. */
   gameState?: GameState;
+  /** JIRA-265: Per-turn end-game state trace. Populated when gameState=end. */
+  endGame?: EndGameTrace;
   cash?: number;
   trainType?: string;
   compositionTrace?: CompositionTrace;
@@ -298,9 +307,14 @@ export class AIStrategyEngine {
       // When the search returns null, we fall through to the existing clinch gate
       // as a strict-subset fast-path. See victoryRules.findFinalVictoryRoute for
       // the forensic case (game 95f0aadc, s2 T76) that motivates this change.
+      // JIRA-265: Capture the discriminated-union outcome so the per-turn
+      // endGameTrace (built below at turn-log construction) can record WHY
+      // a victory route did or did not override the activeRoute this turn.
+      let finalVictoryOutcome: FinalVictoryOutcome | null = null;
+      let finalVictoryAppliedOverride = false;
       if (!context.isInitialBuild) {
-        const finalVictoryRoute = findFinalVictoryRoute(snapshot, context, memory);
-        if (finalVictoryRoute) {
+        finalVictoryOutcome = findFinalVictoryOutcome(snapshot, context, memory);
+        if (finalVictoryOutcome.outcome === 'fire') {
           // JIRA-261: Idempotency check compares the full remaining-stops
           // sequence, not just the first stop. The earlier first-stop-only check
           // suppressed override at game 8350cffa s3 T68 onwards: an existing
@@ -311,14 +325,15 @@ export class AIStrategyEngine {
           // have connected the 4th-of-7 major and clinched the game. With the
           // full-sequence comparison, that divergence (and the missing London
           // leg in the existing route) now correctly triggers the override.
-          if (!AIStrategyEngine.routesMatch(activeRoute, finalVictoryRoute.stops)) {
+          if (!AIStrategyEngine.routesMatch(activeRoute, finalVictoryOutcome.route.stops)) {
             activeRoute = {
-              stops: finalVictoryRoute.stops,
+              stops: finalVictoryOutcome.route.stops,
               currentStopIndex: 0,
               phase: 'travel',
               createdAtTurn: snapshot.turnNumber,
-              reasoning: finalVictoryRoute.reasoning,
+              reasoning: finalVictoryOutcome.route.reasoning,
             };
+            finalVictoryAppliedOverride = true;
           }
         } else {
           // JIRA-243: Victory-clinch hard gate. If a carried load + matching demand
@@ -1023,6 +1038,21 @@ export class AIStrategyEngine {
         gamePhase: context.phase || undefined,
         // JIRA-243 (AC3): pipe persistent gameState through to game log
         gameState: context.gameState,
+        // JIRA-265: Per-turn end-game trace. Populated whenever the bot is in
+        // gameState=end so the operator can see cashGap, majorsGap, the
+        // cheapest connector cities, the per-turn findFinalVictoryRoute
+        // outcome (fire/skip with reason), and whether the current activeRoute
+        // will actually clinch — without re-running the game with stdout
+        // capture.
+        endGame: context.gameState === GameState.End
+          ? buildEndGameTrace(
+              context,
+              memory,
+              finalVictoryOutcome ?? { outcome: 'skip', reason: 'not_in_end_state' },
+              finalVictoryAppliedOverride,
+              activeRoute,
+            )
+          : undefined,
         cash: result.remainingMoney,
         trainType: context.trainType,
         milepostsMoved,
