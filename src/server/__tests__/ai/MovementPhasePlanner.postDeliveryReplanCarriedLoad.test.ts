@@ -340,8 +340,9 @@ beforeEach(() => {
 
   // PostDeliveryReplanner returns a new route after replan
   mockPostDeliveryReplan.mockResolvedValue({
+    kind: 'route-replaced',
     route: makeRoute({ reasoning: 'post-delivery replan', stops: [] }),
-    moveTargetInvalidated: true,
+    moveTargetInvalidated: true as const,
     replanLlmLog: [{ status: 'success', attempt: 1 }],
   });
 
