@@ -387,7 +387,7 @@ jest.mock('../../services/ai/WorldSnapshotService', () => ({
 }));
 
 // ── Mock victoryRules to control findFinalVictoryRoute ───────────────────────
-import type { FinalVictoryRoute } from '../../services/ai/victoryRules';
+import type { FinalVictoryRoute, FinalVictoryOutcome } from '../../services/ai/victoryRules';
 
 const mockFindFinalVictoryRoute = jest.fn<() => FinalVictoryRoute | null>();
 
@@ -396,6 +396,17 @@ jest.mock('../../services/ai/victoryRules', () => {
   return {
     ...real,
     findFinalVictoryRoute: mockFindFinalVictoryRoute,
+    // JIRA-265: AIStrategyEngine now calls findFinalVictoryOutcome; mirror the
+    // mockFindFinalVictoryRoute return value into the outcome shape so existing
+    // mockReturnValueOnce(route) / mockReturnValueOnce(null) calls still drive
+    // the test behavior without re-writing every assertion.
+    findFinalVictoryOutcome: jest.fn<() => FinalVictoryOutcome>().mockImplementation(() => {
+      const r = mockFindFinalVictoryRoute();
+      if (r) {
+        return { outcome: 'fire', route: r, cashGap: 0, majorsGap: 0, connectorCost: 0 };
+      }
+      return { outcome: 'skip', reason: 'no_route_covers_gap' };
+    }),
   };
 });
 
