@@ -40,6 +40,17 @@ import type {
 import type { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
 import type { CompositionTrace, TurnExecutorResult } from '../../services/ai/TurnExecutorPlanner';
 import type { TripPlanResult } from '../../services/ai/TripPlanner';
+import type { NewRoutePlannerResult } from '../../services/ai/schemas';
+
+/**
+ * Type-narrowing helper — asserts the result is the successful (non-cannotPlan) variant.
+ * Used in tests that exercise the normal planning path.
+ */
+function assertPlanResult(result: NewRoutePlannerResult): asserts result is Extract<NewRoutePlannerResult, { cannotPlan?: false }> {
+  if (result.cannotPlan) {
+    throw new Error(`Expected a plan result but got cannotPlan: ${result.reason}`);
+  }
+}
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -286,6 +297,8 @@ describe('NewRoutePlanner.run', () => {
         gameId, botPlayerId, BotSkillLevel.Medium,
       );
 
+      assertPlanResult(result);
+
       // Auto-delivery executed
       expect(mockExecutePlan).toHaveBeenCalledTimes(1);
       const deliverArg = mockExecutePlan.mock.calls[0][0] as TurnPlanDeliverLoad;
@@ -341,6 +354,7 @@ describe('NewRoutePlanner.run', () => {
         gameId, botPlayerId, BotSkillLevel.Medium,
       );
 
+      assertPlanResult(result);
       expect(result.activeRoute).toBeDefined();
       expect(result.decision.model).toBe('trip-planner');
       expect(result.decision.reasoning).toContain('[route-planned]');
@@ -362,6 +376,7 @@ describe('NewRoutePlanner.run', () => {
         gameId, botPlayerId, BotSkillLevel.Medium,
       );
 
+      assertPlanResult(result);
       expect(mockHeuristicFallback).toHaveBeenCalledTimes(1);
       expect(result.decision.model).toBe('heuristic-fallback');
       expect(result.decision.plan).toBe(fallbackPlan);
@@ -380,6 +395,7 @@ describe('NewRoutePlanner.run', () => {
         gameId, botPlayerId, BotSkillLevel.Medium,
       );
 
+      assertPlanResult(result);
       expect(result.decision.plan.type).toBe(AIActionType.PassTurn);
       expect(result.decision.model).toBe('llm-failed');
     });
@@ -401,6 +417,7 @@ describe('NewRoutePlanner.run', () => {
         tag, gameId, botPlayerId, BotSkillLevel.Medium,
       );
 
+      assertPlanResult(result);
       expect(result.pendingUpgradeAction).not.toBeNull();
       expect(result.pendingUpgradeAction!.type).toBe(AIActionType.UpgradeTrain);
       expect(result.pendingUpgradeAction!.targetTrain).toBe(TrainType.FastFreight);
@@ -422,6 +439,7 @@ describe('NewRoutePlanner.run', () => {
         tag, gameId, botPlayerId, BotSkillLevel.Medium,
       );
 
+      assertPlanResult(result);
       expect(result.pendingUpgradeAction).toBeNull();
       expect(result.upgradeSuppressionReason).toContain('Upgrade blocked');
     });
@@ -446,6 +464,7 @@ describe('NewRoutePlanner.run', () => {
         tag, gameId, botPlayerId, BotSkillLevel.Medium,
       );
 
+      assertPlanResult(result);
       // Upgrade should be suppressed because route was abandoned this turn
       expect(result.pendingUpgradeAction).toBeNull();
       expect(result.upgradeSuppressionReason).toBe('route_abandoned_this_turn');
@@ -495,6 +514,7 @@ describe('NewRoutePlanner.run', () => {
         gameId, botPlayerId, BotSkillLevel.Medium,
       );
 
+      assertPlanResult(result);
       expect(result.deadLoadDropActions).toHaveLength(1);
       expect(result.deadLoadDropActions[0].type).toBe(AIActionType.DropLoad);
       expect(result.deadLoadDropActions[0].load).toBe('Wood');
@@ -536,6 +556,7 @@ describe('NewRoutePlanner.run', () => {
         tag, gameId, botPlayerId, BotSkillLevel.Medium,
       );
 
+      assertPlanResult(result);
       expect(brain.evaluateUpgradeBeforeDrop).toHaveBeenCalledTimes(1);
       expect(result.pendingUpgradeAction).not.toBeNull();
       expect(result.pendingUpgradeAction!.targetTrain).toBe(TrainType.HeavyFreight);
@@ -567,10 +588,11 @@ describe('NewRoutePlanner.run', () => {
 
       const snapshot = makeSnapshot({ money: 50, trainType: TrainType.Freight, loads: ['Wood', 'Iron'] });
 
+      // Hard skill — LLM enhancements (cargo-conflict) are enabled
       const result = await NewRoutePlanner.run(
         snapshot, makeContext(), brain, gridPoints,
         makeMemory({ deliveryCount: 5 }),
-        tag, gameId, botPlayerId, BotSkillLevel.Medium,
+        tag, gameId, botPlayerId, BotSkillLevel.Hard,
       );
 
       expect(brain.evaluateCargoConflict).toHaveBeenCalledTimes(1);
@@ -597,6 +619,78 @@ describe('NewRoutePlanner.run', () => {
         tag, gameId, botPlayerId, BotSkillLevel.Easy,
       );
 
+      expect(brain.evaluateCargoConflict).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── JIRA-269: LLM-vs-deterministic dispatch and null-brain guard ─────────
+
+  describe('JIRA-269 — internal dispatch (null brain)', () => {
+    it('returns { cannotPlan: true, reason: "no-api-key" } for Easy skill with null brain', async () => {
+      const result = await NewRoutePlanner.run(
+        makeSnapshot(), makeContext(), null, gridPoints, makeMemory(),
+        tag, gameId, botPlayerId, BotSkillLevel.Easy,
+      );
+
+      expect(result.cannotPlan).toBe(true);
+      if (result.cannotPlan) {
+        expect(result.reason).toBe('no-api-key');
+      }
+    });
+
+    it('returns { cannotPlan: true, reason: "no-api-key" } for Hard skill with null brain', async () => {
+      const result = await NewRoutePlanner.run(
+        makeSnapshot(), makeContext(), null, gridPoints, makeMemory(),
+        tag, gameId, botPlayerId, BotSkillLevel.Hard,
+      );
+
+      expect(result.cannotPlan).toBe(true);
+      if (result.cannotPlan) {
+        expect(result.reason).toBe('no-api-key');
+      }
+    });
+
+    it('returns a plan result (no cannotPlan) for Medium skill with null brain', async () => {
+      // Medium skill uses deterministic path — brain not required
+      const result = await NewRoutePlanner.run(
+        makeSnapshot(), makeContext(), null, gridPoints, makeMemory(),
+        tag, gameId, botPlayerId, BotSkillLevel.Medium,
+      );
+
+      // Should not be a cannotPlan result
+      expect(result.cannotPlan).toBeFalsy();
+      assertPlanResult(result);
+      // Should have reached the planning stage
+      expect(result.decision).toBeDefined();
+    });
+  });
+
+  describe('JIRA-269 — ADR-4: Medium skill never calls LLM enhancements', () => {
+    it('does NOT call brain.evaluateUpgradeBeforeDrop or brain.evaluateCargoConflict for Medium skill even with non-null brain', async () => {
+      // A conflict route: 3 pickups but only 2 capacity — cargo conflict conditions met
+      const route = makeRoute({
+        stops: [makeStop('pickup', 'A', 'Steel'), makeStop('pickup', 'B', 'Iron'), makeStop('pickup', 'C', 'Coal'), makeStop('deliver', 'X', 'Steel')],
+        currentStopIndex: 0,
+      });
+      MockTripPlannerClass.mockImplementation(() => ({
+        planTrip: jest.fn().mockResolvedValue(makeTripResult(route)),
+      }) as unknown as TripPlanner);
+
+      const brain = makeBrain({
+        evaluateUpgradeBeforeDrop: jest.fn().mockResolvedValue({ action: 'upgrade', targetTrain: TrainType.HeavyFreight, reasoning: 'capacity' }),
+        evaluateCargoConflict: jest.fn().mockResolvedValue({ action: 'drop', dropLoad: 'Coal', reasoning: 'lowest' }),
+      });
+
+      // Snapshot: freight (capacity 2), 0 loads → 3 pickups > 2 slots = conflict
+      await NewRoutePlanner.run(
+        makeSnapshot({ trainType: TrainType.Freight, loads: [] }),
+        makeContext(),
+        brain, gridPoints, makeMemory({ deliveryCount: 5 }),
+        tag, gameId, botPlayerId, BotSkillLevel.Medium,
+      );
+
+      // ADR-4: Medium deterministic path — LLM enhancements always skipped
+      expect(brain.evaluateUpgradeBeforeDrop).not.toHaveBeenCalled();
       expect(brain.evaluateCargoConflict).not.toHaveBeenCalled();
     });
   });
