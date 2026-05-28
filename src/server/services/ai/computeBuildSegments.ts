@@ -186,6 +186,17 @@ function buildSegment(
  *                      so the practical max is ~20.
  * @returns An array of TrackSegment with full grid + pixel coordinates.
  */
+/**
+ * Wall-clock cap for the whole computeBuildSegments call. Caps the cumulative
+ * time spent in findBuildPath iterations (targeted) + the multi-source
+ * Dijkstra (untargeted/fallback). Set well above typical builds (which
+ * complete in <100ms) but below the multi-minute pathological cases observed
+ * on dense late-game networks (smoke-game T85: 17 minutes in this function).
+ * Once the budget is exhausted, callers see the best path found so far —
+ * or an empty array if nothing has been computed yet.
+ */
+export const COMPUTE_BUILD_WALL_CLOCK_BUDGET_MS = 5000;
+
 export function computeBuildSegments(
   startPositions: GridCoord[],
   existingSegments: TrackSegment[],
@@ -212,6 +223,12 @@ export function computeBuildSegments(
   if (budget <= 0) {
     return [];
   }
+
+  // Wall-clock deadline shared between the findBuildPath outer loop (targeted
+  // builds) and the multi-source Dijkstra (untargeted / fallback). See
+  // COMPUTE_BUILD_WALL_CLOCK_BUDGET_MS doc above.
+  const buildStartMs = Date.now();
+  const buildDeadlineMs = buildStartMs + COMPUTE_BUILD_WALL_CLOCK_BUDGET_MS;
 
   const grid = loadGridPoints();
   const majorCityLookup = getMajorCityLookup();
@@ -360,15 +377,19 @@ export function computeBuildSegments(
     // Call findBuildPath for each (source, effectiveTarget) pair and pick
     // the cheapest result. This replaces the multi-source Dijkstra early-termination.
     let cheapestCost = Infinity;
-    for (const src of sources) {
+    let wallClockHit = false;
+    outer: for (const src of sources) {
       for (const target of effectiveTargets) {
         const result = findBuildPath(
           src, target,
           builtEdges,
           existingTrackIndex ?? new Set<string>(),
           occupiedEdges ?? new Set<string>(),
-          // No budget cap for targeted builds (truncation happens in extractSegments)
-          { budget: null },
+          // No cost budget cap for targeted builds (truncation happens in
+          // extractSegments). Pass the shared wall-clock deadline so a single
+          // pathological Dijkstra (dense graph, distant target) can't burn the
+          // entire turn.
+          { budget: null, deadlineMs: buildDeadlineMs },
         );
         if (result.path.length > 0 && result.totalCost < cheapestCost) {
           cheapestCost = result.totalCost;
@@ -379,10 +400,19 @@ export function computeBuildSegments(
             path: result.path,
           };
         }
+        // Break out of both loops if the cumulative wall-clock cap was hit —
+        // remaining (source, target) pairs aren't worth waiting for; we have
+        // the best path found so far.
+        if (Date.now() > buildDeadlineMs) {
+          wallClockHit = true;
+          break outer;
+        }
       }
     }
 
-    if (!earlyTermPath) {
+    if (wallClockHit) {
+      console.warn(`${tag} wall-clock cap hit during findBuildPath sweep — using best-of-${cheapestCost === Infinity ? 'none' : `${cheapestCost}M`}`);
+    } else if (!earlyTermPath) {
       // All findBuildPath calls returned empty — fall back to Dijkstra hex-distance
       console.warn(`${tag} target unreachable via findBuildPath, falling back to hex-distance Dijkstra`);
     }

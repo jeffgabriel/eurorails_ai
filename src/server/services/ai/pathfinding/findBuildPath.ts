@@ -48,6 +48,14 @@ export interface FindBuildPathOptions {
    * paths exceeding this budget. Defaults to null (no cap).
    */
   budget?: number | null;
+  /**
+   * Wall-clock deadline as `Date.now()` milliseconds. When provided, the
+   * Dijkstra loop checks against this every N iterations and aborts with an
+   * empty path once exceeded. Used by computeBuildSegments to keep Phase B
+   * builds bounded on dense late-game networks (smoke-game T85: one
+   * findBuildPath call ate 17 minutes before this cap existed).
+   */
+  deadlineMs?: number;
 }
 
 /** Result returned by findBuildPath. */
@@ -209,7 +217,7 @@ export function findBuildPath(
   opponentEdges: Set<string>,
   options: FindBuildPathOptions = {},
 ): FindBuildPathResult {
-  const { applyParallelPenalty = true, budget = null } = options;
+  const { applyParallelPenalty = true, budget = null, deadlineMs } = options;
 
   const grid = loadGridPoints();
   const majorCityLookup = getMajorCityLookup();
@@ -246,9 +254,22 @@ export function findBuildPath(
   heap.push({ row: from.row, col: from.col, cost: 0, path: [{ row: from.row, col: from.col }] });
   minCost.set(fromKey, 0);
 
+  // Wall-clock deadline check is amortised — only check every 256 heap pops so
+  // the Date.now() call doesn't add measurable per-iteration cost.
+  let popCount = 0;
+
   while (heap.size > 0) {
     const current = heap.pop()!;
     const currentKey = makeKey(current.row, current.col);
+
+    // JIRA-262 follow-up: abort if wall-clock deadline exceeded. Caller treats
+    // empty path as "unreachable within budget" — same code path as a real
+    // unreachable target. Smoke game showed a single findBuildPath spending
+    // 17 min on a dense graph; capping here prevents that.
+    if (deadlineMs !== undefined && (++popCount & 0xff) === 0 && Date.now() > deadlineMs) {
+      console.warn(`[findBuildPath] wall-clock cap hit after ${popCount} pops — aborting (from=${fromKey} to=${toKey})`);
+      return { path: [], segments: [], totalCost: 0 };
+    }
 
     const recorded = minCost.get(currentKey);
     if (recorded !== undefined && current.cost > recorded) continue;
