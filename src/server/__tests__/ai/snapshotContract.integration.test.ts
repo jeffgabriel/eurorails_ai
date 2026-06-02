@@ -20,6 +20,8 @@
  * and satisfy the TEST-001 acceptance criteria for high coverage of the new logic.
  */
 
+import { jest } from '@jest/globals';
+
 // ── Mocks (must precede all imports) ──────────────────────────────────────────
 
 jest.mock('../../../server/db/index', () => ({
@@ -94,7 +96,7 @@ jest.mock('../../../server/services/playerService', () => {
 jest.mock('../../../server/services/ai/WorldSnapshotService', () => {
   const actual = jest.requireActual<typeof import('../../../server/services/ai/WorldSnapshotService')>('../../../server/services/ai/WorldSnapshotService');
   return {
-    capture: jest.fn().mockResolvedValue({
+    capture: jest.fn<() => Promise<any>>().mockResolvedValue({
       activeEffects: [],
       bot: { pendingFloodRebuilds: [] },
       identity: { turnNumber: 3, factsHash: 'fresh-hash' },

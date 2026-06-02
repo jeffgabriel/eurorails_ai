@@ -4377,7 +4377,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // Override TripPlanner mock for this test: planTrip returns a route directly,
       // without calling brain.planRoute (which is null for Medium bots).
       TripPlanner.mockImplementationOnce(() => ({
-        planTrip: jest.fn().mockResolvedValue({
+        planTrip: jest.fn<() => Promise<any>>().mockResolvedValue({
           route,
           llmLatencyMs: 0,
           llmTokens: { input: 0, output: 0 },
