@@ -133,6 +133,7 @@ jest.mock('../../services/ai/BotMemory', () => ({
 const mockCapture = jest.fn();
 jest.mock('../../services/ai/WorldSnapshotService', () => ({
   capture: (...args: unknown[]) => mockCapture(...args),
+  computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
 }));
 
 // ContextBuilder mocks — track what freshSnapshot.bot.loads was when rebuildDemands fired

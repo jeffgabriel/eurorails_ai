@@ -164,6 +164,7 @@ jest.mock('../../services/ai/WorldSnapshotService', () => ({
     allPlayerTracks: [],
     loadAvailability: {},
   }),
+  computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
 }));
 
 jest.mock('../../services/ai/ContextBuilder', () => ({

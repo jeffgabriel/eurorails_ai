@@ -159,6 +159,7 @@ jest.mock('../../services/ai/DecisionLogger', () => ({
 
 jest.mock('../../services/ai/WorldSnapshotService', () => ({
   capture: jest.fn(),
+  computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
 }));
 
 jest.mock('../../services/ai/ContextBuilder', () => ({

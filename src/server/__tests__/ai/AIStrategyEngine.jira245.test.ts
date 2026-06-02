@@ -384,6 +384,7 @@ function makeGameSnapshot(): WorldSnapshot {
 
 jest.mock('../../services/ai/WorldSnapshotService', () => ({
   capture: jest.fn<() => Promise<any>>().mockImplementation(() => Promise.resolve(makeGameSnapshot())),
+  computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
 }));
 
 // ── Mock victoryRules to control findFinalVictoryRoute ───────────────────────

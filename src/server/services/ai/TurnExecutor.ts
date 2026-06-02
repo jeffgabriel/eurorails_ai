@@ -21,7 +21,7 @@ import { DemandDeckService } from '../demandDeckService';
 import { gridToPixel, loadGridPoints } from '../MapTopology';
 import { getTrainCapacity, getTrainSpeed } from '../../../shared/services/trainProperties';
 import { getCityNameAtPosition } from '../../../shared/services/cityPositionResolver';
-import { capture as captureSnapshot } from './WorldSnapshotService';
+import { capture as captureSnapshot, computeIdentity } from './WorldSnapshotService';
 
 export interface ExecutionResult {
   success: boolean;
@@ -131,31 +131,63 @@ export class TurnExecutor {
       result.failedStepIndex = 0;
     }
 
-    // Mid-turn re-snapshot: when an action draws new cards (e.g., a delivery), the
-    // active event effects may have changed because event cards can be drawn as part
-    // of the card replacement.  Re-capture the snapshot so subsequent planner
-    // invocations (MovementPhasePlanner, BuildPhasePlanner) see the updated
-    // restriction state.  Hard guard: only once per executePlan call.
+    // Mid-turn named refresh: when an action draws new cards (e.g., a delivery),
+    // active event effects may have changed (event cards drawn as part of card
+    // replacement). Re-capture so subsequent planners see updated restriction state.
+    // Hard guard: only once per executePlan call.
+    // A refresh failure is fail-closed — the outcome is surfaced explicitly, not swallowed.
     if (result.success && (result as { cardsDrawnDuringAction?: number }).cardsDrawnDuringAction) {
-      try {
-        const freshSnapshot = await captureSnapshot(snapshot.gameId, snapshot.bot.playerId);
-        // Mutate the caller's snapshot reference so downstream consumers within
-        // the same turn see the refreshed activeEffects and pendingFloodRebuilds.
-        snapshot.activeEffects = freshSnapshot.activeEffects;
-        snapshot.bot.pendingFloodRebuilds = freshSnapshot.bot.pendingFloodRebuilds;
-        console.info(
-          `[TurnExecutor] Mid-turn re-snapshot after ${plan.type} (cardsDrawn=${(result as any).cardsDrawnDuringAction}): refreshed activeEffects count=${freshSnapshot.activeEffects?.length ?? 0}`,
-        );
-      } catch (snapshotError) {
-        // Best-effort: a failed re-snapshot does not undo the executed action
-        console.warn(
-          `[TurnExecutor] Mid-turn re-snapshot failed (non-fatal):`,
-          snapshotError instanceof Error ? snapshotError.message : snapshotError,
+      const refreshOutcome = await TurnExecutor.performNamedRefresh(
+        snapshot,
+        plan.type,
+        (result as { cardsDrawnDuringAction?: number }).cardsDrawnDuringAction ?? 0,
+      );
+      if (!refreshOutcome.success) {
+        // Fail closed: surface the error — do not continue with a stale snapshot.
+        // The executed action has already committed to the DB; we must not silently
+        // allow downstream planners to operate on rules state we know is unreliable.
+        throw new Error(
+          `[TurnExecutor] Named refresh failed after ${plan.type}: ${refreshOutcome.error}`,
         );
       }
     }
 
     return result;
+  }
+
+  /**
+   * Named refresh: re-capture the full snapshot after a card-drawing action so
+   * subsequent planners see updated activeEffects and pendingFloodRebuilds.
+   * Re-mints snapshot.identity after the refresh so the identity tracks the
+   * newly populated rules state.
+   *
+   * Returns an explicit outcome object — never swallows failure silently.
+   */
+  private static async performNamedRefresh(
+    snapshot: WorldSnapshot,
+    actionType: string,
+    cardsDrawn: number,
+  ): Promise<{ success: true } | { success: false; error: string }> {
+    try {
+      const freshSnapshot = await captureSnapshot(snapshot.gameId, snapshot.bot.playerId);
+      // Mutate the caller's snapshot reference so downstream consumers within
+      // the same turn see the refreshed activeEffects and pendingFloodRebuilds.
+      snapshot.activeEffects = freshSnapshot.activeEffects;
+      snapshot.bot.pendingFloodRebuilds = freshSnapshot.bot.pendingFloodRebuilds;
+      // Re-mint identity to reflect the updated rules state.
+      snapshot.identity = computeIdentity(snapshot);
+      console.info(
+        `[TurnExecutor] Named refresh after ${actionType} (cardsDrawn=${cardsDrawn}): activeEffects=${freshSnapshot.activeEffects?.length ?? 0}, identityMinted`,
+      );
+      return { success: true };
+    } catch (refreshError) {
+      const message = refreshError instanceof Error ? refreshError.message : String(refreshError);
+      console.error(
+        `[TurnExecutor] Named refresh failed after ${actionType} (cardsDrawn=${cardsDrawn}):`,
+        message,
+      );
+      return { success: false, error: message };
+    }
   }
 
   /**
@@ -316,6 +348,8 @@ export class TurnExecutor {
       totalSegments += result.segmentsBuilt;
       lastAction = result.action;
       snapshot.bot.money = result.remainingMoney;
+      // Re-mint identity after money mutation so it tracks the live snapshot.
+      snapshot.identity = computeIdentity(snapshot);
       lastResult = result;
 
       // Collect movement path for animation (deduplicate shared endpoints)
@@ -336,6 +370,8 @@ export class TurnExecutor {
       if (step.type === AIActionType.MoveTrain && step.path.length > 0) {
         const dest = step.path[step.path.length - 1];
         snapshot.bot.position = { row: dest.row, col: dest.col };
+        // Re-mint identity after position mutation.
+        snapshot.identity = computeIdentity(snapshot);
       }
     }
 
@@ -606,6 +642,8 @@ export class TurnExecutor {
     // game e437ce9b — keep snapshot in sync with DB for mid-turn consumers like
     // MovementPhasePlanner's JIRA-165 demand refresh).
     snapshot.bot.loads = updatedLoads;
+    // Re-mint identity after loads mutation so it tracks the live snapshot.
+    snapshot.identity = computeIdentity(snapshot);
 
     // Post-commit: audit record (best-effort)
     try {
@@ -758,6 +796,8 @@ export class TurnExecutor {
         ...snapshot.bot.loads.slice(idx + 1),
       ];
     }
+    // Re-mint identity after loads mutation (delivery removed one load).
+    snapshot.identity = computeIdentity(snapshot);
 
     // Post-commit: audit record (best-effort)
     try {
@@ -891,6 +931,8 @@ export class TurnExecutor {
 
     // Update snapshot so subsequent steps see the correct loads
     snapshot.bot.loads = snapshot.bot.loads.filter(l => l !== loadType);
+    // Re-mint identity after loads mutation (drop removed one load).
+    snapshot.identity = computeIdentity(snapshot);
 
     // Post-commit: audit record (best-effort)
     try {

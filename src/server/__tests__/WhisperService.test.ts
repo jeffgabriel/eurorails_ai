@@ -15,6 +15,7 @@ jest.mock('../db/index', () => ({ db: require('./mocks/db.mock').mockDb }));
 const mockCapture = jest.fn();
 jest.mock('../services/ai/WorldSnapshotService', () => ({
   capture: (...args: any[]) => mockCapture(...args),
+  computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
 }));
 
 const makeSnapshot = (overrides?: Partial<WorldSnapshot>): WorldSnapshot => ({

@@ -77,8 +77,12 @@ jest.mock('../services/playerService', () => {
 });
 
 const mockCaptureSnapshot = jest.fn<(...args: any[]) => Promise<any>>();
+// computeIdentity is a pure function — use a minimal stub that returns a fixed identity
+// so identity re-minting calls inside TurnExecutor don't throw.
+const mockComputeIdentity = jest.fn(() => ({ turnNumber: 3, factsHash: 'stub-hash' }));
 jest.mock('../services/ai/WorldSnapshotService', () => ({
   capture: jest.fn().mockImplementation((gameId: unknown, playerId: unknown) => mockCaptureSnapshot(gameId, playerId)),
+  computeIdentity: jest.fn().mockImplementation((...args: unknown[]) => mockComputeIdentity(...args as [])),
 }));
 
 import { TurnExecutor } from '../services/ai/TurnExecutor';
@@ -215,5 +219,55 @@ describe('TurnExecutor.executePlan — mid-turn re-snapshot', () => {
     await expect(TurnExecutor.executePlan(makeDeliverPlan(), snapshot)).rejects.toThrow('Load not on train');
 
     expect(mockCaptureSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('fail-closed: named refresh throws when capture fails (not silently swallowed)', async () => {
+    // Delivery succeeds and draws cards, but the named refresh capture fails
+    mockDeliverLoadForUser.mockResolvedValue({
+      payment: 20,
+      repayment: 0,
+      updatedMoney: 70,
+      updatedDebtOwed: 0,
+      updatedLoads: [],
+      newCard: { id: 42, demands: [] },
+      cardsDrawnDuringAction: 1,
+    });
+    mockCaptureSnapshot.mockRejectedValue(new Error('DB connection lost during refresh'));
+
+    const snapshot = makeSnapshot();
+    // The named refresh failure must propagate — execution must NOT continue silently
+    await expect(TurnExecutor.executePlan(makeDeliverPlan(), snapshot)).rejects.toThrow(
+      'Named refresh failed',
+    );
+    // Confirm capture was attempted
+    expect(mockCaptureSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-mints snapshot.identity after named refresh', async () => {
+    mockDeliverLoadForUser.mockResolvedValue({
+      payment: 20,
+      repayment: 0,
+      updatedMoney: 70,
+      updatedDebtOwed: 0,
+      updatedLoads: [],
+      newCard: { id: 42, demands: [] },
+      cardsDrawnDuringAction: 2,
+    });
+
+    const freshSnapshot = {
+      activeEffects: [],
+      bot: { pendingFloodRebuilds: [] },
+    };
+    mockCaptureSnapshot.mockResolvedValue(freshSnapshot);
+    // Return a new identity from computeIdentity after the refresh
+    mockComputeIdentity.mockReturnValueOnce({ turnNumber: 3, factsHash: 'after-deliver' })  // delivery loads mutation
+                       .mockReturnValueOnce({ turnNumber: 3, factsHash: 'after-refresh' });  // named refresh
+
+    const snapshot = makeSnapshot();
+    await TurnExecutor.executePlan(makeDeliverPlan(), snapshot);
+
+    // identity should have been updated after the refresh
+    expect(snapshot.identity).toBeDefined();
+    expect(snapshot.identity?.factsHash).toBe('after-refresh');
   });
 });

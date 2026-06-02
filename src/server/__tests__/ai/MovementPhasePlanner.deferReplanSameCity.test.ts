@@ -95,6 +95,7 @@ jest.mock('../../services/ai/PostDeliveryReplanner', () => ({
 const mockCapture = jest.fn();
 jest.mock('../../services/ai/WorldSnapshotService', () => ({
   capture: (...args: unknown[]) => mockCapture(...args),
+  computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
 }));
 
 const mockRebuildDemands = jest.fn((..._args: unknown[]) => []);
