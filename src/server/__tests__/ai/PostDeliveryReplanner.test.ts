@@ -1297,3 +1297,80 @@ describe('JIRA-241: PostDeliveryReplanner end-state strictly-faster gate', () =>
     expect(result.route.reasoning).toBe('fresh route');
   });
 });
+
+// ── Freshness check (SnapshotIdentity contract) ───────────────────────────────
+
+describe('PostDeliveryReplanner.replan — freshness check (SnapshotIdentity)', () => {
+  it('stamps derivedFromIdentity on the returned outcome', async () => {
+    const identity = { turnNumber: 5, factsHash: 'abc123' };
+    const snapshot = { ...makeSnapshot(), identity };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({
+        route: makeRoute({ reasoning: 'fresh route' }),
+        llmLog: [],
+      }),
+    }));
+
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(),
+      snapshot,
+      makeContext(),
+      makeBrain(),
+      makeGridPoints(),
+      0,
+      '[TEST-FRESH]',
+    );
+
+    expect(result.derivedFromIdentity).toEqual(identity);
+  });
+
+  it('returns outcome normally when snapshot.identity is undefined (legacy path)', async () => {
+    // snapshot has no identity — assertFresh should pass (no check)
+    const snapshot = { ...makeSnapshot(), identity: undefined };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({
+        route: makeRoute({ reasoning: 'legacy-ok' }),
+        llmLog: [],
+      }),
+    }));
+
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(),
+      snapshot,
+      makeContext(),
+      makeBrain(),
+      makeGridPoints(),
+      0,
+      '[TEST-LEGACY]',
+    );
+
+    expect(result.kind).toBe('route-replaced');
+    expect(result.derivedFromIdentity).toBeUndefined();
+  });
+
+  it('stamps derivedFromIdentity on no-grid path (sub-path 4)', async () => {
+    const identity = { turnNumber: 3, factsHash: 'hash-no-grid' };
+    const snapshot = { ...makeSnapshot(), identity };
+
+    // Route is fully completed (currentStopIndex >= stops.length) — not impossible,
+    // just done. This causes sub-path 4 to return 'no-route' not 'route-abandoned'.
+    const completedRoute = makeRoute({ currentStopIndex: 2 }); // stops.length === 2
+
+    const result = await PostDeliveryReplanner.replan(
+      completedRoute,
+      snapshot,
+      makeContext(),
+      makeBrain(),
+      [], // empty gridPoints → sub-path 4
+      0,
+      '[TEST-NOGRID-FRESH]',
+    );
+
+    expect(result.kind).toBe('no-route');
+    expect(result.derivedFromIdentity).toEqual(identity);
+  });
+});

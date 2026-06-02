@@ -44,6 +44,17 @@ import { hasCarriedDeliverableOnNetwork } from './routeHelpers';
 
 export class GuardrailEnforcer {
   /**
+   * Product-language reason string emitted when a post-delivery replan plan is
+   * stale — the snapshot the plan was derived from no longer matches the live
+   * snapshot at apply time.
+   *
+   * Owned here so the vocabulary is centralised alongside other guardrail
+   * failure reasons; referenced by PostDeliveryReplanner.assertFresh().
+   */
+  static readonly SNAPSHOT_MISMATCH =
+    'Carried loads changed since this plan was chosen — replan required to avoid stale delivery';
+
+  /**
    * Enforce hard guardrails on a TurnPlan.
    *
    * Returns the plan unchanged if no guardrail fires. If a guardrail fires,

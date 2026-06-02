@@ -17,12 +17,14 @@
  * phase boundary rather than via implicit shared local mutation.
  */
 
+import { ok, err, type Result } from 'neverthrow';
 import {
   BotMemoryState,
   GameContext,
   GameState,
   GridPoint,
   LlmAttempt,
+  SnapshotIdentity,
   StrategicRoute,
   WorldSnapshot,
 } from '../../../shared/types/GameTypes';
@@ -34,6 +36,59 @@ import { NewRoutePlanner } from './NewRoutePlanner';
 import { isRouteImpossible } from './routeHelpers';
 import { simulateTrip } from './RouteDetourEstimator';
 import type { TurnPlanUpgradeTrain } from '../../../shared/types/GameTypes';
+import { GuardrailEnforcer } from './GuardrailEnforcer';
+
+// ── SnapshotMismatch error ────────────────────────────────────────────────────
+
+/**
+ * Typed error returned by `assertFresh` when the snapshot the plan was derived
+ * from no longer matches the live snapshot at apply time.
+ *
+ * Carries a product-language `reason` string (sourced from
+ * `GuardrailEnforcer.SNAPSHOT_MISMATCH`) for postmortem logging.
+ */
+export class SnapshotMismatch extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'SnapshotMismatch';
+    this.reason = reason;
+  }
+}
+
+// ── assertFresh ───────────────────────────────────────────────────────────────
+
+/**
+ * Compare the `derivedFromIdentity` (the identity the plan was computed from)
+ * against the `liveIdentity` (the current live snapshot identity).
+ *
+ * Returns `Ok(void)` when:
+ *   - Either identity is `undefined` (legacy snapshot path — no check, same as today)
+ *   - `turnNumber` and `factsHash` both match
+ *
+ * Returns `Err(SnapshotMismatch)` when both identities are present but differ.
+ * The caller MUST fail closed on an Err — do not apply the stale plan.
+ *
+ * Uses a typed `Result<void, SnapshotMismatch>` (no boolean blindness).
+ */
+export function assertFresh(
+  derivedFromIdentity: SnapshotIdentity | undefined,
+  liveIdentity: SnapshotIdentity | undefined,
+): Result<void, SnapshotMismatch> {
+  // Legacy path: absence of either identity means no check (backward compatible)
+  if (!derivedFromIdentity || !liveIdentity) {
+    return ok(undefined);
+  }
+
+  if (
+    derivedFromIdentity.turnNumber === liveIdentity.turnNumber &&
+    derivedFromIdentity.factsHash === liveIdentity.factsHash
+  ) {
+    return ok(undefined);
+  }
+
+  return err(new SnapshotMismatch(GuardrailEnforcer.SNAPSHOT_MISMATCH));
+}
 
 /**
  * JIRA-241: Estimate the total turns required to complete the given route
@@ -91,6 +146,11 @@ export interface RouteContinuedOutcome {
   readonly replanSystemPrompt?: string;
   /** User prompt sent to TripPlanner, if called. */
   readonly replanUserPrompt?: string;
+  /**
+   * Identity of the snapshot this plan was derived from.
+   * Used by assertFresh to detect staleness at apply time.
+   */
+  readonly derivedFromIdentity?: SnapshotIdentity;
 }
 
 /**
@@ -126,6 +186,11 @@ export interface RouteReplacedOutcome {
    * The caller should propagate this to AIStrategyEngine for routeHistory recording.
    */
   readonly routeWasAbandoned?: true;
+  /**
+   * Identity of the snapshot this plan was derived from.
+   * Used by assertFresh to detect staleness at apply time.
+   */
+  readonly derivedFromIdentity?: SnapshotIdentity;
 }
 
 /**
@@ -147,6 +212,11 @@ export interface NoRouteOutcome {
   readonly replanSystemPrompt?: string;
   /** User prompt sent to TripPlanner, if called. */
   readonly replanUserPrompt?: string;
+  /**
+   * Identity of the snapshot this plan was derived from.
+   * Used by assertFresh to detect staleness at apply time.
+   */
+  readonly derivedFromIdentity?: SnapshotIdentity;
 }
 
 /**
@@ -162,6 +232,11 @@ export interface RouteAbandonedOutcome {
   readonly moveTargetInvalidated: true;
   /** Always true — signals the impossibility abandonment to the caller. */
   readonly routeWasAbandoned: true;
+  /**
+   * Identity of the snapshot this plan was derived from.
+   * Used by assertFresh to detect staleness at apply time.
+   */
+  readonly derivedFromIdentity?: SnapshotIdentity;
 }
 
 /**
@@ -216,6 +291,13 @@ export class PostDeliveryReplanner {
     deliveriesThisTurn: number,
     tag: string,
   ): Promise<PostDeliveryOutcome> {
+    // Capture the identity of the snapshot this plan is derived from.
+    // Stamped on every returned outcome so that callers can assert freshness
+    // before applying the produced plan — preventing stale delivery actions
+    // when carried loads or money changed between plan derivation and apply time.
+    // (ADR-3: the check compares derivedFromIdentity vs. live identity at apply time.)
+    const derivedFromIdentity = snapshot.identity;
+
     // Sub-path 4: gridPoints unavailable — cannot plan, revalidate existing route.
     // JIRA-270: brain may be null (Medium-skill bot); TripPlanner.planTrip
     // dispatches Medium deterministically per JIRA-269, so brain presence is
@@ -232,11 +314,11 @@ export class PostDeliveryReplanner {
           `cargo=${JSON.stringify(context.loads)}, remaining stops=${remainingCount}`,
         );
         const outcome: RouteAbandonedOutcome = { kind: 'route-abandoned', route: skipped, moveTargetInvalidated: true, routeWasAbandoned: true };
-        return outcome;
+        return PostDeliveryReplanner.withFreshnessCheck(outcome, derivedFromIdentity, snapshot.identity, tag);
       }
       // No route returned — grid empty, movement loop must end
-      const outcome: NoRouteOutcome = { kind: 'no-route', route: skipped, moveTargetInvalidated: true };
-      return outcome;
+      const outcome: NoRouteOutcome = { kind: 'no-route', route: skipped, moveTargetInvalidated: true, derivedFromIdentity };
+      return PostDeliveryReplanner.withFreshnessCheck(outcome, derivedFromIdentity, snapshot.identity, tag);
     }
 
     // Sub-paths 1–3: planner path (brain may be null; TripPlanner handles skill dispatch).
@@ -316,8 +398,9 @@ export class PostDeliveryReplanner {
               replanLlmLog,
               replanSystemPrompt,
               replanUserPrompt,
+              derivedFromIdentity,
             };
-            return outcome;
+            return PostDeliveryReplanner.withFreshnessCheck(outcome, derivedFromIdentity, snapshot.identity, tag);
           }
         }
 
@@ -347,8 +430,9 @@ export class PostDeliveryReplanner {
           pendingUpgradeAction,
           upgradeSuppressionReason,
           routeWasAbandoned: routeWasAbandoned || undefined, // JIRA-233: propagate impossibility signal
+          derivedFromIdentity,
         };
-        return outcome;
+        return PostDeliveryReplanner.withFreshnessCheck(outcome, derivedFromIdentity, snapshot.identity, tag);
       }
 
       // Sub-path 2a: JIRA-207B (R10e) — TripPlanner returned keep_current_plan.
@@ -364,8 +448,9 @@ export class PostDeliveryReplanner {
           replanLlmLog,
           replanSystemPrompt,
           replanUserPrompt,
+          derivedFromIdentity,
         };
-        return outcome;
+        return PostDeliveryReplanner.withFreshnessCheck(outcome, derivedFromIdentity, snapshot.identity, tag);
       }
 
       // Sub-path 2b: TripPlanner returned null route (other reasons) — no viable route.
@@ -377,7 +462,7 @@ export class PostDeliveryReplanner {
       // caller can record the abandonment in routeHistory.
       if (routeWasAbandoned) {
         const abandonedOutcome: RouteAbandonedOutcome = { kind: 'route-abandoned', route: skipped, moveTargetInvalidated: true, routeWasAbandoned: true };
-        return abandonedOutcome;
+        return PostDeliveryReplanner.withFreshnessCheck(abandonedOutcome, derivedFromIdentity, snapshot.identity, tag);
       }
       const noRouteOutcome: NoRouteOutcome = {
         kind: 'no-route',
@@ -386,8 +471,9 @@ export class PostDeliveryReplanner {
         replanLlmLog,
         replanSystemPrompt,
         replanUserPrompt,
+        derivedFromIdentity,
       };
-      return noRouteOutcome;
+      return PostDeliveryReplanner.withFreshnessCheck(noRouteOutcome, derivedFromIdentity, snapshot.identity, tag);
     } catch (err) {
       // Sub-path 3: TripPlanner threw — no viable route.
       // JIRA-271: movement loop MUST end when no route is available, regardless of budget.
@@ -396,14 +482,41 @@ export class PostDeliveryReplanner {
       const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);
       if (routeWasAbandoned) {
         const outcome: RouteAbandonedOutcome = { kind: 'route-abandoned', route: skipped, moveTargetInvalidated: true, routeWasAbandoned: true };
-        return outcome;
+        return PostDeliveryReplanner.withFreshnessCheck(outcome, derivedFromIdentity, snapshot.identity, tag);
       }
       const outcome: NoRouteOutcome = {
         kind: 'no-route',
         route: skipped,
         moveTargetInvalidated: true, // JIRA-194: route shape replaced — clear stale move target
+        derivedFromIdentity,
       };
-      return outcome;
+      return PostDeliveryReplanner.withFreshnessCheck(outcome, derivedFromIdentity, snapshot.identity, tag);
     }
+  }
+
+  /**
+   * Assert that the snapshot is still fresh (identity unchanged since plan derivation)
+   * and return the outcome unchanged on success.
+   *
+   * On mismatch: fail closed by throwing a SnapshotMismatch. This prevents a stale
+   * delivery plan from mutating game state when carried loads or money have changed
+   * between plan derivation and apply time.
+   *
+   * When either identity is undefined (legacy path), the outcome is returned as-is.
+   */
+  private static withFreshnessCheck<T extends PostDeliveryOutcome>(
+    outcome: T,
+    derivedFromIdentity: SnapshotIdentity | undefined,
+    liveIdentity: SnapshotIdentity | undefined,
+    tag: string,
+  ): T {
+    const check = assertFresh(derivedFromIdentity, liveIdentity);
+    if (check.isErr()) {
+      console.warn(
+        `${tag} [PostDeliveryReplanner] Freshness check failed: ${check.error.reason} — failing closed`,
+      );
+      throw check.error;
+    }
+    return outcome;
   }
 }
