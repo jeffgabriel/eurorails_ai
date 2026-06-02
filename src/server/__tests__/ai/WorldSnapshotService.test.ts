@@ -110,3 +110,58 @@ describe('WorldSnapshotService.capture — ferryHalfSpeed', () => {
     expect(snapshot.bot.ferryHalfSpeed).toBe(false);
   });
 });
+
+// ── capture() identity integration ───────────────────────────────────────────
+
+// Need ActiveEffectManager mock for these tests too
+jest.mock('../../services/ActiveEffectManager', () => ({
+  activeEffectManager: {
+    getActiveEffects: jest.fn().mockResolvedValue([]),
+  },
+}));
+
+describe('WorldSnapshotService.capture — identity', () => {
+  const GAME_ID = 'game-002';
+  const BOT_ID = 'bot-002';
+
+  const baseBotRow = {
+    game_status: 'active',
+    player_id: BOT_ID,
+    user_id: 'user-002',
+    money: 50,
+    position_row: 10,
+    position_col: 5,
+    train_type: 'freight',
+    hand: [1, 2, 3],
+    loads: ['coal'],
+    is_bot: true,
+    bot_config: { skillLevel: 'easy', name: 'IdentityBot' },
+    current_turn_number: 3,
+    segments: [],
+    pending_flood_rebuilds: [],
+  };
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('should populate snapshot.identity after capture()', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [baseBotRow] });
+    mockLoadGridPoints.mockReturnValue(new Map());
+
+    const snapshot = await capture(GAME_ID, BOT_ID);
+
+    expect(snapshot.identity).toBeDefined();
+    expect(snapshot.identity!.turnNumber).toBe(3);
+    expect(snapshot.identity!.factsHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('should produce stable identity for the same data', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [baseBotRow] });
+    mockQuery.mockResolvedValueOnce({ rows: [baseBotRow] });
+    mockLoadGridPoints.mockReturnValue(new Map());
+
+    const s1 = await capture(GAME_ID, BOT_ID);
+    const s2 = await capture(GAME_ID, BOT_ID);
+
+    expect(s1.identity!.factsHash).toBe(s2.identity!.factsHash);
+  });
+});

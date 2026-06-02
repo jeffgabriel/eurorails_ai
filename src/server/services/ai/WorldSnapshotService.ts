@@ -5,14 +5,50 @@
  * to build a WorldSnapshot that the AI pipeline uses for decision-making.
  */
 
+import { createHash } from 'crypto';
 import { db } from '../../db/index';
-import { WorldSnapshot, TrackSegment, GameStatus, ResolvedDemand, OpponentSnapshot, BotSkillLevel, GridPoint, TerrainType, CityData } from '../../../shared/types/GameTypes';
+import { WorldSnapshot, SnapshotIdentity, TrackSegment, GameStatus, ResolvedDemand, OpponentSnapshot, BotSkillLevel, GridPoint, TerrainType, CityData } from '../../../shared/types/GameTypes';
 import { DemandDeckService } from '../demandDeckService';
 import { LoadService } from '../loadService';
 import { getConnectedMajorCityCount } from './connectedMajorCities';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { loadGridPoints, gridToPixel } from '../MapTopology';
 import { activeEffectManager } from '../ActiveEffectManager';
+
+/**
+ * Compute a freshness identity for the given snapshot.
+ *
+ * Hashes decision-critical mutable facts — bot.money, bot.loads, bot.position,
+ * bot.demandCards, and activeEffects — after canonicalizing array inputs so that
+ * equal facts always produce equal hashes regardless of insertion order.
+ *
+ * This is the single source of truth for identity computation (DRY): used by
+ * `capture()` at snapshot time and by `TurnExecutor` when re-minting identity
+ * after each in-place mutation.
+ */
+export function computeIdentity(snapshot: WorldSnapshot): SnapshotIdentity {
+  // Canonicalize array inputs by sorting before hashing
+  const sortedLoads = [...snapshot.bot.loads].sort();
+  const sortedDemandCards = [...snapshot.bot.demandCards].sort((a, b) => a - b);
+  const sortedActiveEffects = [...(snapshot.activeEffects ?? [])].sort((a, b) => a.cardId - b.cardId);
+
+  const facts = {
+    money: snapshot.bot.money,
+    loads: sortedLoads,
+    position: snapshot.bot.position,
+    demandCards: sortedDemandCards,
+    // Serialize only the card IDs and restriction keys for active effects —
+    // the full Set/object structure contains non-serialisable members; card IDs
+    // are sufficient to discriminate relevant rule changes for freshness.
+    activeEffects: sortedActiveEffects.map((e) => e.cardId),
+  };
+
+  const factsHash = createHash('sha256')
+    .update(JSON.stringify(facts))
+    .digest('hex');
+
+  return { turnNumber: snapshot.turnNumber, factsHash };
+}
 
 /**
  * Capture a frozen snapshot of the game world for AI evaluation.
@@ -169,7 +205,7 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
   // Parse pending flood rebuilds for the bot player
   const pendingFloodRebuilds = parseSegments(botRow.pending_flood_rebuilds);
 
-  return {
+  const snapshot: WorldSnapshot = {
     gameId,
     gameStatus,
     turnNumber: botRow.current_turn_number ?? 0,
@@ -199,6 +235,9 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
     majorCityGroups: majorCityGroupsData,
     ferryEdges: ferryEdgesData,
   };
+
+  snapshot.identity = computeIdentity(snapshot);
+  return snapshot;
 }
 
 /** Parse JSONB segments — handles both string and object forms from pg */

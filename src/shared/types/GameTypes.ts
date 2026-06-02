@@ -353,11 +353,36 @@ export interface ResolvedDemand {
     demands: Array<{ city: string; loadType: string; payment: number }>;
 }
 
+/**
+ * Freshness identity for a WorldSnapshot.
+ *
+ * Minted at capture time and re-minted after every in-place mutation
+ * so it always reflects the current decision-critical facts.
+ * The `factsHash` discriminates mid-turn changes that `turnNumber` alone cannot.
+ */
+export interface SnapshotIdentity {
+    /** The turn number this snapshot was taken on */
+    turnNumber: number;
+    /**
+     * Deterministic SHA-256 hash of decision-critical mutable facts:
+     * bot.money, bot.loads (sorted), bot.position, bot.demandCards (sorted),
+     * and activeEffects (sorted by cardId).
+     */
+    factsHash: string;
+}
+
 /** Frozen game state snapshot for AI bot evaluation */
 export interface WorldSnapshot {
     gameId: string;
     gameStatus: GameStatus;
     turnNumber: number;
+    /**
+     * Freshness identity for this snapshot.
+     * Optional — populated by `WorldSnapshotService.capture()` and re-minted
+     * by `TurnExecutor` after each in-place mutation.
+     * When absent (legacy paths / edge constructors), freshness checks are skipped.
+     */
+    identity?: SnapshotIdentity;
     /**
      * All currently active event card effects for this game.
      * Populated by WorldSnapshotService from ActiveEffectManager.
