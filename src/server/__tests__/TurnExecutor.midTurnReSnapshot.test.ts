@@ -80,10 +80,15 @@ const mockCaptureSnapshot = jest.fn<(...args: any[]) => Promise<any>>();
 // computeIdentity is a pure function — use a minimal stub that returns a fixed identity
 // so identity re-minting calls inside TurnExecutor don't throw.
 const mockComputeIdentity = jest.fn(() => ({ turnNumber: 3, factsHash: 'stub-hash' }));
-jest.mock('../services/ai/WorldSnapshotService', () => ({
-  capture: jest.fn().mockImplementation((gameId: unknown, playerId: unknown) => mockCaptureSnapshot(gameId, playerId)),
-  computeIdentity: jest.fn().mockImplementation((...args: unknown[]) => mockComputeIdentity(...args as [])),
-}));
+jest.mock('../services/ai/WorldSnapshotService', () => {
+  const actual = jest.requireActual<typeof import('../services/ai/WorldSnapshotService')>('../services/ai/WorldSnapshotService');
+  return {
+    capture: jest.fn().mockImplementation((gameId: unknown, playerId: unknown) => mockCaptureSnapshot(gameId, playerId)),
+    computeIdentity: jest.fn().mockImplementation((...args: unknown[]) => mockComputeIdentity(...args as [])),
+    assertFresh: actual.assertFresh,   // real implementation for the freshness gate
+    SnapshotMismatch: actual.SnapshotMismatch,
+  };
+});
 
 import { TurnExecutor } from '../services/ai/TurnExecutor';
 import { AIActionType, TrainType } from '../../shared/types/GameTypes';

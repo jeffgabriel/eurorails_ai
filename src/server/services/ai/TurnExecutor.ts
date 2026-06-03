@@ -21,7 +21,9 @@ import { DemandDeckService } from '../demandDeckService';
 import { gridToPixel, loadGridPoints } from '../MapTopology';
 import { getTrainCapacity, getTrainSpeed } from '../../../shared/services/trainProperties';
 import { getCityNameAtPosition } from '../../../shared/services/cityPositionResolver';
-import { capture as captureSnapshot, computeIdentity } from './WorldSnapshotService';
+import { capture as captureSnapshot, computeIdentity, assertFresh } from './WorldSnapshotService';
+import { GuardrailEnforcer } from './GuardrailEnforcer';
+import type { SnapshotIdentity } from '../../../shared/types/GameTypes';
 
 export interface ExecutionResult {
   success: boolean;
@@ -34,8 +36,8 @@ export interface ExecutionResult {
   payment?: number;
   newCardId?: number;
   movementPath?: { row: number; col: number }[];
-  /** Populated when an ActionRestrictionError was caught — provides typed rejection info for logging */
-  rejectionReason?: { code: ActionRestrictionErrorCode; message: string };
+  /** Populated when an ActionRestrictionError was caught or a snapshot freshness mismatch was detected — provides typed rejection info for logging */
+  rejectionReason?: { code: ActionRestrictionErrorCode | 'SNAPSHOT_MISMATCH'; message: string };
   /**
    * Number of demand cards drawn as a result of this action.
    * Non-zero values trigger a mid-turn re-snapshot so the bot sees any event
@@ -103,7 +105,36 @@ export class TurnExecutor {
   static async executePlan(
     plan: TurnPlan,
     snapshot: WorldSnapshot,
+    derivedFromIdentity?: SnapshotIdentity,
   ): Promise<ExecutionResult> {
+    // ── Freshness gate ────────────────────────────────────────────────────────
+    // MUST be the first statement — before MultiAction dispatch and preExecuted
+    // short-circuit. Fail closed on snapshot mismatch: no state is mutated.
+    const freshnessResult = assertFresh(derivedFromIdentity, snapshot.identity);
+    if (freshnessResult.isErr()) {
+      const reason = freshnessResult.error.reason;
+      const rejectedAction =
+        plan.type === 'MultiAction'
+          ? ((plan.steps[0]?.type as AIActionType) ?? AIActionType.PassTurn)
+          : (plan.type as AIActionType);
+      console.warn(
+        `[TurnExecutor] Plan rejected — snapshot mismatch: ` +
+        `derived=${derivedFromIdentity?.turnNumber}:${derivedFromIdentity?.factsHash} ` +
+        `live=${snapshot.identity?.turnNumber}:${snapshot.identity?.factsHash}`,
+      );
+      return {
+        success: false,
+        action: rejectedAction,
+        cost: 0,
+        segmentsBuilt: 0,
+        remainingMoney: snapshot.bot.money,
+        durationMs: 0,
+        error: reason,
+        rejectionReason: { code: 'SNAPSHOT_MISMATCH', message: reason },
+      };
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     if (plan.type === 'MultiAction') {
       return TurnExecutor.executeMultiAction(plan.steps, snapshot);
     }
