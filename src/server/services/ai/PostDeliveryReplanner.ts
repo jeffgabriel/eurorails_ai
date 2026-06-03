@@ -17,7 +17,6 @@
  * phase boundary rather than via implicit shared local mutation.
  */
 
-import { ok, err, type Result } from 'neverthrow';
 import {
   BotMemoryState,
   GameContext,
@@ -36,59 +35,10 @@ import { NewRoutePlanner } from './NewRoutePlanner';
 import { isRouteImpossible } from './routeHelpers';
 import { simulateTrip } from './RouteDetourEstimator';
 import type { TurnPlanUpgradeTrain } from '../../../shared/types/GameTypes';
-import { GuardrailEnforcer } from './GuardrailEnforcer';
+import { assertFresh, SnapshotMismatch } from './WorldSnapshotService';
 
-// ── SnapshotMismatch error ────────────────────────────────────────────────────
-
-/**
- * Typed error returned by `assertFresh` when the snapshot the plan was derived
- * from no longer matches the live snapshot at apply time.
- *
- * Carries a product-language `reason` string (sourced from
- * `GuardrailEnforcer.SNAPSHOT_MISMATCH`) for postmortem logging.
- */
-export class SnapshotMismatch extends Error {
-  readonly reason: string;
-  constructor(reason: string) {
-    super(reason);
-    this.name = 'SnapshotMismatch';
-    this.reason = reason;
-  }
-}
-
-// ── assertFresh ───────────────────────────────────────────────────────────────
-
-/**
- * Compare the `derivedFromIdentity` (the identity the plan was computed from)
- * against the `liveIdentity` (the current live snapshot identity).
- *
- * Returns `Ok(void)` when:
- *   - Either identity is `undefined` (legacy snapshot path — no check, same as today)
- *   - `turnNumber` and `factsHash` both match
- *
- * Returns `Err(SnapshotMismatch)` when both identities are present but differ.
- * The caller MUST fail closed on an Err — do not apply the stale plan.
- *
- * Uses a typed `Result<void, SnapshotMismatch>` (no boolean blindness).
- */
-export function assertFresh(
-  derivedFromIdentity: SnapshotIdentity | undefined,
-  liveIdentity: SnapshotIdentity | undefined,
-): Result<void, SnapshotMismatch> {
-  // Legacy path: absence of either identity means no check (backward compatible)
-  if (!derivedFromIdentity || !liveIdentity) {
-    return ok(undefined);
-  }
-
-  if (
-    derivedFromIdentity.turnNumber === liveIdentity.turnNumber &&
-    derivedFromIdentity.factsHash === liveIdentity.factsHash
-  ) {
-    return ok(undefined);
-  }
-
-  return err(new SnapshotMismatch(GuardrailEnforcer.SNAPSHOT_MISMATCH));
-}
+// Re-export for backward compatibility with existing callers
+export { assertFresh, SnapshotMismatch };
 
 /**
  * JIRA-241: Estimate the total turns required to complete the given route

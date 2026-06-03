@@ -92,7 +92,8 @@ jest.mock('../../../server/services/playerService', () => {
   };
 });
 
-// Use REAL computeIdentity (not a stub) so identity mutations are observable
+// Use REAL computeIdentity, assertFresh, SnapshotMismatch (not stubs) so
+// identity mutations and freshness checks are fully observable
 jest.mock('../../../server/services/ai/WorldSnapshotService', () => {
   const actual = jest.requireActual<typeof import('../../../server/services/ai/WorldSnapshotService')>('../../../server/services/ai/WorldSnapshotService');
   return {
@@ -102,6 +103,8 @@ jest.mock('../../../server/services/ai/WorldSnapshotService', () => {
       identity: { turnNumber: 3, factsHash: 'fresh-hash' },
     }),
     computeIdentity: actual.computeIdentity, // real implementation
+    assertFresh: actual.assertFresh,         // real implementation
+    SnapshotMismatch: actual.SnapshotMismatch, // real class
   };
 });
 
