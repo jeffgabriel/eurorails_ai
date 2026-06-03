@@ -406,3 +406,50 @@ describe('PostDeliveryReplanner — derivedFromIdentity stamped on outcomes', ()
     expect(result.isOk()).toBe(true);
   });
 });
+
+// ── Section 6: BE-003 capture point — no false positive on mid-decision delivery ─
+
+describe('BE-003: decisionIdentity capture point — false-positive regression', () => {
+  // Critical invariant: the capture point is AFTER Stage 3e, which means after any
+  // mid-decision deliveries/pickups have re-minted snapshot.identity. Therefore a
+  // normal turn with a mid-decision delivery must NOT trigger SNAPSHOT_MISMATCH.
+  //
+  // This test simulates: snapshot.identity is minted AFTER a delivery re-mint, then
+  // decisionIdentity is captured (same value), then TurnExecutor.executePlan is called
+  // with that decisionIdentity. Result must be Ok (no mismatch).
+
+  it('no SNAPSHOT_MISMATCH when decisionIdentity captured after mid-decision re-mint', () => {
+    // Simulate: snapshot was re-minted after a mid-decision delivery
+    const postDeliveryIdentity = makeIdentity({ factsHash: 'hash-after-delivery-remint' });
+
+    // decisionIdentity captured at the same point (post Stage 3e)
+    const decisionIdentity = postDeliveryIdentity;
+
+    // Freshness check: decisionIdentity === snapshot.identity (same reference/value)
+    const result = assertFresh(decisionIdentity, postDeliveryIdentity);
+
+    // MUST be Ok — no false positive
+    expect(result.isOk()).toBe(true);
+  });
+
+  it('SNAPSHOT_MISMATCH fires only when identity changes AFTER capture point', () => {
+    // Simulate: decisionIdentity captured at Stage 4 boundary
+    const decisionIdentity = makeIdentity({ factsHash: 'hash-at-capture-point' });
+
+    // Something mutates snapshot between Stage 4 and Stage 5 (the anomalous case)
+    const mutatedLiveIdentity = makeIdentity({ factsHash: 'hash-mutated-after-capture' });
+
+    const result = assertFresh(decisionIdentity, mutatedLiveIdentity);
+
+    // MUST be Err — the post-capture mutation is detected
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr()).toBeInstanceOf(SnapshotMismatch);
+  });
+
+  it('legacy snapshot (no identity) passes through capture point without error', () => {
+    // Snapshots without identity (legacy path) must not crash or false-positive
+    const legacyIdentity: ReturnType<typeof makeIdentity> | undefined = undefined;
+    const result = assertFresh(legacyIdentity, legacyIdentity);
+    expect(result.isOk()).toBe(true);
+  });
+});

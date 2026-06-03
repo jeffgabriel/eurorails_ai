@@ -157,10 +157,15 @@ jest.mock('../../services/ai/DecisionLogger', () => ({
   flushTurnLog: jest.fn(),
 }));
 
-jest.mock('../../services/ai/WorldSnapshotService', () => ({
-  capture: jest.fn(),
-  computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
-}));
+jest.mock('../../services/ai/WorldSnapshotService', () => {
+  const actual = jest.requireActual<typeof import('../../services/ai/WorldSnapshotService')>('../../services/ai/WorldSnapshotService');
+  return {
+    capture: jest.fn(),
+    computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
+    assertFresh: actual.assertFresh,
+    SnapshotMismatch: actual.SnapshotMismatch,
+  };
+});
 
 jest.mock('../../services/ai/ContextBuilder', () => ({
   ContextBuilder: {

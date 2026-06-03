@@ -191,11 +191,17 @@ jest.mock('../../services/ai/DecisionLogger', () => ({
   flushTurnLog: jest.fn(),
 }));
 
-// Mock WorldSnapshotService
-jest.mock('../../services/ai/WorldSnapshotService', () => ({
-  capture: jest.fn(),
-  computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
-}));
+// Mock WorldSnapshotService — expose real assertFresh/SnapshotMismatch so the
+// freshness gate in TurnExecutor.executePlan resolves correctly in tests.
+jest.mock('../../services/ai/WorldSnapshotService', () => {
+  const actual = jest.requireActual<typeof import('../../services/ai/WorldSnapshotService')>('../../services/ai/WorldSnapshotService');
+  return {
+    capture: jest.fn(),
+    computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
+    assertFresh: actual.assertFresh,
+    SnapshotMismatch: actual.SnapshotMismatch,
+  };
+});
 
 // Mock ContextBuilder
 jest.mock('../../services/ai/ContextBuilder', () => ({

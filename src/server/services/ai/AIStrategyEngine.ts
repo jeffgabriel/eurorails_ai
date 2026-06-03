@@ -655,6 +655,12 @@ export class AIStrategyEngine {
         decision.plan = { type: 'MultiAction' as const, steps: [...deadLoadDropActions, ...existingSteps] };
       }
 
+      // Capture the snapshot identity after all Stage 3 mid-decision executions have
+      // settled (deliveries/pickups re-mint snapshot.identity). This is the "freshness
+      // anchor" for the final execution gate — any mutation between here and Stage 5
+      // will trigger SNAPSHOT_MISMATCH in TurnExecutor.executePlan.
+      const decisionIdentity = snapshot.identity;
+
       // ── Stage 4: Apply guardrails ──
       // JIRA-143: Snapshot plan before guardrail check for originalPlan capture
       const preGuardrailPlan = { action: decision.plan.type, reasoning: decision.reasoning ?? '' };
@@ -692,7 +698,9 @@ export class AIStrategyEngine {
       logPhase('LLM Decision', [], null, null, llmFields);
 
       // ── Stage 5: Execute the plan ──
-      const result = await TurnExecutor.executePlan(finalPlan, snapshot);
+      // Pass decisionIdentity so TurnExecutor's freshness gate can detect any
+      // snapshot mutation that occurred after the decision was finalised.
+      const result = await TurnExecutor.executePlan(finalPlan, snapshot, decisionIdentity);
 
       // Log execution phase
       logPhase('Execution', [], null, result);
