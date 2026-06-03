@@ -104,3 +104,49 @@ describe('assertFresh', () => {
     });
   });
 });
+
+// ── Re-export verification (TEST-002) ─────────────────────────────────────────
+// Verify that assertFresh and SnapshotMismatch re-exported from PostDeliveryReplanner
+// are the real implementations (not undefined/stubs) and behave identically to
+// direct imports from WorldSnapshotService.
+
+import { assertFresh as assertFreshReExport, SnapshotMismatch as SnapshotMismatchReExport } from '../../services/ai/PostDeliveryReplanner';
+import { assertFresh as assertFreshDirect, SnapshotMismatch as SnapshotMismatchDirect } from '../../services/ai/WorldSnapshotService';
+
+describe('assertFresh — re-export from PostDeliveryReplanner (TEST-002)', () => {
+  it('assertFresh re-export is a function (not undefined)', () => {
+    expect(typeof assertFreshReExport).toBe('function');
+  });
+
+  it('SnapshotMismatch re-export is a class (constructable)', () => {
+    expect(typeof SnapshotMismatchReExport).toBe('function');
+    const instance = new SnapshotMismatchReExport('test reason');
+    expect(instance).toBeInstanceOf(Error);
+    expect(instance.name).toBe('SnapshotMismatch');
+    expect(instance.reason).toBe('test reason');
+  });
+
+  it('re-exported assertFresh behaves identically to direct import — Ok path', () => {
+    const id = makeIdentity({ factsHash: 'same' });
+    const reExportResult = assertFreshReExport(id, id);
+    const directResult = assertFreshDirect(id, id);
+    expect(reExportResult.isOk()).toBe(true);
+    expect(directResult.isOk()).toBe(true);
+  });
+
+  it('re-exported assertFresh behaves identically to direct import — Err path', () => {
+    const derived = makeIdentity({ factsHash: 'old' });
+    const live = makeIdentity({ factsHash: 'new' });
+    const reExportResult = assertFreshReExport(derived, live);
+    const directResult = assertFreshDirect(derived, live);
+    expect(reExportResult.isErr()).toBe(true);
+    expect(directResult.isErr()).toBe(true);
+    expect(reExportResult._unsafeUnwrapErr().reason).toBe(directResult._unsafeUnwrapErr().reason);
+  });
+
+  it('SnapshotMismatch re-export instance satisfies instanceof SnapshotMismatchDirect', () => {
+    // Both imports point to the same class — instanceof must be symmetric
+    const instance = new SnapshotMismatchReExport('reason');
+    expect(instance).toBeInstanceOf(SnapshotMismatchDirect);
+  });
+});

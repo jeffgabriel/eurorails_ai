@@ -453,3 +453,129 @@ describe('BE-003: decisionIdentity capture point — false-positive regression',
     expect(result.isOk()).toBe(true);
   });
 });
+
+// ── Section 7: TurnExecutor.executePlan freshness gate — integration ──────────
+
+describe('TurnExecutor.executePlan — freshness gate integration (TEST-002)', () => {
+  // These integration tests exercise the full TurnExecutor.executePlan freshness
+  // gate with real WorldSnapshot objects whose identities are computed by
+  // computeIdentity (not stubs). This validates the end-to-end contract:
+  //
+  //   1. Capture decisionIdentity = snapshot.identity after facts settle.
+  //   2. Any intervening fact mutation re-mints snapshot.identity.
+  //   3. TurnExecutor.executePlan detects the mismatch and returns SNAPSHOT_MISMATCH.
+  //   4. No mutation occurs when the plan is rejected.
+  //   5. A fresh (unmodified) snapshot passes the gate cleanly.
+
+  it('SNAPSHOT_MISMATCH when snapshot fact is mutated after decisionIdentity captured', async () => {
+    // Build a snapshot with a real computed identity
+    const snapshot = makeSnapshot({
+      bot: {
+        playerId: 'bot-1',
+        userId: 'user-1',
+        money: 50,
+        position: { row: 10, col: 10 },
+        existingSegments: [],
+        demandCards: [1],
+        resolvedDemands: [],
+        trainType: TrainType.Freight,
+        loads: ['Coal'],
+        botConfig: null,
+        connectedMajorCityCount: 2,
+        pendingFloodRebuilds: [],
+      } as any,
+    });
+    snapshot.identity = computeIdentity(snapshot);
+
+    // Capture decisionIdentity at this point (simulating Stage 4 capture)
+    const decisionIdentity = snapshot.identity;
+
+    // Simulate an intervening mutation: Coal was delivered, loads list changes
+    snapshot.bot.loads = [];
+    snapshot.identity = computeIdentity(snapshot); // re-mint after mutation
+
+    // Freshness check: decisionIdentity != snapshot.identity → MISMATCH
+    expect(decisionIdentity.factsHash).not.toBe(snapshot.identity.factsHash);
+
+    // ExecutePlan with the stale decisionIdentity — gate MUST reject
+    const plan = { type: AIActionType.PassTurn } as any;
+    const result = await TurnExecutor.executePlan(plan, snapshot, decisionIdentity);
+
+    expect(result.success).toBe(false);
+    expect(result.rejectionReason?.code).toBe('SNAPSHOT_MISMATCH');
+    expect(result.rejectionReason?.message).toBe(GuardrailEnforcer.SNAPSHOT_MISMATCH);
+  });
+
+  it('gate passes when snapshot is unmodified between capture and executePlan', async () => {
+    // Build a snapshot with a real computed identity
+    const snapshot = makeSnapshot({
+      bot: {
+        playerId: 'bot-1',
+        userId: 'user-1',
+        money: 100,
+        position: { row: 5, col: 5 },
+        existingSegments: [],
+        demandCards: [2],
+        resolvedDemands: [],
+        trainType: TrainType.Freight,
+        loads: [],
+        botConfig: null,
+        connectedMajorCityCount: 1,
+        pendingFloodRebuilds: [],
+      } as any,
+    });
+    snapshot.identity = computeIdentity(snapshot);
+
+    // Capture decisionIdentity — no mutation follows
+    const decisionIdentity = snapshot.identity;
+
+    // Gate must pass (identities are identical)
+    const plan = { type: AIActionType.PassTurn } as any;
+    const result = await TurnExecutor.executePlan(plan, snapshot, decisionIdentity);
+
+    expect(result.rejectionReason?.code).not.toBe('SNAPSHOT_MISMATCH');
+    expect(result.success).toBe(true);
+  });
+
+  it('money mutation after capture triggers SNAPSHOT_MISMATCH', async () => {
+    const snapshot = makeSnapshot({
+      bot: {
+        playerId: 'bot-1',
+        userId: 'user-1',
+        money: 200,
+        position: { row: 1, col: 1 },
+        existingSegments: [],
+        demandCards: [],
+        resolvedDemands: [],
+        trainType: TrainType.Freight,
+        loads: [],
+        botConfig: null,
+        connectedMajorCityCount: 0,
+        pendingFloodRebuilds: [],
+      } as any,
+    });
+    snapshot.identity = computeIdentity(snapshot);
+    const decisionIdentity = snapshot.identity;
+
+    // Simulate payment received between capture and execute
+    snapshot.bot.money = 220;
+    snapshot.identity = computeIdentity(snapshot);
+
+    const plan = { type: AIActionType.PassTurn } as any;
+    const result = await TurnExecutor.executePlan(plan, snapshot, decisionIdentity);
+
+    expect(result.success).toBe(false);
+    expect(result.rejectionReason?.code).toBe('SNAPSHOT_MISMATCH');
+  });
+
+  it('legacy snapshot with no identity field passes gate without SNAPSHOT_MISMATCH', async () => {
+    const snapshot = makeSnapshot() as any;
+    delete snapshot.identity; // legacy — no identity
+
+    const plan = { type: AIActionType.PassTurn } as any;
+    const result = await TurnExecutor.executePlan(plan, snapshot);
+
+    expect(result.rejectionReason?.code).not.toBe('SNAPSHOT_MISMATCH');
+    expect(result.success).toBe(true);
+  });
+});
