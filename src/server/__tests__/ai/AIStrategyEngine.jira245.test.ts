@@ -382,10 +382,24 @@ function makeGameSnapshot(): WorldSnapshot {
   };
 }
 
-jest.mock('../../services/ai/WorldSnapshotService', () => ({
-  capture: jest.fn<() => Promise<any>>().mockImplementation(() => Promise.resolve(makeGameSnapshot())),
-  computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
-}));
+jest.mock('../../services/ai/WorldSnapshotService', () => {
+  const { ok } = jest.requireActual<typeof import('neverthrow')>('neverthrow');
+  return {
+    capture: jest.fn<() => Promise<any>>().mockImplementation(() => Promise.resolve(makeGameSnapshot())),
+    computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
+    // JIRA-279: assertFresh must be available so gateVictoryOutcomeFreshness (real impl)
+    // can call it. Both identities are undefined in JIRA-245/261 tests → always ok (no-op).
+    assertFresh: jest.fn(() => ok(undefined)),
+    SnapshotMismatch: class SnapshotMismatch extends Error {
+      readonly reason: string;
+      constructor(reason: string) {
+        super(reason);
+        this.name = 'SnapshotMismatch';
+        this.reason = reason;
+      }
+    },
+  };
+});
 
 // ── Mock victoryRules to control findFinalVictoryRoute ───────────────────────
 import type { FinalVictoryRoute, FinalVictoryOutcome } from '../../services/ai/victoryRules';
