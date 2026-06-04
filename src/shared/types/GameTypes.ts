@@ -558,6 +558,12 @@ export interface StrategicRoute {
   upgradeOnRoute?: string;      // LLM's upgrade decision: 'FastFreight' | 'HeavyFreight' | 'Superfreight'
   createdAtTurn: number;
   reasoning: string;            // LLM's reasoning for choosing this route
+  /**
+   * Identity of the snapshot this route was planned against.
+   * Optional — set on victory-sprint routes to enable postmortem attribution
+   * of which snapshot state the sprint was derived from (JIRA-279).
+   */
+  derivedFromIdentity?: SnapshotIdentity;
 }
 
 /** Persistent bot state that spans across turns within a game */

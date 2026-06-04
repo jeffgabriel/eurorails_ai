@@ -24,6 +24,7 @@ import {
   VICTORY_INITIAL_THRESHOLD,
   DemandContext,
   RouteStop,
+  SnapshotIdentity,
   StrategicRoute,
   TrainType,
   TRAIN_PROPERTIES,
@@ -210,6 +211,12 @@ export interface FinalVictoryRoute {
   majorConnectors: string[];
   /** Structured [final-victory] log line emitted on fire. */
   reasoning: string;
+  /**
+   * Identity of the snapshot this victory sprint was planned against (JIRA-279).
+   * Set by findFinalVictoryOutcome from snapshot.identity at planning time.
+   * Used by gateVictoryOutcomeFreshness to assertFresh before applying the override.
+   */
+  derivedFromIdentity?: SnapshotIdentity;
 }
 
 /**
