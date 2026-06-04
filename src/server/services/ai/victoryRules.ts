@@ -32,6 +32,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { loadGridPoints, hexDistance, GridPointData } from '../MapTopology';
 import { planTripDeterministic } from './DeterministicTripPlanner';
+import { assertFresh } from './WorldSnapshotService';
 
 /**
  * A "victory clinch" — a currently-carried load + matching demand card whose
@@ -240,7 +241,10 @@ export type FinalVictoryOutcomeSkipReason =
   // JIRA-274: emitted when all feasible demand subsets were presented to the
   // deterministic planner but it returned no viable route (all candidates
   // pruned by spatial/build/turn gates or planner returned route=null).
-  | 'planner_returned_empty';
+  | 'planner_returned_empty'
+  // JIRA-279: emitted by gateVictoryOutcomeFreshness when the route was planned
+  // against a snapshot identity that no longer matches the live snapshot identity.
+  | 'snapshot_mismatch';
 
 export type FinalVictoryOutcome =
   | { outcome: 'fire'; route: FinalVictoryRoute; cashGap: number; majorsGap: number; connectorCost: number }
@@ -458,7 +462,7 @@ export function findFinalVictoryOutcome(
     return { outcome: 'skip', reason: 'no_demands' };
   }
 
-  const cashGap = Math.max(0, VICTORY_INITIAL_THRESHOLD - context.money);
+  const cashGap = Math.max(0, VICTORY_INITIAL_THRESHOLD - snapshot.bot.money);
   const majorsGap = Math.max(0, VICTORY_CITY_COUNT - context.connectedMajorCities.length);
   const { cost: connectorCost, cityNames: connectorCityNames } =
     cheapestNUnconnectedMajorConnectorCost(context, majorsGap);
@@ -578,7 +582,7 @@ export function findFinalVictoryOutcome(
   // Minimum 1 turn
   estimatedTurns = Math.max(1, estimatedTurns);
 
-  const cashAtVictory = context.money + routeTotalPayout - routeBuildCost;
+  const cashAtVictory = snapshot.bot.money + routeTotalPayout - routeBuildCost;
   const majorsAtVictory = context.connectedMajorCities.length + connectorCityNames.length;
 
   const deliverStops = plannerRoute.stops.filter((s) => s.action === 'deliver');
@@ -599,6 +603,7 @@ export function findFinalVictoryOutcome(
     majorsAtVictory,
     majorConnectors: connectorCityNames,
     reasoning,
+    derivedFromIdentity: snapshot.identity,
   };
   return { outcome: 'fire', route, cashGap, majorsGap, connectorCost };
 }
@@ -660,6 +665,41 @@ export function findFinalVictoryRoute(
 ): FinalVictoryRoute | null {
   const result = findFinalVictoryOutcome(snapshot, context, memory);
   return result.outcome === 'fire' ? result.route : null;
+}
+
+/**
+ * JIRA-279: Pure freshness gate for the end-game victory sprint.
+ *
+ * Compares the snapshot identity the sprint was planned against
+ * (`outcome.route.derivedFromIdentity`) with the current live identity.
+ * If they differ, the sprint is stale and must not be applied — fail closed
+ * by returning a `snapshot_mismatch` skip outcome.
+ *
+ * Contract:
+ * - Non-fire outcomes are returned unchanged (nothing to gate).
+ * - Fire outcomes with undefined derivedFromIdentity or undefined liveIdentity
+ *   are returned unchanged (assertFresh no-ops on undefined — legacy paths).
+ * - Fire outcomes with mismatched identities become a skip with reason
+ *   'snapshot_mismatch', preserving cashGap/majorsGap/connectorCost.
+ */
+export function gateVictoryOutcomeFreshness(
+  outcome: FinalVictoryOutcome,
+  liveIdentity: SnapshotIdentity | undefined,
+): FinalVictoryOutcome {
+  if (outcome.outcome !== 'fire') {
+    return outcome;
+  }
+  const check = assertFresh(outcome.route.derivedFromIdentity, liveIdentity);
+  if (check.isErr()) {
+    return {
+      outcome: 'skip',
+      reason: 'snapshot_mismatch',
+      cashGap: outcome.cashGap,
+      majorsGap: outcome.majorsGap,
+      connectorCost: outcome.connectorCost,
+    };
+  }
+  return outcome;
 }
 
 /**

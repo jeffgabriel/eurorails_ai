@@ -356,7 +356,7 @@ describe('JIRA-274 planner_returned_empty skip reason', () => {
   });
 
   it('cashGap and majorsGap are preserved in planner_returned_empty skip', () => {
-    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [], money: 210 });
     const ctx = makeEndContext({
       money: 210,
       connectedMajorCities: SEVEN_CONNECTED.slice(0, 6), // 6 majors
@@ -389,7 +389,7 @@ describe('JIRA-274 re-scoring by turns-to-victory', () => {
    * deliver stops using demand metadata (estimatedTurns field).
    */
   it('estimatedTurns in returned route reflects demand metadata, not planner latency', () => {
-    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [], money: 230 });
     const ctx = makeEndContext({
       money: 230, // cashGap = 20
       demands: [
@@ -427,7 +427,7 @@ describe('JIRA-274 re-scoring by turns-to-victory', () => {
    * including connector cost), the override returns no_route_covers_gap.
    */
   it('returns no_route_covers_gap when planner route payout < cashGap + connectorCost', () => {
-    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [], money: 200 });
     const ctx = makeEndContext({
       money: 200, // cashGap = 50
       connectedMajorCities: SEVEN_CONNECTED,

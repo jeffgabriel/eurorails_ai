@@ -528,7 +528,7 @@ describe('findFinalVictoryRoute', () => {
   // ── AC3: single-stop deliver-only (carried load) ───────────────────────
   // Covers the JIRA-243 c990fa47 case: load on train + matching demand + delivery on network.
   it('AC3 — returns deliver-only route when carried load + matching demand + delivery on network covers 250M', () => {
-    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: ['Beer'] });
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: ['Beer'], money: 240 });
     // money=240, payout=10 → cashAtVictory=250
     const ctx = makeEndContext({
       money: 240,
@@ -563,7 +563,7 @@ describe('findFinalVictoryRoute', () => {
   // ── AC4: two-stop (pickup + deliver) route for 95f0aadc case ──────────
   // Bot has 7 majors, 241M cash, Beer→Bruxelles 10M; supply and delivery on network.
   it('AC4 — returns pickup+deliver route when supply and delivery on network and cash clears 250M', () => {
-    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [], money: 241 });
     const ctx = makeEndContext({
       money: 241,
       connectedMajorCities: SEVEN_CONNECTED,
@@ -629,7 +629,7 @@ describe('findFinalVictoryRoute', () => {
   });
 
   it('AC5 — returns route when payout covers cash gap AND connector cost', () => {
-    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [], money: 240 });
     // 6 majors → connectorCost=8, money=240, cashGap=10, need payout>=18; payout=20 → feasible
     const ctx = makeEndContext({
       money: 240,
@@ -665,7 +665,7 @@ describe('findFinalVictoryRoute', () => {
   // JIRA-274: With delegation, the override fires with the planner's route.
   // The planner is mocked to return Coal (higher payout, higher cashAtVictory).
   it('AC6 — picks route with higher cashAtVictory when estimatedTurns are equal', () => {
-    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [], money: 241 });
     const ctx = makeEndContext({
       money: 241,
       connectedMajorCities: SEVEN_CONNECTED,
@@ -717,7 +717,7 @@ describe('findFinalVictoryRoute', () => {
   it('AC7 — 2-load train never produces a 3-delivery candidate that exceeds capacity', () => {
     // With Freight (cap=2), we should only get 1- or 2-delivery routes.
     // A single demand of 9M won't clear 250 alone (money=232), but pair covers it.
-    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [], money: 232 });
     const demands = [
       makeDemand({ cardIndex: 0, loadType: 'A', supplyCity: 'CityA', deliveryCity: 'DelivA', payout: 9, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
       makeDemand({ cardIndex: 1, loadType: 'B', supplyCity: 'CityB', deliveryCity: 'DelivB', payout: 9, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
@@ -740,7 +740,7 @@ describe('findFinalVictoryRoute', () => {
   });
 
   it('AC7 — 3-load train (HeavyFreight) can produce a 3-delivery candidate', () => {
-    const snapshot = makeSnapshot({ trainType: TrainType.HeavyFreight, loads: [] });
+    const snapshot = makeSnapshot({ trainType: TrainType.HeavyFreight, loads: [], money: 241 });
     // Need 3 deliveries to reach 250M: money=241, each demand=3M. 3*3=9 → 241+9=250 exactly
     const demands = [
       makeDemand({ cardIndex: 0, loadType: 'A', supplyCity: 'CityA', deliveryCity: 'DelivA', payout: 3, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 1 }),
@@ -800,7 +800,7 @@ describe('findFinalVictoryRoute', () => {
 
   // ── reasoning string contains [final-victory] on success ───────────────
   it('includes [final-victory] in reasoning when returning a route', () => {
-    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [], money: 241 });
     const ctx = makeEndContext({
       money: 241,
       demands: [
@@ -848,7 +848,7 @@ describe('findFinalVictoryOutcome', () => {
   });
 
   it('returns skip:victory_met when both gaps are zero (game should have ended)', () => {
-    const snapshot = makeSnapshot();
+    const snapshot = makeSnapshot({ money: 250 });
     const ctx = makeEndContext({
       money: 250,
       connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
@@ -860,7 +860,7 @@ describe('findFinalVictoryOutcome', () => {
   });
 
   it('returns skip:no_route_covers_gap when no candidate clears the cashGap', () => {
-    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [], money: 200 });
     // cashGap = 250 - 200 = 50M. Only demand pays $10M with on-network supply/delivery.
     const ctx = makeEndContext({
       money: 200,
@@ -882,7 +882,7 @@ describe('findFinalVictoryOutcome', () => {
   });
 
   it('returns fire with route + gap details when a feasible candidate exists', () => {
-    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [], money: 241 });
     const ctx = makeEndContext({
       money: 241,
       demands: [
@@ -906,7 +906,7 @@ describe('findFinalVictoryOutcome', () => {
   });
 
   it('legacy findFinalVictoryRoute still returns route on fire and null on skip', () => {
-    const snapshot = makeSnapshot();
+    const snapshot = makeSnapshot({ money: 241 });
     const ctxSkip = makeEndContext({ demands: [] });
     // no_demands path — planner not called
     expect(findFinalVictoryRoute(snapshot, ctxSkip, makeEndMemory())).toBeNull();
@@ -1128,6 +1128,7 @@ describe('findFinalVictoryOutcome — JIRA-267 distance-aware + multiplicity-awa
       trainType: TrainType.Superfreight,
       position: { row: 7, col: 29 }, // near Aberdeen, from T84 positionEnd in log
       loads: ['Fish'],
+      money: 228,
     });
     const ctx = makeEndContext({
       money: 228,
@@ -1175,6 +1176,7 @@ describe('findFinalVictoryOutcome — JIRA-267 distance-aware + multiplicity-awa
       trainType: TrainType.Superfreight,
       position: { row: 7, col: 29 },
       loads: [], // Fish not yet picked up
+      money: 228,
     });
     const ctx = makeEndContext({
       money: 228,
@@ -1221,6 +1223,7 @@ describe('findFinalVictoryOutcome — JIRA-267 distance-aware + multiplicity-awa
       trainType: TrainType.Freight, // speed 9
       position: { row: 10, col: 10 },
       loads: ['Wine'],
+      money: 230,
     });
     const ctx = makeEndContext({
       money: 230, // cashGap = 20
