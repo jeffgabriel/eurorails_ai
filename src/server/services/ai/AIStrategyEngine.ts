@@ -64,6 +64,7 @@ import {
   detectVictoryClinch,
   findFinalVictoryRoute,
   findFinalVictoryOutcome,
+  gateVictoryOutcomeFreshness,
   buildEndGameTrace,
   validateRouteCarryPreconditions,
   type EndGameTrace,
@@ -315,6 +316,12 @@ export class AIStrategyEngine {
       let finalVictoryAppliedOverride = false;
       if (!context.isInitialBuild) {
         finalVictoryOutcome = findFinalVictoryOutcome(snapshot, context, memory);
+        // JIRA-279: Fail-closed freshness gate. If the sprint was planned against a
+        // snapshot identity that no longer matches the live identity (mid-turn mutation
+        // re-minted the hash), demote the fire outcome to snapshot_mismatch skip so
+        // ActiveRouteContinuer never executes a stale plan. On every normal turn
+        // snapshot.identity is stable — this is a no-op in production.
+        finalVictoryOutcome = gateVictoryOutcomeFreshness(finalVictoryOutcome, snapshot.identity);
         if (finalVictoryOutcome.outcome === 'fire') {
           // JIRA-273: Validate the route's carry preconditions against the
           // bot's actual cargo before applying. Catches cases where the
@@ -355,6 +362,7 @@ export class AIStrategyEngine {
               phase: 'travel',
               createdAtTurn: snapshot.turnNumber,
               reasoning: finalVictoryOutcome.route.reasoning,
+              derivedFromIdentity: finalVictoryOutcome.route.derivedFromIdentity,
             };
             finalVictoryAppliedOverride = true;
           }
