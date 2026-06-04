@@ -165,6 +165,18 @@ jest.mock('../../services/ai/WorldSnapshotService', () => ({
     loadAvailability: {},
   }),
   computeIdentity: jest.fn(() => ({ turnNumber: 1, factsHash: 'test-hash' })),
+  // JIRA-278 relocated assertFresh/SnapshotMismatch into WorldSnapshotService;
+  // PostDeliveryReplanner calls assertFresh, so the mock must expose it. These
+  // tests don't exercise staleness — always return an Ok-shaped result (no-op).
+  assertFresh: jest.fn(() => ({ isErr: () => false })),
+  SnapshotMismatch: class SnapshotMismatch extends Error {
+    readonly reason: string;
+    constructor(reason: string) {
+      super(reason);
+      this.name = 'SnapshotMismatch';
+      this.reason = reason;
+    }
+  },
 }));
 
 jest.mock('../../services/ai/ContextBuilder', () => ({
