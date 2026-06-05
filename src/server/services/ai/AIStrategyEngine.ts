@@ -62,13 +62,10 @@ import { UPGRADE_DELIVERY_THRESHOLD } from './context/UpgradeGatingConstants';
 import { RECENT_DELIVERIES_WINDOW } from './StrategicConstants';
 import {
   detectVictoryClinch,
-  findFinalVictoryRoute,
-  findFinalVictoryOutcome,
-  gateVictoryOutcomeFreshness,
-  buildEndGameTrace,
-  validateRouteCarryPreconditions,
+  buildEndGameRoutingDecision,
+  buildEndGameTraceFromDecision,
   type EndGameTrace,
-  type FinalVictoryOutcome,
+  type EndGameRoutingDecision,
 } from './victoryRules';
 import { isBotInPendingLostTurns } from '../../services/restrictionPredicates';
 
@@ -301,51 +298,15 @@ export class AIStrategyEngine {
       if (brain) brain.providerAdapter.resetCallIds();
       let activeRoute = memory.activeRoute;
 
-      // JIRA-245: Final-victory route search — runs BEFORE the strict on-train
-      // clinch gate (JIRA-243). When the bot is in End state, search for the
-      // minimum-turn route that simultaneously satisfies cash ≥ 250M AND ≥ 7
-      // majors connected. The broader search is a superset of the clinch gate:
-      // when findFinalVictoryRoute fires, the clinch check is skipped (else-branch).
-      // When the search returns null, we fall through to the existing clinch gate
-      // as a strict-subset fast-path. See victoryRules.findFinalVictoryRoute for
-      // the forensic case (game 95f0aadc, s2 T76) that motivates this change.
-      // JIRA-265: Capture the discriminated-union outcome so the per-turn
-      // endGameTrace (built below at turn-log construction) can record WHY
-      // a victory route did or did not override the activeRoute this turn.
-      let finalVictoryOutcome: FinalVictoryOutcome | null = null;
+      // End-game routing owns final-victory route projection, freshness, carry
+      // safety, and skip reasons. AIStrategyEngine consumes that handoff and
+      // decides only whether the current activeRoute should be replaced.
+      let finalVictoryDecision: EndGameRoutingDecision | null = null;
       let finalVictoryAppliedOverride = false;
       if (!context.isInitialBuild) {
-        finalVictoryOutcome = findFinalVictoryOutcome(snapshot, context, memory);
-        // JIRA-279: Fail-closed freshness gate. If the sprint was planned against a
-        // snapshot identity that no longer matches the live identity (mid-turn mutation
-        // re-minted the hash), demote the fire outcome to snapshot_mismatch skip so
-        // ActiveRouteContinuer never executes a stale plan. On every normal turn
-        // snapshot.identity is stable — this is a no-op in production.
-        finalVictoryOutcome = gateVictoryOutcomeFreshness(finalVictoryOutcome, snapshot.identity);
-        if (finalVictoryOutcome.outcome === 'fire') {
-          // JIRA-273: Validate the route's carry preconditions against the
-          // bot's actual cargo before applying. Catches cases where the
-          // override emits deliver-only stops for loads not on the train,
-          // which would otherwise loop forever (arrive → JIRA-249 guard fires
-          // → stuck-route-abandon → override re-fires same invalid route).
-          const carryCheck = validateRouteCarryPreconditions(
-            { ...finalVictoryOutcome.route, currentStopIndex: 0, phase: 'travel', createdAtTurn: snapshot.turnNumber },
-            snapshot.bot.loads,
-          );
-          if (!carryCheck.ok) {
-            console.warn(
-              `${tag} [final-victory-rejected] ${carryCheck.reason}`,
-            );
-            // Treat as skip: fall through to the existing skip-branch handling
-            // below. Replace the outcome so endGameTrace records the rejection.
-            finalVictoryOutcome = {
-              outcome: 'skip',
-              reason: 'carry_precondition_fail',
-              cashGap: finalVictoryOutcome.cashGap,
-              majorsGap: finalVictoryOutcome.majorsGap,
-              connectorCost: finalVictoryOutcome.connectorCost,
-            };
-          } else if (!AIStrategyEngine.routesMatch(activeRoute, finalVictoryOutcome.route.stops)) {
+        finalVictoryDecision = buildEndGameRoutingDecision(snapshot, context, memory);
+        if (finalVictoryDecision.kind === 'fire') {
+          if (!AIStrategyEngine.routesMatch(activeRoute, finalVictoryDecision.route.stops)) {
             // JIRA-261: Idempotency check compares the full remaining-stops
             // sequence, not just the first stop. The earlier first-stop-only check
             // suppressed override at game 8350cffa s3 T68 onwards: an existing
@@ -357,17 +318,22 @@ export class AIStrategyEngine {
             // full-sequence comparison, that divergence (and the missing London
             // leg in the existing route) now correctly triggers the override.
             activeRoute = {
-              stops: finalVictoryOutcome.route.stops,
+              stops: finalVictoryDecision.route.stops,
               currentStopIndex: 0,
               phase: 'travel',
               createdAtTurn: snapshot.turnNumber,
-              reasoning: finalVictoryOutcome.route.reasoning,
-              derivedFromIdentity: finalVictoryOutcome.route.derivedFromIdentity,
+              reasoning: finalVictoryDecision.route.reasoning,
+              derivedFromIdentity: finalVictoryDecision.derivedFromIdentity,
             };
             finalVictoryAppliedOverride = true;
           }
         }
-        if (finalVictoryOutcome.outcome === 'skip') {
+        if (finalVictoryDecision.kind === 'skip') {
+          if (finalVictoryDecision.reason === 'carry_precondition_fail' && finalVictoryDecision.rejectionDetail) {
+            console.warn(
+              `${tag} [final-victory-rejected] ${finalVictoryDecision.rejectionDetail}`,
+            );
+          }
           // JIRA-243: Victory-clinch hard gate. If a carried load + matching demand
           // card delivery would satisfy both victory conditions (cash ≥ 250M AND
           // ≥ 7 majors connected) without further building, force the activeRoute
@@ -1080,15 +1046,13 @@ export class AIStrategyEngine {
         gameState: context.gameState,
         // JIRA-265: Per-turn end-game trace. Populated whenever the bot is in
         // gameState=end so the operator can see cashGap, majorsGap, the
-        // cheapest connector cities, the per-turn findFinalVictoryRoute
-        // outcome (fire/skip with reason), and whether the current activeRoute
-        // will actually clinch — without re-running the game with stdout
-        // capture.
+        // cheapest connector cities, the end-game routing decision, and whether
+        // the current activeRoute will actually clinch.
         endGame: context.gameState === GameState.End
-          ? buildEndGameTrace(
+          ? buildEndGameTraceFromDecision(
               context,
               memory,
-              finalVictoryOutcome ?? { outcome: 'skip', reason: 'not_in_end_state' },
+              finalVictoryDecision ?? { kind: 'skip', reason: 'not_in_end_state' },
               finalVictoryAppliedOverride,
               activeRoute,
             )

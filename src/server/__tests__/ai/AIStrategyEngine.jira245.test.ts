@@ -401,8 +401,8 @@ jest.mock('../../services/ai/WorldSnapshotService', () => {
   };
 });
 
-// ── Mock victoryRules to control findFinalVictoryRoute ───────────────────────
-import type { FinalVictoryRoute, FinalVictoryOutcome } from '../../services/ai/victoryRules';
+// ── Mock victoryRules to control the end-game routing handoff ────────────────
+import type { FinalVictoryRoute, EndGameRoutingDecision } from '../../services/ai/victoryRules';
 
 const mockFindFinalVictoryRoute = jest.fn<() => FinalVictoryRoute | null>();
 
@@ -411,16 +411,22 @@ jest.mock('../../services/ai/victoryRules', () => {
   return {
     ...real,
     findFinalVictoryRoute: mockFindFinalVictoryRoute,
-    // JIRA-265: AIStrategyEngine now calls findFinalVictoryOutcome; mirror the
-    // mockFindFinalVictoryRoute return value into the outcome shape so existing
-    // mockReturnValueOnce(route) / mockReturnValueOnce(null) calls still drive
-    // the test behavior without re-writing every assertion.
-    findFinalVictoryOutcome: jest.fn<() => FinalVictoryOutcome>().mockImplementation(() => {
+    // AIStrategyEngine consumes the end-game routing decision handoff. Mirror
+    // the legacy route mock into that handoff so these integration assertions
+    // keep proving the same route-application behavior.
+    buildEndGameRoutingDecision: jest.fn<() => EndGameRoutingDecision>().mockImplementation(() => {
       const r = mockFindFinalVictoryRoute();
       if (r) {
-        return { outcome: 'fire', route: r, cashGap: 0, majorsGap: 0, connectorCost: 0 };
+        return {
+          kind: 'fire',
+          route: r,
+          cashGap: 0,
+          majorsGap: 0,
+          connectorCost: 0,
+          derivedFromIdentity: r.derivedFromIdentity,
+        };
       }
-      return { outcome: 'skip', reason: 'no_route_covers_gap' };
+      return { kind: 'skip', reason: 'no_route_covers_gap' };
     }),
   };
 });

@@ -355,7 +355,7 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
 
 import type { WorldSnapshot, SnapshotIdentity } from '../../../shared/types/GameTypes';
 import { TrainType } from '../../../shared/types/GameTypes';
-import type { FinalVictoryRoute, FinalVictoryOutcome } from '../../services/ai/victoryRules';
+import type { FinalVictoryRoute, FinalVictoryOutcome, EndGameRoutingDecision } from '../../services/ai/victoryRules';
 
 // ── Snapshot factory ──────────────────────────────────────────────────────────
 
@@ -408,24 +408,42 @@ function makeFinalVictoryRoute(identity?: SnapshotIdentity): FinalVictoryRoute {
   };
 }
 
-// ── Mock victoryRules with controllable findFinalVictoryOutcome + gate ────────
+// ── Mock victoryRules with controllable EndGameRoutingDecision handoff ────────
 
-const mockFinalVictoryOutcomeState: { value: FinalVictoryOutcome } = {
-  value: { outcome: 'skip', reason: 'not_in_end_state' },
+const mockEndGameRoutingDecisionState: { value: EndGameRoutingDecision } = {
+  value: { kind: 'skip', reason: 'not_in_end_state' },
 };
 
-// Track gate calls
-const mockGateVictoryOutcomeFreshness = jest.fn<(o: FinalVictoryOutcome, id: SnapshotIdentity | undefined) => FinalVictoryOutcome>();
+const mockBuildEndGameRoutingDecision = jest.fn<(
+  snapshot: WorldSnapshot,
+  context: any,
+  memory: any,
+) => EndGameRoutingDecision>();
 
 jest.mock('../../services/ai/victoryRules', () => {
   const real = jest.requireActual<typeof import('../../services/ai/victoryRules')>('../../services/ai/victoryRules');
   return {
     ...real,
+    buildEndGameRoutingDecision: mockBuildEndGameRoutingDecision,
     findFinalVictoryOutcome: jest.fn<() => FinalVictoryOutcome>().mockImplementation(() => {
-      return mockFinalVictoryOutcomeState.value;
+      const decision = mockEndGameRoutingDecisionState.value;
+      if (decision.kind === 'fire') {
+        return {
+          outcome: 'fire',
+          route: decision.route,
+          cashGap: decision.cashGap,
+          majorsGap: decision.majorsGap,
+          connectorCost: decision.connectorCost,
+        };
+      }
+      return {
+        outcome: 'skip',
+        reason: decision.reason,
+        cashGap: decision.cashGap,
+        majorsGap: decision.majorsGap,
+        connectorCost: decision.connectorCost,
+      };
     }),
-    // By default the gate is a pass-through — override in individual tests
-    gateVictoryOutcomeFreshness: mockGateVictoryOutcomeFreshness,
   };
 });
 
@@ -449,51 +467,38 @@ describe('AIStrategyEngine JIRA-279 — freshness gate integration', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     MOCK_ACTIVE_ROUTE_STATE.current = null;
-    // Default gate: pass-through (identity transform — returns the outcome unchanged)
-    mockGateVictoryOutcomeFreshness.mockImplementation((o) => o);
+    mockEndGameRoutingDecisionState.value = { kind: 'skip', reason: 'not_in_end_state' };
+    mockBuildEndGameRoutingDecision.mockImplementation(() => mockEndGameRoutingDecisionState.value);
   });
 
-  it('AC1: gateVictoryOutcomeFreshness is called after findFinalVictoryOutcome with snapshot.identity', async () => {
-    // Arrange: findFinalVictoryOutcome returns a fire outcome
+  it('AC1: buildEndGameRoutingDecision is called with the live snapshot, context, and memory', async () => {
     const route = makeFinalVictoryRoute(MATCHING_IDENTITY);
-    const fireOutcome: FinalVictoryOutcome = {
-      outcome: 'fire',
+    mockEndGameRoutingDecisionState.value = {
+      kind: 'fire',
       route,
       cashGap: 9,
       majorsGap: 0,
       connectorCost: 0,
+      derivedFromIdentity: MATCHING_IDENTITY,
     };
-    mockFinalVictoryOutcomeState.value = fireOutcome;
-    mockGateVictoryOutcomeFreshness.mockReturnValue(fireOutcome); // pass-through
 
     await AIStrategyEngine.takeTurn('game-jira279', 'bot-1');
 
-    // Gate must be called with the fire outcome and the snapshot identity
-    expect(mockGateVictoryOutcomeFreshness).toHaveBeenCalledTimes(1);
-    const [outcomePassed, identityPassed] = mockGateVictoryOutcomeFreshness.mock.calls[0];
-    expect(outcomePassed).toEqual(fireOutcome);
-    expect(identityPassed).toEqual(MATCHING_IDENTITY);
+    expect(mockBuildEndGameRoutingDecision).toHaveBeenCalledTimes(1);
+    const [snapshotArg, contextArg, memoryArg] = mockBuildEndGameRoutingDecision.mock.calls[0];
+    expect(snapshotArg.identity).toEqual(MATCHING_IDENTITY);
+    expect(contextArg.gameState).toBe('End');
+    expect(memoryArg.gameState).toBe('End');
   });
 
   it('AC2: snapshot_mismatch skip — activeRoute stays null, ActiveRouteContinuer not called', async () => {
-    // Arrange: findFinalVictoryOutcome returns a fire outcome, but gate demotes to mismatch skip
-    const route = makeFinalVictoryRoute(MATCHING_IDENTITY);
-    const fireOutcome: FinalVictoryOutcome = {
-      outcome: 'fire',
-      route,
-      cashGap: 9,
-      majorsGap: 0,
-      connectorCost: 0,
-    };
-    const mismatchSkip: FinalVictoryOutcome = {
-      outcome: 'skip',
+    mockEndGameRoutingDecisionState.value = {
+      kind: 'skip',
       reason: 'snapshot_mismatch',
       cashGap: 9,
       majorsGap: 0,
       connectorCost: 0,
     };
-    mockFinalVictoryOutcomeState.value = fireOutcome;
-    mockGateVictoryOutcomeFreshness.mockReturnValue(mismatchSkip);
 
     await AIStrategyEngine.takeTurn('game-jira279', 'bot-1');
 
@@ -502,17 +507,15 @@ describe('AIStrategyEngine JIRA-279 — freshness gate integration', () => {
   });
 
   it('AC3: fresh fire outcome — applied activeRoute carries derivedFromIdentity', async () => {
-    // Arrange: gate passes the fire outcome through (fresh identity matches)
     const route = makeFinalVictoryRoute(MATCHING_IDENTITY);
-    const fireOutcome: FinalVictoryOutcome = {
-      outcome: 'fire',
+    mockEndGameRoutingDecisionState.value = {
+      kind: 'fire',
       route,
       cashGap: 9,
       majorsGap: 0,
       connectorCost: 0,
+      derivedFromIdentity: MATCHING_IDENTITY,
     };
-    mockFinalVictoryOutcomeState.value = fireOutcome;
-    mockGateVictoryOutcomeFreshness.mockReturnValue(fireOutcome); // pass-through
 
     await AIStrategyEngine.takeTurn('game-jira279', 'bot-1');
 
@@ -525,20 +528,19 @@ describe('AIStrategyEngine JIRA-279 — freshness gate integration', () => {
     expect(routePassedToContinuer.reasoning).toContain('[final-victory]');
   });
 
-  it('AC4: skip outcome — gate is still called (non-fire passes through unchanged)', async () => {
-    // Arrange: findFinalVictoryOutcome returns a skip (no fire candidate)
-    const skipOutcome: FinalVictoryOutcome = {
-      outcome: 'skip',
+  it('AC4: skip decision — producer is called and no active route is set', async () => {
+    mockEndGameRoutingDecisionState.value = {
+      kind: 'skip',
       reason: 'no_demands',
     };
-    mockFinalVictoryOutcomeState.value = skipOutcome;
-    mockGateVictoryOutcomeFreshness.mockReturnValue(skipOutcome); // non-fire pass-through
 
     await AIStrategyEngine.takeTurn('game-jira279', 'bot-1');
 
-    // Gate was called — it should return the skip unchanged
-    expect(mockGateVictoryOutcomeFreshness).toHaveBeenCalledTimes(1);
-    expect(mockGateVictoryOutcomeFreshness.mock.results[0].value).toBe(skipOutcome);
+    expect(mockBuildEndGameRoutingDecision).toHaveBeenCalledTimes(1);
+    expect(mockBuildEndGameRoutingDecision.mock.results[0].value).toEqual({
+      kind: 'skip',
+      reason: 'no_demands',
+    });
 
     // No active route set — continuer not called
     expect(mockActiveContinuer.run).not.toHaveBeenCalled();
