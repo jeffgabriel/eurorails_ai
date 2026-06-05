@@ -62,7 +62,7 @@ const MOCK_GAME_CONTEXT = {
   opponents: [],
   phase: 'running',
   turnNumber: 50,
-  gameState: 'End',
+  gameState: 'end',
   consecutiveLlmFailures: 0,
 };
 
@@ -198,7 +198,7 @@ jest.mock('../../services/ai/BotMemory', () => ({
       activeRoute: MOCK_ACTIVE_ROUTE_STATE.current,
       turnsOnRoute: 0,
       routeHistory: [],
-      gameState: 'End',
+      gameState: 'end',
       deliveryCount: 10,
       totalEarnings: 200,
       consecutiveLlmFailures: 0,
@@ -354,7 +354,7 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 import type { WorldSnapshot, SnapshotIdentity } from '../../../shared/types/GameTypes';
-import { TrainType } from '../../../shared/types/GameTypes';
+import { GameState, TrainType } from '../../../shared/types/GameTypes';
 import type { FinalVictoryRoute, FinalVictoryOutcome, EndGameRoutingDecision } from '../../services/ai/victoryRules';
 
 // ── Snapshot factory ──────────────────────────────────────────────────────────
@@ -419,12 +419,17 @@ const mockBuildEndGameRoutingDecision = jest.fn<(
   context: any,
   memory: any,
 ) => EndGameRoutingDecision>();
+const mockBuildEndGameTraceFromDecision = jest.fn<(...args: any[]) => any>();
 
 jest.mock('../../services/ai/victoryRules', () => {
   const real = jest.requireActual<typeof import('../../services/ai/victoryRules')>('../../services/ai/victoryRules');
   return {
     ...real,
     buildEndGameRoutingDecision: mockBuildEndGameRoutingDecision,
+    buildEndGameTraceFromDecision: (...args: Parameters<typeof real.buildEndGameTraceFromDecision>) => {
+      mockBuildEndGameTraceFromDecision(...args);
+      return real.buildEndGameTraceFromDecision(...args);
+    },
     findFinalVictoryOutcome: jest.fn<() => FinalVictoryOutcome>().mockImplementation(() => {
       const decision = mockEndGameRoutingDecisionState.value;
       if (decision.kind === 'fire') {
@@ -458,8 +463,12 @@ jest.mock('../../services/ai/WorldSnapshotService', () => ({
 
 import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { ActiveRouteContinuer } from '../../services/ai/ActiveRouteContinuer';
+import { ContextBuilder } from '../../services/ai/ContextBuilder';
+import { NewRoutePlanner } from '../../services/ai/NewRoutePlanner';
 
 const mockActiveContinuer = ActiveRouteContinuer as { run: jest.MockedFunction<any> };
+const mockContextBuilder = ContextBuilder as { build: jest.MockedFunction<any> };
+const mockNewRoutePlanner = NewRoutePlanner as { run: jest.MockedFunction<any> };
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -467,6 +476,31 @@ describe('AIStrategyEngine JIRA-279 — freshness gate integration', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     MOCK_ACTIVE_ROUTE_STATE.current = null;
+    mockActiveContinuer.run.mockResolvedValue(MOCK_ACTIVE_ROUTE_CONTINUER_RESULT);
+    mockContextBuilder.build.mockResolvedValue(MOCK_GAME_CONTEXT);
+    mockNewRoutePlanner.run.mockResolvedValue({
+      activeRoute: null,
+      decision: {
+        plan: { type: 'PassTurn' },
+        reasoning: 'no route',
+        planHorizon: 'Immediate',
+        model: 'mock',
+        latencyMs: 0,
+        retried: false,
+        userPrompt: 'mock',
+      },
+      execCompositionTrace: null,
+      deadLoadDropActions: [],
+      autoDeliveredLoads: [],
+      tripPlanResult: null,
+      snapshot: makeGameSnapshot(MATCHING_IDENTITY),
+      context: MOCK_GAME_CONTEXT,
+      routeWasCompleted: false,
+      routeWasAbandoned: false,
+      hasDelivery: false,
+      pendingUpgradeAction: null,
+      upgradeSuppressionReason: null,
+    });
     mockEndGameRoutingDecisionState.value = { kind: 'skip', reason: 'not_in_end_state' };
     mockBuildEndGameRoutingDecision.mockImplementation(() => mockEndGameRoutingDecisionState.value);
   });
@@ -487,8 +521,8 @@ describe('AIStrategyEngine JIRA-279 — freshness gate integration', () => {
     expect(mockBuildEndGameRoutingDecision).toHaveBeenCalledTimes(1);
     const [snapshotArg, contextArg, memoryArg] = mockBuildEndGameRoutingDecision.mock.calls[0];
     expect(snapshotArg.identity).toEqual(MATCHING_IDENTITY);
-    expect(contextArg.gameState).toBe('End');
-    expect(memoryArg.gameState).toBe('End');
+    expect(contextArg.gameState).toBe(GameState.End);
+    expect(memoryArg.gameState).toBe(GameState.End);
   });
 
   it('AC2: snapshot_mismatch skip — activeRoute stays null, ActiveRouteContinuer not called', async () => {
@@ -544,5 +578,96 @@ describe('AIStrategyEngine JIRA-279 — freshness gate integration', () => {
 
     // No active route set — continuer not called
     expect(mockActiveContinuer.run).not.toHaveBeenCalled();
+  });
+
+  it('AC5: skip decision falls through to the victory-clinch delivery path', async () => {
+    mockEndGameRoutingDecisionState.value = {
+      kind: 'skip',
+      reason: 'no_route_covers_gap',
+      cashGap: 9,
+      majorsGap: 0,
+      connectorCost: 0,
+    };
+    mockContextBuilder.build.mockResolvedValueOnce({
+      ...MOCK_GAME_CONTEXT,
+      demands: [{
+        ...MOCK_GAME_CONTEXT.demands[0],
+        isLoadOnTrain: true,
+        isDeliveryOnNetwork: true,
+        payout: 10,
+      }],
+    });
+
+    await AIStrategyEngine.takeTurn('game-jira279', 'bot-1');
+
+    expect(mockBuildEndGameRoutingDecision).toHaveBeenCalledTimes(1);
+    expect(mockActiveContinuer.run).toHaveBeenCalledTimes(1);
+    const routePassedToContinuer = mockActiveContinuer.run.mock.calls[0][0];
+    expect(routePassedToContinuer).toMatchObject({
+      currentStopIndex: 0,
+      phase: 'travel',
+      stops: [{
+        action: 'deliver',
+        loadType: 'Beer',
+        city: 'Bruxelles',
+        demandCardId: 1,
+        payment: 10,
+      }],
+    });
+    expect(routePassedToContinuer.reasoning).toContain('[victory-clinch]');
+  });
+
+  it('AC6: end-game trace is built from the exact fire decision handoff', async () => {
+    const route = makeFinalVictoryRoute(MATCHING_IDENTITY);
+    mockEndGameRoutingDecisionState.value = {
+      kind: 'fire',
+      route,
+      cashGap: 9,
+      majorsGap: 0,
+      connectorCost: 0,
+      derivedFromIdentity: MATCHING_IDENTITY,
+    };
+    mockActiveContinuer.run.mockImplementationOnce(async (activeRoute: any) => ({
+      ...MOCK_ACTIVE_ROUTE_CONTINUER_RESULT,
+      activeRoute,
+    }));
+
+    await AIStrategyEngine.takeTurn('game-jira279', 'bot-1');
+
+    expect(mockBuildEndGameTraceFromDecision).toHaveBeenCalledTimes(1);
+    const [, , decisionArg, appliedOverrideArg, activeRouteArg] = mockBuildEndGameTraceFromDecision.mock.calls[0];
+    expect(decisionArg).toBe(mockEndGameRoutingDecisionState.value);
+    expect(appliedOverrideArg).toBe(true);
+    expect(activeRouteArg).toMatchObject({
+      stops: VICTORY_ROUTE_STOPS,
+      derivedFromIdentity: MATCHING_IDENTITY,
+    });
+  });
+
+  it('AC7: carry-precondition failure does not apply the rejected route and is traced as the skip reason', async () => {
+    const rejectedRoute = makeFinalVictoryRoute(MATCHING_IDENTITY);
+    mockEndGameRoutingDecisionState.value = {
+      kind: 'skip',
+      reason: 'carry_precondition_fail',
+      cashGap: 9,
+      majorsGap: 0,
+      connectorCost: 0,
+      rejectionDetail: 'route expects Beer on train, but live cargo is empty',
+      rejectedRoute,
+    };
+
+    await AIStrategyEngine.takeTurn('game-jira279', 'bot-1');
+
+    expect(mockActiveContinuer.run).not.toHaveBeenCalled();
+    expect(mockBuildEndGameTraceFromDecision).toHaveBeenCalledTimes(1);
+    const [, , decisionArg, appliedOverrideArg, activeRouteArg] = mockBuildEndGameTraceFromDecision.mock.calls[0];
+    expect(decisionArg).toMatchObject({
+      kind: 'skip',
+      reason: 'carry_precondition_fail',
+      rejectionDetail: 'route expects Beer on train, but live cargo is empty',
+      rejectedRoute,
+    });
+    expect(appliedOverrideArg).toBe(false);
+    expect(activeRouteArg).toBeNull();
   });
 });
