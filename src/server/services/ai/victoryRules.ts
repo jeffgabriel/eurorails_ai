@@ -251,6 +251,36 @@ export type FinalVictoryOutcome =
   | { outcome: 'skip'; reason: FinalVictoryOutcomeSkipReason; cashGap?: number; majorsGap?: number; connectorCost?: number };
 
 /**
+ * Product-readable handoff from end-game routing to the turn strategy loop.
+ *
+ * This keeps final-victory route projection, freshness, and cargo safety facts
+ * owned by victoryRules while letting AIStrategyEngine decide whether the
+ * current active route should actually be replaced.
+ */
+export type EndGameRoutingDecision =
+  | {
+      kind: 'fire';
+      route: FinalVictoryRoute;
+      cashGap: number;
+      majorsGap: number;
+      connectorCost: number;
+      derivedFromIdentity?: SnapshotIdentity;
+    }
+  | {
+      kind: 'skip';
+      reason: FinalVictoryOutcomeSkipReason;
+      cashGap?: number;
+      majorsGap?: number;
+      connectorCost?: number;
+      /**
+       * Present when the route search fired but the route was rejected before
+       * application, e.g. because cargo preconditions did not match the live bot.
+       */
+      rejectionDetail?: string;
+      rejectedRoute?: FinalVictoryRoute;
+    };
+
+/**
  * JIRA-265: Per-turn end-game trace for the NDJSON log. Surfaces everything a
  * post-game reader needs to answer "what does the bot need to win, and what's
  * its plan to get there?" without re-running the search with stdout capture.
@@ -703,6 +733,64 @@ export function gateVictoryOutcomeFreshness(
 }
 
 /**
+ * Build the end-game routing handoff consumed by AIStrategyEngine.
+ *
+ * This composes the existing final-victory search, snapshot freshness gate, and
+ * cargo precondition gate without changing the route execution pipeline.
+ */
+export function buildEndGameRoutingDecision(
+  snapshot: WorldSnapshot,
+  context: GameContext,
+  memory: BotMemoryState,
+): EndGameRoutingDecision {
+  const outcome = gateVictoryOutcomeFreshness(
+    findFinalVictoryOutcome(snapshot, context, memory),
+    snapshot.identity,
+  );
+
+  if (outcome.outcome === 'skip') {
+    return {
+      kind: 'skip',
+      reason: outcome.reason,
+      cashGap: outcome.cashGap,
+      majorsGap: outcome.majorsGap,
+      connectorCost: outcome.connectorCost,
+    };
+  }
+
+  const carryCheck = validateRouteCarryPreconditions(
+    {
+      ...outcome.route,
+      currentStopIndex: 0,
+      phase: 'travel',
+      createdAtTurn: snapshot.turnNumber,
+    },
+    snapshot.bot.loads,
+  );
+
+  if (!carryCheck.ok) {
+    return {
+      kind: 'skip',
+      reason: 'carry_precondition_fail',
+      cashGap: outcome.cashGap,
+      majorsGap: outcome.majorsGap,
+      connectorCost: outcome.connectorCost,
+      rejectionDetail: carryCheck.reason,
+      rejectedRoute: outcome.route,
+    };
+  }
+
+  return {
+    kind: 'fire',
+    route: outcome.route,
+    cashGap: outcome.cashGap,
+    majorsGap: outcome.majorsGap,
+    connectorCost: outcome.connectorCost,
+    derivedFromIdentity: outcome.route.derivedFromIdentity,
+  };
+}
+
+/**
  * JIRA-265: Compose the per-turn EndGameTrace from the outcome of
  * findFinalVictoryOutcome + the current context, memory, and (optionally) the
  * activeRoute that will execute this turn. AIStrategyEngine calls this once
@@ -772,4 +860,36 @@ export function buildEndGameTrace(
     victoryRouteProjection,
     activePlanProjection,
   };
+}
+
+/**
+ * Render the existing end-game trace from the named routing handoff.
+ *
+ * `appliedOverride` is intentionally supplied by the consumer because only the
+ * strategy loop knows whether this decision replaced the current active route.
+ */
+export function buildEndGameTraceFromDecision(
+  context: GameContext,
+  memory: BotMemoryState,
+  decision: EndGameRoutingDecision,
+  appliedOverride: boolean,
+  activeRoute: StrategicRoute | null,
+): EndGameTrace {
+  const outcome: FinalVictoryOutcome = decision.kind === 'fire'
+    ? {
+        outcome: 'fire',
+        route: decision.route,
+        cashGap: decision.cashGap,
+        majorsGap: decision.majorsGap,
+        connectorCost: decision.connectorCost,
+      }
+    : {
+        outcome: 'skip',
+        reason: decision.reason,
+        cashGap: decision.cashGap,
+        majorsGap: decision.majorsGap,
+        connectorCost: decision.connectorCost,
+      };
+
+  return buildEndGameTrace(context, memory, outcome, appliedOverride, activeRoute);
 }

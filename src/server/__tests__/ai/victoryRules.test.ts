@@ -23,9 +23,12 @@ import {
   findFinalVictoryRoute,
   findFinalVictoryOutcome,
   buildEndGameTrace,
+  buildEndGameRoutingDecision,
+  buildEndGameTraceFromDecision,
   buildEffectiveCarrySet,
   validateRouteCarryPreconditions,
   type FinalVictoryOutcome,
+  type EndGameRoutingDecision,
 } from '../../services/ai/victoryRules';
 import { GameState, GameContext, TrainType, WorldSnapshot } from '../../../shared/types/GameTypes';
 import type { BotMemoryState, DemandContext, RouteStop } from '../../../shared/types/GameTypes';
@@ -1044,6 +1047,143 @@ describe('buildEndGameTrace', () => {
     const skipOutcome: FinalVictoryOutcome = { outcome: 'skip', reason: 'no_route_covers_gap' };
     const trace = buildEndGameTrace(ctx, makeEndMemory(), skipOutcome, false, null);
     expect(trace.activePlanProjection).toBeUndefined();
+  });
+});
+
+// ── EndGameRoutingDecision handoff ──────────────────────────────────────────
+
+describe('buildEndGameRoutingDecision', () => {
+  it('returns a fire decision with route facts and derived snapshot identity', () => {
+    const identity = { turnNumber: 50, factsHash: 'fresh-facts' };
+    const snapshot = {
+      ...makeSnapshot({ money: 241, loads: [] }),
+      identity,
+    };
+    const ctx = makeEndContext({
+      money: 241,
+      demands: [
+        makeDemand({
+          loadType: 'Beer',
+          supplyCity: 'Munchen',
+          deliveryCity: 'Hamburg',
+          payout: 34,
+          isLoadOnTrain: false,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+        }),
+      ],
+    });
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Beer', city: 'Munchen' },
+      { action: 'deliver', loadType: 'Beer', city: 'Hamburg', demandCardId: 1, payment: 34 },
+    ]));
+
+    const decision = buildEndGameRoutingDecision(snapshot, ctx, makeEndMemory());
+
+    expect(decision.kind).toBe('fire');
+    if (decision.kind === 'fire') {
+      expect(decision.route.stops).toHaveLength(2);
+      expect(decision.cashGap).toBe(9);
+      expect(decision.derivedFromIdentity).toEqual(identity);
+    }
+  });
+
+  it('returns a skip decision outside End state', () => {
+    const decision = buildEndGameRoutingDecision(
+      makeSnapshot({ money: 241 }),
+      makeContext({ money: 241, gameState: GameState.Mid, demands: [makeDemand()] }),
+      makeEndMemory(),
+    );
+
+    expect(decision).toEqual({ kind: 'skip', reason: 'not_in_end_state' });
+  });
+
+  it('rejects fire routes whose delivery stops do not match live cargo', () => {
+    const snapshot = makeSnapshot({ money: 241, loads: [] });
+    const ctx = makeEndContext({
+      money: 241,
+      demands: [
+        makeDemand({
+          loadType: 'Labor',
+          deliveryCity: 'Bordeaux',
+          payout: 34,
+          isLoadOnTrain: false,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+        }),
+      ],
+    });
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'deliver', loadType: 'Labor', city: 'Bordeaux', demandCardId: 1, payment: 34 },
+    ]));
+
+    const decision = buildEndGameRoutingDecision(snapshot, ctx, makeEndMemory());
+
+    expect(decision.kind).toBe('skip');
+    if (decision.kind === 'skip') {
+      expect(decision.reason).toBe('carry_precondition_fail');
+      expect(decision.rejectionDetail).toContain('requires carry');
+      expect(decision.rejectedRoute?.stops).toHaveLength(1);
+    }
+  });
+});
+
+describe('buildEndGameTraceFromDecision', () => {
+  it('renders fire decision details through the central trace builder', () => {
+    const ctx = makeEndContext({ money: 241 });
+    const decision: EndGameRoutingDecision = {
+      kind: 'fire',
+      cashGap: 9,
+      majorsGap: 0,
+      connectorCost: 0,
+      route: {
+        stops: [
+          { action: 'pickup', loadType: 'Beer', city: 'Munchen' },
+          { action: 'deliver', loadType: 'Beer', city: 'Hamburg', demandCardId: 1, payment: 9 },
+        ],
+        estimatedTurns: 3,
+        buildCost: 0,
+        totalPayout: 9,
+        cashAtVictory: 250,
+        majorsAtVictory: 7,
+        majorConnectors: [],
+        reasoning: '[final-victory] Beer→Hamburg',
+      },
+    };
+
+    const trace = buildEndGameTraceFromDecision(ctx, makeEndMemory(), decision, true, null);
+
+    expect(trace.victoryRouteProjection.outcome).toBe('fire');
+    if (trace.victoryRouteProjection.outcome === 'fire') {
+      expect(trace.victoryRouteProjection.appliedOverride).toBe(true);
+      expect(trace.victoryRouteProjection.stops).toEqual([
+        'pickup:Beer@Munchen',
+        'deliver:Beer@Hamburg',
+      ]);
+    }
+  });
+
+  it('renders skip decision reasons through the central trace builder', () => {
+    const decision: EndGameRoutingDecision = {
+      kind: 'skip',
+      reason: 'snapshot_mismatch',
+      cashGap: 9,
+      majorsGap: 0,
+      connectorCost: 0,
+    };
+
+    const trace = buildEndGameTraceFromDecision(
+      makeEndContext({ money: 241 }),
+      makeEndMemory(),
+      decision,
+      false,
+      null,
+    );
+
+    expect(trace.victoryRouteProjection).toEqual({
+      outcome: 'skip',
+      reason: 'snapshot_mismatch',
+    });
   });
 });
 
