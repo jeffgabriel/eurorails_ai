@@ -1126,6 +1126,40 @@ describe('buildEndGameRoutingDecision', () => {
       expect(decision.rejectedRoute?.stops).toHaveLength(1);
     }
   });
+
+  it('preserves no-route skip details when the best route cannot close the gap', () => {
+    const snapshot = makeSnapshot({ money: 200, loads: [] });
+    const ctx = makeEndContext({
+      money: 200,
+      connectedMajorCities: SEVEN_CONNECTED.slice(0, 6),
+      unconnectedMajorCities: [{ cityName: 'Paris', estimatedCost: 20 }],
+      demands: [
+        makeDemand({
+          loadType: 'Beer',
+          supplyCity: 'Munchen',
+          deliveryCity: 'Hamburg',
+          payout: 10,
+          isLoadOnTrain: false,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+        }),
+      ],
+    });
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Beer', city: 'Munchen' },
+      { action: 'deliver', loadType: 'Beer', city: 'Hamburg', demandCardId: 1, payment: 10 },
+    ]));
+
+    const decision = buildEndGameRoutingDecision(snapshot, ctx, makeEndMemory());
+
+    expect(decision).toMatchObject({
+      kind: 'skip',
+      reason: 'no_route_covers_gap',
+      cashGap: 50,
+      majorsGap: 1,
+      connectorCost: 20,
+    });
+  });
 });
 
 describe('buildEndGameTraceFromDecision', () => {
@@ -1183,6 +1217,47 @@ describe('buildEndGameTraceFromDecision', () => {
     expect(trace.victoryRouteProjection).toEqual({
       outcome: 'skip',
       reason: 'snapshot_mismatch',
+    });
+  });
+
+  it('keeps active route projection visible when rendering a skip decision', () => {
+    const activeRoute = {
+      stops: [
+        { action: 'deliver' as const, loadType: 'Copper', city: 'Cardiff', demandCardId: 99, payment: 31 },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel' as const,
+      createdAtTurn: 76,
+      reasoning: 'current plan',
+    };
+    const decision: EndGameRoutingDecision = {
+      kind: 'skip',
+      reason: 'no_route_covers_gap',
+      cashGap: 22,
+      majorsGap: 0,
+      connectorCost: 0,
+    };
+
+    const trace = buildEndGameTraceFromDecision(
+      makeEndContext({
+        money: 228,
+        connectedMajorCities: SEVEN_CONNECTED,
+      }),
+      makeEndMemory(),
+      decision,
+      false,
+      activeRoute,
+    );
+
+    expect(trace.victoryRouteProjection).toEqual({
+      outcome: 'skip',
+      reason: 'no_route_covers_gap',
+    });
+    expect(trace.activePlanProjection).toEqual({
+      willClinch: true,
+      projectedCash: 259,
+      projectedMajors: 7,
+      remainingStops: 1,
     });
   });
 });
