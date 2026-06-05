@@ -57,9 +57,7 @@ import {
   formatDemandView as _formatDemandView,
   formatReachabilityNote as _formatReachabilityNote,
 } from './prompts/ContextSerializer';
-import { computeGameState } from './victoryRules';
-import { classifyGamePhase } from './DeterministicTripPlanner';
-import { updateMemory } from './BotMemory';
+import { resolveContextPhaseFacts } from './context/ContextPhaseFacts';
 
 export { ContextSerializer };
 
@@ -180,57 +178,11 @@ export class ContextBuilder {
       previousTurnSummary = parts.join('. ');
     }
 
-    // JIRA-241 / JIRA-242: Compute persistent game phase and conditionally persist
-    // if changed. computeGameState combines the End cash latch (JIRA-241) with
-    // turn-based Initial/Early/Mid brackets (JIRA-242).
-    const memoryForPhase: BotMemoryState = memory ?? {
-      currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
-      consecutiveDiscards: 0, deliveryCount: 0, totalEarnings: 0,
-      turnNumber: 0, activeRoute: null, turnsOnRoute: 0, routeHistory: [],
-      lastReasoning: null, lastPlanHorizon: null, previousRouteStops: null,
-      consecutiveLlmFailures: 0,
-    };
-    const gamePhase = computeGameState(
-      { money: snapshot.bot.money, turnNumber: snapshot.turnNumber },
-      memoryForPhase,
-    );
-    if (gamePhase !== memoryForPhase.gameState) {
-      // Latch changed — persist asynchronously (fire-and-forget, best-effort)
-      updateMemory(snapshot.gameId, snapshot.bot.playerId, { gameState: gamePhase }).catch(
-        (err: unknown) => console.warn('[ContextBuilder] Failed to persist gameState:', err),
-      );
-    }
-
-    // JIRA-265 Layer 2: End-game lock latch. Previously lived inside
-    // planTripDeterministic, which only runs on REPLAN turns; pure
-    // [route-executor] execution turns never updated the flag. Moving the
-    // latch here ensures it engages on every turn regardless of replan, so
-    // downstream consumers (cheapPrune carve-out, win-completer ranking,
-    // reasoning annotation) and the new per-turn endGame trace observe a
-    // consistent value.
-    //
-    // Same trigger as the prior site: cash > $200M OR classifyGamePhase=='late'.
-    // Once set, the flag is sticky (one-way) — never reverts even after a
-    // post-build cash dip.
-    if (!memoryForPhase.endGameLocked) {
-      const phaseClass = classifyGamePhase(
-        snapshot.turnNumber,
-        memoryForPhase.deliveryCount ?? 0,
-        connectedMajorCities.length,
-      );
-      if (snapshot.bot.money > 200 || phaseClass === 'late') {
-        memoryForPhase.endGameLocked = true;
-        updateMemory(snapshot.gameId, snapshot.bot.playerId, { endGameLocked: true }).catch(
-          (err: unknown) => console.warn('[ContextBuilder] Failed to persist endGameLocked:', err),
-        );
-      }
-    }
-
-    // JIRA-265 Layer 3: compute display phase AFTER gameState so "End Game" /
-    // "Victory Imminent" shows correctly once the cash latch has fired.
-    // Previously this ran before the latch and returned "Mid Game" at cash
-    // $255M whenever the bot had only 3-4 majors connected (game 086fa2ce s1 T65).
-    const phase = NetworkContext.computePhase(snapshot, connectedMajorCities, gamePhase);
+    const phaseFacts = resolveContextPhaseFacts({
+      snapshot,
+      memory,
+      connectedMajorCities,
+    });
 
     return {
       position: botPosition
@@ -259,13 +211,13 @@ export class ContextBuilder {
       canBuild,
       isInitialBuild,
       opponents,
-      phase,
+      phase: phaseFacts.phase,
       turnNumber: snapshot.turnNumber,
       upgradeAdvice,
       deliveryCount,
       enRoutePickups,
       previousTurnSummary,
-      gameState: gamePhase,
+      gameState: phaseFacts.gameState,
     };
   }
 

@@ -4054,8 +4054,10 @@ describe('ContextBuilder.build — endGameLocked latch (JIRA-265 Layer 2)', () =
       resolvedDemands: [],
     });
     const memory = makeMemoryWithLock(false);
-    await ContextBuilder.build(snapshot, BotSkillLevel.Medium, [], memory);
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, [], memory);
     expect(memory.endGameLocked).toBe(true);
+    expect(context.gameState).toBe(GameState.End);
+    expect(context.phase).toBe('End Game');
   });
 
   it('JIRA-265 AC5: endGameLocked is sticky — stays true after cash dips below $200M', async () => {
@@ -4082,7 +4084,8 @@ describe('ContextBuilder.build — endGameLocked latch (JIRA-265 Layer 2)', () =
       turnNumber: 10, // early-mid, not late
     });
     const memory = makeMemoryWithLock(false);
-    await ContextBuilder.build(snapshot, BotSkillLevel.Medium, [], memory);
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, [], memory);
     expect(memory.endGameLocked).toBeFalsy();
+    expect(context.gameState).toBe(GameState.Early);
   });
 });
