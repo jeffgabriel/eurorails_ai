@@ -21,11 +21,13 @@ import {
 function makeText() {
   return {
     setOrigin: jest.fn().mockReturnThis(),
+    setPosition: jest.fn().mockReturnThis(),
     setStroke: jest.fn().mockReturnThis(),
     setVisible: jest.fn().mockReturnThis(),
     setDepth: jest.fn().mockReturnThis(),
     on: jest.fn().mockReturnThis(),
     destroy: jest.fn(),
+    height: 16,
   };
 }
 
@@ -48,7 +50,16 @@ function makeTimerEvent(): Phaser.Time.TimerEvent {
 }
 
 function makeCamera(width = 1280, height = 720) {
-  return { main: { width, height, scrollX: 0, scrollY: 0, zoom: 1 } };
+  return {
+    main: {
+      width,
+      height,
+      scrollX: 0,
+      scrollY: 0,
+      zoom: 1,
+      worldView: { x: 0, y: 0, width, height },
+    },
+  };
 }
 
 function makeScene(overrides: Record<string, unknown> = {}) {
