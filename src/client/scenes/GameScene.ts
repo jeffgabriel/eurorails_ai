@@ -23,7 +23,7 @@ import { EventCardOverlay } from "../components/EventCardOverlay";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/mapConfig";
 import { useGameStore } from "../lobby/store/game.store";
-import { EventCardType } from "../../shared/types/EventCard";
+import { EventCardDrawnPayload, EventCardType } from "../../shared/types/EventCard";
 
 // Add type declaration for Phaser.Scene
 declare module "phaser" {
@@ -1472,19 +1472,11 @@ export class GameScene extends Phaser.Scene {
 
       if (overlay && !prevOverlay) {
         // New overlay — show EventCardOverlay and activate map highlighting.
-        // EventCardOverlay positions itself at the camera's scroll offset
-        // so it appears centered on screen (same pattern as PlayerHandScene modals).
-        this.eventCardOverlay = new EventCardOverlay(
-          this,
-          overlay,
-          () => useGameStore.getState().dismissEventOverlay(),
-        );
-
-        // Activate map highlights for the affected zone (regardless of affectedPlayerIds)
-        if (overlay.affectedZone.length > 0 && this.mapHighlighter) {
-          const eventType = overlay.card.type as EventCardType;
-          this.mapHighlighter.activate(overlay.affectedZone, eventType, overlay.card.id);
-        }
+        this.showEventOverlay(overlay);
+      } else if (overlay && prevOverlay) {
+        // Another card arrived before the first was dismissed — replace it.
+        this.eventCardOverlay?.destroy();
+        this.showEventOverlay(overlay);
       } else if (!overlay && prevOverlay) {
         // Overlay dismissed — destroy it (MapHighlighter stays active until effect expires)
         this.eventCardOverlay?.destroy();
@@ -1495,9 +1487,24 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /** Create and display an EventCardOverlay, activating map highlights if applicable. */
+  private showEventOverlay(overlay: EventCardDrawnPayload): void {
+    this.eventCardOverlay = new EventCardOverlay(
+      this,
+      overlay,
+      () => useGameStore.getState().dismissEventOverlay(),
+    );
+
+    if (overlay.affectedZone.length > 0 && this.mapHighlighter) {
+      const eventType = overlay.card.type as EventCardType;
+      this.mapHighlighter.activate(overlay.affectedZone, eventType, overlay.card.id);
+    }
+  }
+
   /**
    * Subscribe to activeEffects store state.
-   * Deactivates MapHighlighter zones when effects expire.
+   * Activates MapHighlighter zones for newly added effects (e.g. on reconnect)
+   * and deactivates zones when effects expire.
    */
   private setupActiveEffectsSubscription(): void {
     let previousCardIds = new Set(
@@ -1507,7 +1514,14 @@ export class GameScene extends Phaser.Scene {
     this.unsubActiveEffects = useGameStore.subscribe((state) => {
       const currentCardIds = new Set(state.activeEffects.map(e => e.cardId));
 
-      // Find removed effects and deactivate their highlights
+      // Activate highlights for newly added effects (e.g. restored on reconnect)
+      for (const effect of state.activeEffects) {
+        if (!previousCardIds.has(effect.cardId) && this.mapHighlighter && effect.affectedZone.length > 0) {
+          this.mapHighlighter.activate(effect.affectedZone, effect.cardType as EventCardType, effect.cardId);
+        }
+      }
+
+      // Deactivate highlights for removed effects
       for (const cardId of previousCardIds) {
         if (!currentCardIds.has(cardId) && this.mapHighlighter) {
           this.mapHighlighter.deactivate(cardId);
