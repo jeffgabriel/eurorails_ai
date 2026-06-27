@@ -681,6 +681,19 @@ export class GameScene extends Phaser.Scene {
         this.socketUnsubWhisperTurnHistory?.();
         this.socketUnsubAutoRunStatus?.();
 
+        // Wire event card socket listeners → Zustand store
+        // (The store's own connect() is not called from GameScene, so we must
+        // register these here so the overlay/highlight subscriptions fire.)
+        svc.onEventCardDrawn((payload) => {
+          useGameStore.getState().showEventOverlay(payload);
+        });
+        svc.onEventEffectExpired((payload) => {
+          useGameStore.getState().removeActiveEffect(payload.cardId);
+        });
+        svc.onActiveEffects((effects) => {
+          useGameStore.getState().setActiveEffects(effects);
+        });
+
         // F9 key listener — toggle auto-run
         this.input.keyboard?.on('keydown-F9', () => {
           svc.emitAutoRunToggle(this.gameState.id);
@@ -1458,13 +1471,14 @@ export class GameScene extends Phaser.Scene {
       if (overlay === prevOverlay) return;
 
       if (overlay && !prevOverlay) {
-        // New overlay — show EventCardOverlay and activate map highlighting
+        // New overlay — show EventCardOverlay and activate map highlighting.
+        // EventCardOverlay positions itself at the camera's scroll offset
+        // so it appears centered on screen (same pattern as PlayerHandScene modals).
         this.eventCardOverlay = new EventCardOverlay(
           this,
           overlay,
           () => useGameStore.getState().dismissEventOverlay(),
         );
-        this.add.existing(this.eventCardOverlay);
 
         // Activate map highlights for the affected zone (regardless of affectedPlayerIds)
         if (overlay.affectedZone.length > 0 && this.mapHighlighter) {
@@ -1473,6 +1487,7 @@ export class GameScene extends Phaser.Scene {
         }
       } else if (!overlay && prevOverlay) {
         // Overlay dismissed — destroy it (MapHighlighter stays active until effect expires)
+        this.eventCardOverlay?.destroy();
         this.eventCardOverlay = undefined;
       }
 

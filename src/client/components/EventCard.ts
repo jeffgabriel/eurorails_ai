@@ -35,6 +35,7 @@ export class EventCard extends ContainerLite {
       .rectangle(0, 0, CARD_WIDTH, CARD_HEIGHT, 0x1a1a2e)
       .setOrigin(0.5)
       .setStrokeStyle(2, 0xf0a500);
+    bg.name = 'EventCard_bg';
     this.add(bg);
 
     // Header row: type icon + card ID
@@ -52,12 +53,14 @@ export class EventCard extends ContainerLite {
         }
       )
       .setOrigin(0, 0);
+    headerText.name = 'EventCard_header';
     this.add(headerText);
 
     // Horizontal divider beneath header
     const divider = scene.add
       .rectangle(0, -(CARD_HEIGHT / 2) + 36, CARD_WIDTH - 16, 1, 0xf0a500)
       .setOrigin(0.5, 0.5);
+    divider.name = 'EventCard_divider';
     this.add(divider);
 
     // Title
@@ -71,6 +74,7 @@ export class EventCard extends ContainerLite {
         wordWrap: { width: CARD_WIDTH - 24 },
       })
       .setOrigin(0.5, 0);
+    titleText.name = 'EventCard_title';
     this.add(titleText);
 
     // Description
@@ -83,6 +87,7 @@ export class EventCard extends ContainerLite {
         wordWrap: { width: CARD_WIDTH - 32 },
       })
       .setOrigin(0.5, 0);
+    descText.name = 'EventCard_description';
     this.add(descText);
   }
 }

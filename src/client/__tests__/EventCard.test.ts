@@ -48,17 +48,25 @@ function makeTimerEvent(): Phaser.Time.TimerEvent {
 }
 
 function makeCamera(width = 1280, height = 720) {
-  return { main: { width, height } };
+  return { main: { width, height, scrollX: 0, scrollY: 0, zoom: 1 } };
 }
 
 function makeScene(overrides: Record<string, unknown> = {}) {
   const timerEvent = makeTimerEvent();
 
+  const mockContainer = {
+    setDepth: jest.fn().mockReturnThis(),
+    add: jest.fn().mockReturnThis(),
+    destroy: jest.fn(),
+    name: '',
+  };
+
   const scene = {
     add: {
-      rectangle: jest.fn().mockReturnValue(makeRectangle()),
-      text: jest.fn().mockReturnValue(makeText()),
+      rectangle: jest.fn().mockImplementation(() => makeRectangle()),
+      text: jest.fn().mockImplementation(() => makeText()),
       existing: jest.fn(),
+      container: jest.fn().mockReturnValue(mockContainer),
     },
     cameras: makeCamera(),
     time: {
@@ -101,6 +109,10 @@ jest.mock('phaser3-rex-plugins/plugins/containerlite.js', () => {
     }
 
     getChildren(): unknown[] {
+      return this.children;
+    }
+
+    getAllChildren(): unknown[] {
       return this.children;
     }
 
@@ -291,11 +303,12 @@ describe('EventCardOverlay component', () => {
       onDismiss
     );
 
-    // Find the button rectangle with a pointerdown listener
+    // Find the dismiss button rectangle (last interactive rect — first is backdrop)
     const allRects = (scene.add.rectangle.mock.results as { value: ReturnType<typeof makeRectangle> }[]);
-    const buttonRect = allRects
+    const interactiveRects = allRects
       .map(r => r.value)
-      .find(rect => rect.setInteractive.mock.calls.length > 0);
+      .filter(rect => rect.setInteractive.mock.calls.length > 0);
+    const buttonRect = interactiveRects[interactiveRects.length - 1];
 
     expect(buttonRect).toBeDefined();
     if (!buttonRect) return;
@@ -354,11 +367,12 @@ describe('EventCardOverlay component', () => {
       onDismiss
     );
 
-    // Simulate dismiss button click
+    // Find the dismiss button rectangle (last interactive rect — first is backdrop)
     const allRects = (scene.add.rectangle.mock.results as { value: ReturnType<typeof makeRectangle> }[]);
-    const buttonRect = allRects
+    const interactiveRects = allRects
       .map(r => r.value)
-      .find(rect => rect.setInteractive.mock.calls.length > 0);
+      .filter(rect => rect.setInteractive.mock.calls.length > 0);
+    const buttonRect = interactiveRects[interactiveRects.length - 1];
 
     if (!buttonRect) throw new Error('Button rect not found');
 
@@ -374,14 +388,17 @@ describe('EventCardOverlay component', () => {
     expect((timerEvent as unknown as { remove: jest.Mock }).remove).toHaveBeenCalledWith(false);
   });
 
-  it('sets a high depth value to render above other game objects', () => {
+  it('creates a root container with high depth to render above other game objects', () => {
     const { scene } = makeScene();
-    const overlay = new EventCardOverlay(
+    new EventCardOverlay(
       scene as unknown as Phaser.Scene,
       samplePayload,
       jest.fn()
     );
 
-    expect(overlay.depth).toBeGreaterThanOrEqual(100);
+    // The root container is created via scene.add.container and setDepth(1000)
+    expect(scene.add.container).toHaveBeenCalled();
+    const containerResult = (scene.add.container as jest.Mock).mock.results[0];
+    expect(containerResult.value.setDepth).toHaveBeenCalledWith(1000);
   });
 });
