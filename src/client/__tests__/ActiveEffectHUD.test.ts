@@ -39,7 +39,9 @@ function makeText(content = ''): MockText {
 
 interface MockSizer {
   name: string;
+  visible: boolean;
   setName: jest.Mock;
+  setVisible: jest.Mock;
   add: jest.Mock;
   clear: jest.Mock;
   destroy: jest.Mock;
@@ -50,12 +52,17 @@ function makeSizer(): MockSizer {
   const addedItems: unknown[] = [];
   const obj: MockSizer = {
     name: '',
+    visible: true,
     setName: jest.fn().mockImplementation((n: string) => {
       obj.name = n;
       return obj;
     }),
     add: jest.fn().mockImplementation((item: unknown) => {
       addedItems.push(item);
+      return obj;
+    }),
+    setVisible: jest.fn().mockImplementation((v: boolean) => {
+      obj.visible = v;
       return obj;
     }),
     clear: jest.fn(),
@@ -138,24 +145,25 @@ describe('ActiveEffectHUD', () => {
   });
 
   describe('updateEffects — empty state', () => {
-    it('renders empty state text when no effects are provided', () => {
+    it('hides the sizer when no effects are provided', () => {
       hud.updateEffects([]);
-      const textContent = scene._textObjects.map((t) => t.text);
-      expect(textContent.some((t) => t.includes('No active effects'))).toBe(true);
+      expect(scene._sizer.setVisible).toHaveBeenCalledWith(false);
     });
 
-    it('names the empty state text object correctly', () => {
+    it('does not create any text objects when empty', () => {
       hud.updateEffects([]);
-      const emptyText = scene._textObjects.find((t) =>
-        t.text.includes('No active effects')
-      );
-      expect(emptyText).toBeDefined();
-      expect(emptyText!.name).toBe('active-effects-empty');
+      expect(scene._textObjects).toHaveLength(0);
     });
 
-    it('adds the empty state text to the sizer', () => {
+    it('does not add any items to the sizer when empty', () => {
       hud.updateEffects([]);
-      expect(scene._sizer.add).toHaveBeenCalled();
+      expect(scene._sizer.add).not.toHaveBeenCalled();
+    });
+
+    it('shows the sizer again when effects are added after empty', () => {
+      hud.updateEffects([]);
+      hud.updateEffects([makeEffect()]);
+      expect(scene._sizer.setVisible).toHaveBeenCalledWith(true);
     });
   });
 

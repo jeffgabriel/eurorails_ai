@@ -68,22 +68,12 @@ export class ActiveEffectHUD {
     this.sizer.clear(true);
 
     if (effects.length === 0) {
-      // Empty state: render a placeholder text
-      const emptyText = this.scene.add.text(0, 0, 'No active effects', {
-        color: '#888888',
-        fontSize: EFFECT_FONT_SIZE,
-        fontFamily: UI_FONT_FAMILY,
-        fontStyle: 'italic',
-      });
-      emptyText.setName('active-effects-empty');
-      this.sizer.add(emptyText, {
-        proportion: 0,
-        align: 'left',
-        expand: false,
-      });
-      this.effectRows.push(emptyText);
+      // Hide entirely when no active effects
+      this.sizer.setVisible(false);
       return;
     }
+
+    this.sizer.setVisible(true);
 
     for (const effect of effects) {
       const row = this.createEffectRow(effect, currentTurnNumber);

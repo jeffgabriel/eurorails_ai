@@ -94,8 +94,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // Set up event listeners
       socketService.onInit((data) => {
         get().applyStateInit(data.gameState, data.serverSeq);
-        set({ 
-          isConnected: true, 
+        // Restore active effects from state:init (server includes them on reconnect)
+        const initData = data as Record<string, unknown>;
+        if (Array.isArray(initData.activeEffects)) {
+          get().setActiveEffects(initData.activeEffects as ActiveEffectSummary[]);
+        }
+        set({
+          isConnected: true,
           isLoading: false,
           connectionStatus: 'connected'
         });
@@ -306,6 +311,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     set({ pendingEventOverlay: payload });
+
+    // For persistent effects, immediately add to activeEffects so the HUD updates.
+    // The server only broadcasts event:active-effects on reconnect, so we derive
+    // an ActiveEffectSummary from the drawn card payload here.
+    if (payload.duration === 'persistent') {
+      get().addActiveEffect({
+        cardId: payload.card.id,
+        cardType: payload.card.type,
+        drawingPlayerId: payload.drawingPlayerId,
+        drawingPlayerName: payload.drawingPlayerName,
+        expiresAfterTurnNumber: 0, // Unknown from payload; HUD shows "active" as fallback
+        affectedZone: payload.affectedZone,
+        effectSummary: payload.effectSummary,
+      });
+    }
 
     // Start a 30-second auto-dismiss timer
     overlayAutoDismissTimer = setTimeout(() => {
