@@ -254,7 +254,7 @@ export class AreaOfEffectService {
    * Use `TrackService.removeSegmentsCrossingRiver` for the actual deletion.
    *
    * @param gameId     Game to query
-   * @param riverName  River name matching an entry in configuration/rivers.json
+   * @param riverName  River name matching waterCrossings.json river attribution
    * @returns (playerId, segment) pairs for river-crossing segments
    */
   static async findRiverCrossingSegments(
