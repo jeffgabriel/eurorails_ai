@@ -608,6 +608,11 @@ router.post('/deliver-load', authenticateToken, async (req, res) => {
             cardId
         );
 
+        // If delivery was restricted by an active event, return the restriction info
+        if ('restricted' in result && result.restricted) {
+            return res.status(200).json(result);
+        }
+
         // Broadcast updated player state
         // Issue #176: Hands are public, so broadcast full player data including hand
         const publicPlayers = await PlayerService.getPlayers(gameId, '');

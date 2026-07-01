@@ -4,6 +4,7 @@ import { VictoryService, MajorCityCoordinate } from '../services/victoryService'
 import { authenticateToken } from '../middleware/authMiddleware';
 import { db } from '../db';
 import { emitVictoryTriggered, emitGameOver, emitTieExtended } from '../services/socketService';
+import { ActiveEffectManager } from '../services/ActiveEffectManager';
 
 const router = express.Router();
 
@@ -324,6 +325,30 @@ router.get('/:gameId/map-data', async (req, res) => {
             error: 'SERVER_ERROR',
             details: 'An unexpected error occurred'
         });
+    }
+});
+
+// Get active event effects for a game
+router.get('/:gameId/active-effects', authenticateToken, async (req, res) => {
+    try {
+        const { gameId } = req.params;
+        if (!gameId) {
+            return res.status(400).json({ error: 'VALIDATION_ERROR', details: 'Game ID is required' });
+        }
+
+        const manager = new ActiveEffectManager();
+        const effects = await manager.getActiveEffects(gameId);
+
+        // Serialize Set fields to arrays for JSON transport
+        const serialized = effects.map(e => ({
+            ...e,
+            affectedZone: Array.from(e.affectedZone),
+        }));
+
+        return res.status(200).json({ activeEffects: serialized });
+    } catch (error: any) {
+        console.error('Error fetching active effects:', error);
+        return res.status(500).json({ error: 'SERVER_ERROR', details: 'Failed to fetch active effects' });
     }
 });
 

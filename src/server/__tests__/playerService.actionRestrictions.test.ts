@@ -561,11 +561,13 @@ describe('PlayerService.deliverLoadForUser — delivery restrictions', () => {
       return Promise.resolve({ rows: [] });
     });
 
-    await expect(
-      PlayerService.deliverLoadForUser(
-        GAME_ID, USER_ID, cityName, LoadType.Coal, 31,
-      ),
-    ).rejects.toThrow();
+    const result = await PlayerService.deliverLoadForUser(
+      GAME_ID, USER_ID, cityName, LoadType.Coal, 31,
+    );
+    expect(result).toEqual({
+      restricted: true,
+      reason: expect.stringContaining('Strike in effect'),
+    });
   });
 });
 

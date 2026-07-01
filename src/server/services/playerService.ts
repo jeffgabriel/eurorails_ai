@@ -1083,7 +1083,10 @@ export class PlayerService {
     city: string,
     loadType: LoadType,
     cardId: number
-  ): Promise<{ payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: DemandCard }> {
+  ): Promise<
+    | { restricted: true; reason: string }
+    | { restricted?: false; payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: DemandCard }
+  > {
     const client = await db.connect();
     let drewCardId: number | null = null;
     let discardedCardId: number | null = null;
@@ -1153,9 +1156,11 @@ export class PlayerService {
               console.warn(
                 `[PlayerService] Delivery rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${city} cityKey=${cityKey}`,
               );
-              throw new Error(
-                `Delivery blocked by active event (Strike): city ${city} is within the coastal strike zone`,
-              );
+              await client.query("ROLLBACK");
+              return {
+                restricted: true,
+                reason: `Strike in effect: no pickups or deliveries allowed at ${city}`,
+              };
             }
           }
         }
