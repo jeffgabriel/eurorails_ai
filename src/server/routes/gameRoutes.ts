@@ -332,8 +332,21 @@ router.get('/:gameId/map-data', async (req, res) => {
 router.get('/:gameId/active-effects', authenticateToken, async (req, res) => {
     try {
         const { gameId } = req.params;
+        const userId = req.user?.id;
         if (!gameId) {
             return res.status(400).json({ error: 'VALIDATION_ERROR', details: 'Game ID is required' });
+        }
+        if (!userId) {
+            return res.status(401).json({ error: 'UNAUTHORIZED', details: 'Authentication required' });
+        }
+
+        // Verify the user is a player in this game
+        const membership = await db.query(
+            'SELECT id FROM players WHERE game_id = $1 AND user_id = $2 AND is_deleted = false LIMIT 1',
+            [gameId, userId]
+        );
+        if (membership.rows.length === 0) {
+            return res.status(403).json({ error: 'FORBIDDEN', details: 'Not a player in this game' });
         }
 
         const manager = new ActiveEffectManager();
