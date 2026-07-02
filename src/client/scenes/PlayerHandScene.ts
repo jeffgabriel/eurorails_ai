@@ -11,6 +11,9 @@ import { UI_FONT_FAMILY } from "../config/uiFont";
 import { TrainType } from "../../shared/types/GameTypes";
 import { ActiveEffectHUD } from "../components/ActiveEffectHUD";
 import { useGameStore } from "../lobby/store/game.store";
+import { authenticatedFetch } from "../services/authenticatedFetch";
+import { config } from "../config/apiConfig";
+import { ActiveEffectSummary } from "../../shared/types/EventCard";
 
 interface PlayerHandSceneData {
   gameState: FullGameState;
@@ -1809,6 +1812,12 @@ export class PlayerHandScene extends Phaser.Scene {
     const initialEffects = useGameStore.getState().activeEffects;
     this.activeEffectHUD.updateEffects(initialEffects);
 
+    // Fetch active effects from server to ensure we have the latest state
+    // (handles page refresh where state:init may not have arrived yet)
+    if (this.gameState?.id) {
+      this.fetchActiveEffects(this.gameState.id);
+    }
+
     parentSizer.add(this.activeEffectHUD.getSizer(), {
       proportion: 0,
       align: "left",
@@ -1823,6 +1832,21 @@ export class PlayerHandScene extends Phaser.Scene {
         this.rootSizer?.layout?.();
       }
     });
+  }
+
+  private async fetchActiveEffects(gameId: string): Promise<void> {
+    try {
+      const response = await authenticatedFetch(
+        `${config.apiBaseUrl}/api/game/${gameId}/active-effects`,
+      );
+      if (!response.ok) return;
+      const data = await response.json();
+      if (Array.isArray(data.activeEffects)) {
+        useGameStore.getState().setActiveEffects(data.activeEffects as ActiveEffectSummary[]);
+      }
+    } catch {
+      // Non-fatal: the store subscription will pick up effects from state:init
+    }
   }
 
   private createMoreActionsSection(parentSizer: any): void {

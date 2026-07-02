@@ -13,6 +13,7 @@ import { LoadService } from "../services/LoadService";
 import { config } from "../config/apiConfig";
 import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
 import { DebugOverlay } from "../components/DebugOverlay";
+import { RiverDebugOverlay } from "../components/RiverDebugOverlay";
 import { LLMTranscriptOverlay } from "../components/LLMTranscriptOverlay";
 import { BotTrainAnimator } from "../components/BotTrainAnimator";
 import { GameToastManager } from "../components/GameToastManager";
@@ -56,6 +57,7 @@ export class GameScene extends Phaser.Scene {
   private turnChangeSeq = 0;
   private loadsReferencePanel?: LoadsReferencePanel;
   private debugOverlay?: DebugOverlay;
+  private riverDebugOverlay?: RiverDebugOverlay;
   private botTrainAnimator?: BotTrainAnimator;
   private gameToastManager?: GameToastManager;
   private whisperPanel?: WhisperPanel;
@@ -646,6 +648,9 @@ export class GameScene extends Phaser.Scene {
 
     // Debug overlay (toggled with backtick key)
     this.debugOverlay = new DebugOverlay(this, this.gameStateService);
+
+    // River crossing debug overlay (toggled with F10)
+    this.riverDebugOverlay = new RiverDebugOverlay(this, this.mapContainer);
 
     // LLM transcript overlay (toggled with spacebar)
     this.llmTranscriptOverlay = new LLMTranscriptOverlay();
@@ -1578,6 +1583,7 @@ export class GameScene extends Phaser.Scene {
     this.socketUnsubDebugAny?.();
     this.socketUnsubDebugAny = undefined;
     this.debugOverlay?.destroy();
+    this.riverDebugOverlay?.destroy();
     this.socketUnsubLLMTranscript?.();
     this.socketUnsubLLMTranscript = undefined;
     this.llmTranscriptOverlay?.destroy();

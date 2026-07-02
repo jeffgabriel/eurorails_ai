@@ -11,6 +11,11 @@ import { TrackService } from '../services/trackService';
 // Force Jest to run this test file serially
 export const test = { concurrent: false };
 
+/** Asserts a deliverLoadForUser result is a successful delivery (not restricted). */
+function expectDeliverySuccess(result: { restricted: true; reason: string } | { restricted?: false; payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: any }): asserts result is { payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: any } {
+    expect('restricted' in result && result.restricted).toBeFalsy();
+}
+
 // Helper to run a query with automatic connection management
 async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<T> {
     const client = await db.connect();
@@ -768,6 +773,7 @@ describe('PlayerService Integration Tests', () => {
                 cardId
             );
 
+            expectDeliverySuccess(result);
             expect(result.payment).toBe(demand.payment);
             expect(result.newCard.id).toBeDefined();
             expect(result.updatedLoads).toEqual([]);
@@ -833,6 +839,7 @@ describe('PlayerService Integration Tests', () => {
                 demand.resource,
                 cardId
             );
+            expectDeliverySuccess(delivered);
             expect(delivered.updatedMoney).toBe(50 + demand.payment);
             expect(delivered.updatedLoads).toEqual([]);
             expect(delivered.newCard.id).toBeDefined();
@@ -908,6 +915,7 @@ describe('PlayerService Integration Tests', () => {
             );
 
             // Verify debt repayment logic: payment goes to debt first
+            expectDeliverySuccess(delivered);
             const expectedRepayment = Math.min(demand.payment, 40);
             const expectedNetPayment = demand.payment - expectedRepayment;
             expect(delivered.repayment).toBe(expectedRepayment);
@@ -2042,6 +2050,7 @@ describe('PlayerService Integration Tests', () => {
                 demand.resource,
                 cardId
             );
+            expectDeliverySuccess(result);
 
             expect(result.payment).toBe(demand.payment);
             expect(result.repayment).toBe(0);
@@ -2097,6 +2106,7 @@ describe('PlayerService Integration Tests', () => {
                 demand.resource,
                 cardId
             );
+            expectDeliverySuccess(result);
 
             // With 5 debt and payment >= 7, repayment = 5, excess = payment - 5
             expect(result.payment).toBe(demand.payment);
@@ -2153,6 +2163,7 @@ describe('PlayerService Integration Tests', () => {
                 demand.resource,
                 cardId
             );
+            expectDeliverySuccess(result);
 
             // With 100 debt and payment (e.g., 15), repayment = 15, money unchanged
             expect(result.payment).toBe(demand.payment);
@@ -2209,6 +2220,7 @@ describe('PlayerService Integration Tests', () => {
                 demand.resource,
                 cardId
             );
+            expectDeliverySuccess(result);
 
             expect(result.payment).toBe(demand.payment);
             expect(result.repayment).toBe(demand.payment);

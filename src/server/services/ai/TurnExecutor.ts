@@ -604,6 +604,19 @@ export class TurnExecutor {
       throw deliverError;
     }
 
+    // Handle game-state restrictions (e.g. active Strike blocking delivery)
+    if ('restricted' in deliverResult && deliverResult.restricted) {
+      return {
+        success: false,
+        action: AIActionType.DeliverLoad,
+        cost: 0,
+        segmentsBuilt: 0,
+        remainingMoney: snapshot.bot.money,
+        durationMs: Date.now() - startTime,
+        error: deliverResult.reason,
+      };
+    }
+
     const payment = deliverResult.payment;
     const newCardId = deliverResult.newCard.id;
     const remainingMoney = deliverResult.updatedMoney;
