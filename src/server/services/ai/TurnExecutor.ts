@@ -676,11 +676,10 @@ export class TurnExecutor {
       const freshPlayers = await PlayerService.getPlayers(snapshot.gameId, '');
       const freshBot = freshPlayers.find((p: any) => p.id === snapshot.bot.playerId);
       const freshHand: number[] = freshBot?.hand?.map((c: any) => c.id) ?? [];
-      const demandDeck = DemandDeckService.getInstance();
       const loadSvc = LoadService.getInstance();
       const ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }> = [];
       for (const cid of freshHand) {
-        const card = demandDeck.getCard(cid);
+        const card = DemandDeckService.getCard(cid);
         if (!card) continue;
         for (const d of card.demands) {
           const sourceCities = loadSvc.getSourceCitiesForLoad(d.resource);

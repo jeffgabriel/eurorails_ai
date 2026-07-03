@@ -1,6 +1,7 @@
 import { db } from '../db/index';
 import { PlayerService } from '../services/playerService';
-import { demandDeckService } from '../services/demandDeckService';
+// DemandDeckService is mocked below; alias the shared mock instance the factory exposes.
+const demandDeckService = jest.requireMock('../services/demandDeckService').demandDeckService as Record<string, jest.Mock>;
 import { EventCardService } from '../services/EventCardService';
 
 // Mock socketService to prevent real socket emissions
@@ -28,15 +29,23 @@ jest.mock('../db/index', () => {
 });
 
 // Mock DemandDeckService
-jest.mock('../services/demandDeckService', () => ({
-  demandDeckService: {
+jest.mock('../services/demandDeckService', () => {
+  const instance = {
     discardCard: jest.fn(),
     discardEventCard: jest.fn(),
     drawCard: jest.fn(),
     returnDealtCardToTop: jest.fn(),
     returnDiscardedCardToDealt: jest.fn(),
-  },
-}));
+  };
+  return {
+    demandDeckService: instance,
+    DemandDeckService: {
+      getInstanceForGame: jest.fn(() => instance),
+      destroyInstance: jest.fn(),
+      destroyAllInstances: jest.fn(),
+    },
+  };
+});
 
 // Mock EventCardService — prevents real DB calls when event cards are drawn
 jest.mock('../services/EventCardService', () => ({

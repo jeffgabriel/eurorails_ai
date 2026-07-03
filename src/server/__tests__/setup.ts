@@ -1,7 +1,7 @@
 import { db, checkDatabase } from "../db";
 import dotenv from "dotenv";
 import "@jest/globals";
-import { demandDeckService } from "../services/demandDeckService";
+import { DemandDeckService } from "../services/demandDeckService";
 import { Pool } from "pg";
 
 // Load environment variables
@@ -71,9 +71,9 @@ beforeAll(async () => {
   }
 }, 30000);
 
-// Reset deck service before each test to ensure fresh state
+// Clear all per-game decks before each test to ensure a fresh slate.
 beforeEach(() => {
-  demandDeckService.reset();
+  DemandDeckService.destroyAllInstances();
 });
 
 // Commented out to prevent database wipes during development

@@ -40,13 +40,6 @@ export class DemandDeckService {
   // ---- Per-game instance registry ----
   private static instances: Map<string, DemandDeckService> = new Map();
 
-  /**
-   * Sentinel game id backing the deprecated {@link DemandDeckService.getInstance}
-   * / {@link demandDeckService} singleton shim. Consumers still on the singleton
-   * share this one deck until they are migrated to getInstanceForGame(gameId).
-   */
-  private static readonly LEGACY_SHARED_GAME_ID = '__legacy_shared__';
-
   // ---- Per-game mutable deck state ----
   private readonly gameId: string;
   /** Draw pile entries: positive = demand card ID, negative = -(event card ID) */
@@ -92,16 +85,6 @@ export class DemandDeckService {
    */
   public static destroyAllInstances(): void {
     DemandDeckService.instances.clear();
-  }
-
-  /**
-   * @deprecated Back-compat shim for the pre-per-game singleton. Returns a
-   * single shared deck keyed by {@link DemandDeckService.LEGACY_SHARED_GAME_ID}.
-   * Use {@link DemandDeckService.getInstanceForGame} instead; this is removed
-   * once all consumers are migrated to per-game instances (BE-002).
-   */
-  public static getInstance(): DemandDeckService {
-    return DemandDeckService.getInstanceForGame(DemandDeckService.LEGACY_SHARED_GAME_ID);
   }
 
   /**
@@ -330,18 +313,26 @@ export class DemandDeckService {
     return true;
   }
 
-  /** Returns all demand cards (legacy accessor). */
-  public getAllCards(): DemandCard[] {
+  // ---- Definitional accessors (card-level data, shared; not per-game state) ----
+  // These describe "what is printed on a card" and never touch a game's deck,
+  // so they are static: callers that only need card definitions (e.g. the
+  // definitional deck routes) must NOT construct a per-game instance.
+
+  /** Returns all demand card definitions. */
+  public static getAllCards(): DemandCard[] {
+    DemandDeckService.ensureConfigLoaded();
     return [...DemandDeckService.demandCards];
   }
 
-  /** Returns a demand card by ID, or undefined if not found. */
-  public getCard(cardId: number): DemandCard | undefined {
+  /** Returns a demand card definition by ID, or undefined if not found. */
+  public static getCard(cardId: number): DemandCard | undefined {
+    DemandDeckService.ensureConfigLoaded();
     return DemandDeckService.demandCardMap.get(cardId);
   }
 
   /** Returns all event card definitions. */
-  public getAllEventCards(): EventCard[] {
+  public static getAllEventCards(): EventCard[] {
+    DemandDeckService.ensureConfigLoaded();
     return [...DemandDeckService.eventCards];
   }
 
@@ -420,11 +411,3 @@ export class DemandDeckService {
     this.initializeDeck();
   }
 }
-
-/**
- * @deprecated Singleton shim backed by a single shared deck. Prefer
- * DemandDeckService.getInstanceForGame(gameId) so each game gets an isolated
- * deck. Retained so existing consumers compile during the per-game migration
- * (BE-002); removed once they are migrated.
- */
-export const demandDeckService = DemandDeckService.getInstance();

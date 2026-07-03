@@ -45,31 +45,31 @@ describe('DemandDeckService unified draw pile', () => {
     });
 
     it('should have 20 event cards via getAllEventCards()', () => {
-      const eventCards = service.getAllEventCards();
+      const eventCards = DemandDeckService.getAllEventCards();
       expect(eventCards).toHaveLength(20);
     });
 
     it('should have event card IDs 121–140', () => {
-      const eventCards = service.getAllEventCards();
+      const eventCards = DemandDeckService.getAllEventCards();
       const ids = eventCards.map((c) => c.id).sort((a, b) => a - b);
       const expected = Array.from({ length: 20 }, (_, i) => 121 + i);
       expect(ids).toEqual(expected);
     });
 
     it('should return all demand cards via getAllCards()', () => {
-      const demandCards = service.getAllCards();
+      const demandCards = DemandDeckService.getAllCards();
       expect(demandCards).toHaveLength(146);
     });
 
     it('should return specific demand card via getCard()', () => {
-      const card = service.getCard(1);
+      const card = DemandDeckService.getCard(1);
       expect(card).toBeDefined();
       expect(card!.id).toBe(1);
     });
 
     it('should return demand card for ID 121 via getCard() (demand cards include 121)', () => {
       // Demand card IDs go 1–146, so ID 121 is a demand card
-      const card = service.getCard(121);
+      const card = DemandDeckService.getCard(121);
       expect(card).toBeDefined();
       expect(card!.id).toBe(121);
     });
@@ -208,7 +208,7 @@ describe('DemandDeckService unified draw pile', () => {
 
   describe('ensureCardIsDealt() — both card types', () => {
     it('should mark a demand card as dealt', () => {
-      const demandCardId = service.getAllCards()[0].id;
+      const demandCardId = DemandDeckService.getAllCards()[0].id;
       const result = service.ensureCardIsDealt(demandCardId);
       expect(result).toBe(true);
       const state = service.getDeckState();
@@ -231,7 +231,7 @@ describe('DemandDeckService unified draw pile', () => {
     });
 
     it('should return true if card is already dealt', () => {
-      const cardId = service.getAllCards()[0].id;
+      const cardId = DemandDeckService.getAllCards()[0].id;
       service.ensureCardIsDealt(cardId);
       const result = service.ensureCardIsDealt(cardId); // second call
       expect(result).toBe(true);
@@ -253,7 +253,7 @@ describe('DemandDeckService unified draw pile', () => {
     });
 
     it('should return false for a card not dealt', () => {
-      const cardId = service.getAllCards()[0].id;
+      const cardId = DemandDeckService.getAllCards()[0].id;
       const result = service.returnDealtCardToTop(cardId);
       expect(result).toBe(false);
     });
@@ -288,7 +288,7 @@ describe('DemandDeckService unified draw pile', () => {
     });
 
     it('should return false if card is not in discard pile', () => {
-      const cardId = service.getAllCards()[0].id;
+      const cardId = DemandDeckService.getAllCards()[0].id;
       const result = service.returnDiscardedCardToDealt(cardId);
       expect(result).toBe(false);
     });
@@ -316,7 +316,7 @@ describe('DemandDeckService unified draw pile', () => {
 
   describe('event card type coverage', () => {
     it('should have event cards of each type in the pool', () => {
-      const eventCards = service.getAllEventCards();
+      const eventCards = DemandDeckService.getAllEventCards();
       const types = new Set(eventCards.map((c) => c.type));
       expect(types.has(EventCardType.Strike)).toBe(true);
       expect(types.has(EventCardType.Derailment)).toBe(true);

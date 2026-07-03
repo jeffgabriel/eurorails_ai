@@ -32,9 +32,7 @@ jest.mock('../../services/ai/connectedMajorCities', () => ({
 
 jest.mock('../../services/demandDeckService', () => ({
   DemandDeckService: {
-    getInstance: jest.fn(() => ({
-      getCard: jest.fn(() => undefined),
-    })),
+    getCard: jest.fn(() => undefined),
   },
 }));
 

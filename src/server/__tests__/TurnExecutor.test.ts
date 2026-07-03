@@ -489,17 +489,13 @@ jest.mock('../services/loadService', () => ({
 
 jest.mock('../services/demandDeckService', () => ({
   DemandDeckService: {
-    getInstance: jest.fn().mockReturnValue({
-      getCard: jest.fn().mockReturnValue({
-        id: 99,
-        demands: [
-          { city: 'Paris', resource: 'Wine', payment: 20 },
-          { city: 'Madrid', resource: 'Iron', payment: 15 },
-          { city: 'Wien', resource: 'Oil', payment: 12 },
-        ],
-      }),
-      drawCard: jest.fn(),
-      discardCard: jest.fn(),
+    getCard: jest.fn().mockReturnValue({
+      id: 99,
+      demands: [
+        { city: 'Paris', resource: 'Wine', payment: 20 },
+        { city: 'Madrid', resource: 'Iron', payment: 15 },
+        { city: 'Wien', resource: 'Oil', payment: 12 },
+      ],
     }),
   },
 }));
