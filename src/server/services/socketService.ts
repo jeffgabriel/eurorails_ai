@@ -906,6 +906,7 @@ export interface EventCardDrawnPayload {
   drawingPlayerName: string;
   affectedZone: string[];
   affectedPlayerIds: string[];
+  affectedPlayerNames: string[];
   effectSummary: string;
   duration: 'immediate' | 'persistent';
   timestamp: string;

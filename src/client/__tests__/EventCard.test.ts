@@ -154,6 +154,7 @@ const samplePayload: EventCardDrawnPayload = {
   drawingPlayerName: 'Alice',
   affectedZone: [],
   affectedPlayerIds: ['player-2', 'player-3'],
+  affectedPlayerNames: ['Bob', 'Charlie'],
   effectSummary: 'Players near Praha derailed.',
   duration: 'persistent',
   timestamp: new Date().toISOString(),
@@ -274,7 +275,7 @@ describe('EventCardOverlay component', () => {
     expect(metaCall).toBeDefined();
   });
 
-  it('renders affected player IDs in metadata', () => {
+  it('renders affected player names in metadata', () => {
     const { scene } = makeScene();
     new EventCardOverlay(
       scene as unknown as Phaser.Scene,
@@ -286,7 +287,7 @@ describe('EventCardOverlay component', () => {
       (call: unknown[]) => String(call[2])
     );
     const metaCall = textCalls.find(
-      t => t.includes('player-2') && t.includes('player-3')
+      t => t.includes('Bob') && t.includes('Charlie')
     );
     expect(metaCall).toBeDefined();
   });

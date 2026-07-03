@@ -786,6 +786,14 @@ describe('PlayerService Integration Tests', () => {
             expect(after.rows[0].hand).not.toContain(cardId);
             expect(after.rows[0].hand).toContain(result.newCard.id);
 
+            // Drawing the replacement card above can randomly surface a coastal Strike
+            // event card, which processEventCard persists as an active effect on the game.
+            // deliverLoadForUser checks Strike restrictions BEFORE the hand check, so a
+            // lingering Strike would short-circuit with a `{ restricted: true }` result and
+            // mask the "card not in hand" behavior this test targets. Clear any incidental
+            // active effect so the second attempt is isolated to the double-delivery guard.
+            await db.query('UPDATE games SET active_event = NULL WHERE id = $1', [gameId]);
+
             // Second attempt should fail because the demand card has already been replaced
             await expect(
                 PlayerService.deliverLoadForUser(gameId, userId, demand.city, demand.resource, cardId)

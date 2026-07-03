@@ -383,3 +383,97 @@ describe('Rhein flood with real game data (game b35239b7, player ab08d98d)', () 
     }
   });
 });
+
+// ── Real game data: Donau flood (game 1b4eeca9, player 3d948c08) ─────────
+
+describe('Donau flood with real game data (game 1b4eeca9, player 3d948c08)', () => {
+  const GAME_ID = '1b4eeca9-c4cd-449b-8c97-743bee28edda';
+  const PLAYER_ID = '3d948c08-acc2-46f1-a715-82d1d254aae1';
+
+  /**
+   * Real segment data from player_tracks. The segment (39,55)->(38,56)
+   * crosses the Donau river and should be removed. The other two segments
+   * do not cross the Donau and must survive.
+   */
+  const realSegments: TrackSegment[] = [
+    {
+      from: { x: 2895, y: 1875, col: 55, row: 39, terrain: TerrainType.Mountain },
+      to:   { x: 2920, y: 1830, col: 56, row: 38, terrain: TerrainType.MediumCity },
+      cost: 7,
+    },
+    {
+      from: { x: 920, y: 2280, col: 16, row: 48, terrain: TerrainType.MediumCity },
+      to:   { x: 945, y: 2235, col: 16, row: 47, terrain: TerrainType.Mountain },
+      cost: 1,
+    },
+    {
+      from: { x: 945, y: 2235, col: 16, row: 47, terrain: TerrainType.Mountain },
+      to:   { x: 995, y: 2235, col: 17, row: 47, terrain: TerrainType.Mountain },
+      cost: 1,
+    },
+  ];
+
+  it('removes the Donau-crossing segment (39,55)->(38,56) and preserves others', async () => {
+    const querySpy = jest.fn<() => Promise<any>>();
+    querySpy.mockResolvedValueOnce({
+      rows: [{
+        player_id: PLAYER_ID,
+        segments: JSON.stringify(realSegments),
+        total_cost: 9,
+      }],
+    });
+    querySpy.mockResolvedValue({ rows: [] });
+
+    const client = { query: querySpy } as unknown as PoolClient;
+    const result = await TrackService.removeSegmentsCrossingRiver(client, GAME_ID, 'Donau');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].playerId).toBe(PLAYER_ID);
+    expect(result[0].removedCount).toBe(1);
+    expect(result[0].newTotalCost).toBe(2); // 9 - 7
+
+    // Verify removedMileposts includes the crossing segment endpoints
+    expect(result[0].removedMileposts).toContain('39,55');
+    expect(result[0].removedMileposts).toContain('38,56');
+
+    // Verify the UPDATE wrote the correct remaining segments
+    const allCalls = querySpy.mock.calls as unknown as Array<[string, unknown[]]>;
+    const updateCall = allCalls.find(([sql]) => sql.includes('UPDATE player_tracks'));
+    expect(updateCall).toBeDefined();
+    const remaining = JSON.parse(updateCall![1][0] as string) as TrackSegment[];
+    expect(remaining).toHaveLength(2);
+
+    // The Donau crossing must be gone
+    const donauCrossing = remaining.find(
+      s => (s.from.row === 39 && s.from.col === 55 && s.to.row === 38 && s.to.col === 56) ||
+           (s.from.row === 38 && s.from.col === 56 && s.to.row === 39 && s.to.col === 55),
+    );
+    expect(donauCrossing).toBeUndefined();
+
+    // Non-crossing segments must survive
+    const safeSeg1 = remaining.find(
+      s => s.from.row === 48 && s.from.col === 16 && s.to.row === 47 && s.to.col === 16,
+    );
+    expect(safeSeg1).toBeDefined();
+  });
+
+  it('handles segments stored as parsed JSONB (not string)', async () => {
+    const querySpy = jest.fn<() => Promise<any>>();
+    querySpy.mockResolvedValueOnce({
+      rows: [{
+        player_id: PLAYER_ID,
+        segments: realSegments, // already parsed, not a string
+        total_cost: 9,
+      }],
+    });
+    querySpy.mockResolvedValue({ rows: [] });
+
+    const client = { query: querySpy } as unknown as PoolClient;
+    const result = await TrackService.removeSegmentsCrossingRiver(client, GAME_ID, 'Donau');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].removedCount).toBe(1);
+    expect(result[0].removedMileposts).toContain('39,55');
+    expect(result[0].removedMileposts).toContain('38,56');
+  });
+});

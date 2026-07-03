@@ -62,6 +62,7 @@ const makeDrawnPayload = (cardId = 125): EventCardDrawnPayload => ({
   drawingPlayerName: 'Alice',
   affectedZone: ['r10c20'],
   affectedPlayerIds: ['player-2'],
+  affectedPlayerNames: ['Bob'],
   effectSummary: 'All trains within 3 mileposts of Berlin lose 1 turn and 1 load.',
   duration: 'immediate',
   timestamp: new Date().toISOString(),

@@ -12,6 +12,7 @@
 import { PlayerService } from '../services/playerService';
 import { demandDeckService } from '../services/demandDeckService';
 import { EventCardService } from '../services/EventCardService';
+import { emitToGame } from '../services/socketService';
 
 // Mock socketService to prevent real socket emissions
 jest.mock('../services/socketService', () => ({
@@ -20,7 +21,10 @@ jest.mock('../services/socketService', () => ({
   emitEventCardDrawn: jest.fn(),
   emitEventEffectApplied: jest.fn(),
   emitEventEffectExpired: jest.fn(),
+  emitToGame: jest.fn(),
 }));
+
+const mockEmitToGame = emitToGame as jest.Mock;
 
 // Mock the database module
 jest.mock('../db/index', () => {
@@ -328,5 +332,53 @@ describe('PlayerService.deliverLoadForUser × EventCardService (BE-005)', () => 
     await expect(
       PlayerService.deliverLoadForUser(gameId, userId, city, resource as any, cardId),
     ).rejects.toThrow('Failed to draw new card');
+  });
+
+  it('emits track:updated for each player whose segments were removed by a flood event', async () => {
+    // Flood event removes track from two players — post-COMMIT flush must notify
+    // both so their in-memory track state re-syncs with the DB (prevents stale
+    // saveTrackState from resurrecting the removed segments).
+    (EventCardService.processEventCard as jest.Mock).mockResolvedValueOnce({
+      cardId: 140,
+      cardType: 'Flood',
+      drawingPlayerId: playerId,
+      affectedZone: [],
+      perPlayerEffects: [],
+      floodedRiver: 'Donau',
+      floodSegmentsRemoved: [
+        { playerId: 'player-A', removedCount: 2, removedMileposts: ['10,5', '10,6'] },
+        { playerId: 'player-B', removedCount: 1, removedMileposts: ['12,3'] },
+      ],
+    });
+
+    (demandDeckService.drawCard as jest.Mock)
+      .mockReturnValueOnce(makeEventCard(140))
+      .mockReturnValueOnce(makeDemandCard(99));
+
+    await PlayerService.deliverLoadForUser(gameId, userId, city, resource as any, cardId);
+
+    const trackUpdates = mockEmitToGame.mock.calls.filter(([, event]) => event === 'track:updated');
+    expect(trackUpdates).toHaveLength(2);
+    expect(mockEmitToGame).toHaveBeenCalledWith(
+      gameId,
+      'track:updated',
+      expect.objectContaining({ gameId, playerId: 'player-A' }),
+    );
+    expect(mockEmitToGame).toHaveBeenCalledWith(
+      gameId,
+      'track:updated',
+      expect.objectContaining({ gameId, playerId: 'player-B' }),
+    );
+  });
+
+  it('does not emit track:updated when no flood segments were removed', async () => {
+    (demandDeckService.drawCard as jest.Mock)
+      .mockReturnValueOnce(makeEventCard(121))
+      .mockReturnValueOnce(makeDemandCard(99));
+
+    await PlayerService.deliverLoadForUser(gameId, userId, city, resource as any, cardId);
+
+    const trackUpdates = mockEmitToGame.mock.calls.filter(([, event]) => event === 'track:updated');
+    expect(trackUpdates).toHaveLength(0);
   });
 });

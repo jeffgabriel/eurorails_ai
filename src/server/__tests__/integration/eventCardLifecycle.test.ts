@@ -202,6 +202,7 @@ describe('Event card lifecycle integration (real DB + socket mocks)', () => {
       drawingPlayerName: 'TestPlayer',
       affectedZone: ['10,10', '10,11', '10,12'],
       affectedPlayerIds: [],
+      affectedPlayerNames: [],
       effectSummary: 'Snow affecting 3 mileposts',
       duration: 'persistent',
       timestamp: new Date().toISOString(),
