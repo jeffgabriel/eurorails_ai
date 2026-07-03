@@ -12,11 +12,12 @@
 import { DemandDeckService } from '../services/demandDeckService';
 import { EventCardType } from '../../shared/types/EventCard';
 
-// Get the singleton and reset it to a clean state for each test
-function getFreshService(): DemandDeckService {
-  const service = DemandDeckService.getInstance();
-  service.reset();
-  return service;
+const TEST_GAME_ID = 'unified-draw-test-game';
+
+// Get a fresh per-game deck in a clean state for each test.
+function getFreshService(gameId: string = TEST_GAME_ID): DemandDeckService {
+  DemandDeckService.destroyInstance(gameId);
+  return DemandDeckService.getInstanceForGame(gameId);
 }
 
 describe('DemandDeckService unified draw pile', () => {
@@ -24,6 +25,10 @@ describe('DemandDeckService unified draw pile', () => {
 
   beforeEach(() => {
     service = getFreshService();
+  });
+
+  afterEach(() => {
+    DemandDeckService.destroyAllInstances();
   });
 
   describe('deck initialization', () => {
@@ -318,6 +323,59 @@ describe('DemandDeckService unified draw pile', () => {
       expect(types.has(EventCardType.Snow)).toBe(true);
       expect(types.has(EventCardType.Flood)).toBe(true);
       expect(types.has(EventCardType.ExcessProfitTax)).toBe(true);
+    });
+  });
+
+  describe('per-game instance management', () => {
+    afterEach(() => {
+      DemandDeckService.destroyAllInstances();
+    });
+
+    it('should return the same instance for the same gameId', () => {
+      const a = DemandDeckService.getInstanceForGame('game-A');
+      const b = DemandDeckService.getInstanceForGame('game-A');
+      expect(a).toBe(b);
+    });
+
+    it('should return different instances for different gameIds', () => {
+      const a = DemandDeckService.getInstanceForGame('game-A');
+      const b = DemandDeckService.getInstanceForGame('game-B');
+      expect(a).not.toBe(b);
+    });
+
+    it('should isolate deck state between games', () => {
+      const a = DemandDeckService.getInstanceForGame('game-A');
+      const b = DemandDeckService.getInstanceForGame('game-B');
+
+      // Draw from game A only; game B must be unaffected.
+      a.drawCard();
+      a.drawCard();
+
+      expect(a.getDeckState().dealtCardsCount).toBe(2);
+      expect(a.getDeckState().drawPileSize).toBe(164);
+      expect(b.getDeckState().dealtCardsCount).toBe(0);
+      expect(b.getDeckState().drawPileSize).toBe(166);
+    });
+
+    it('should create a fresh instance after destroyInstance', () => {
+      const first = DemandDeckService.getInstanceForGame('game-A');
+      first.drawCard();
+      expect(first.getDeckState().dealtCardsCount).toBe(1);
+
+      DemandDeckService.destroyInstance('game-A');
+
+      const second = DemandDeckService.getInstanceForGame('game-A');
+      expect(second).not.toBe(first);
+      expect(second.getDeckState().dealtCardsCount).toBe(0);
+      expect(second.getDeckState().drawPileSize).toBe(166);
+    });
+
+    it('should treat destroyInstance for an unknown game as a no-op', () => {
+      expect(() => DemandDeckService.destroyInstance('never-created')).not.toThrow();
+    });
+
+    it('should reject an empty gameId', () => {
+      expect(() => DemandDeckService.getInstanceForGame('')).toThrow('non-empty gameId');
     });
   });
 });
