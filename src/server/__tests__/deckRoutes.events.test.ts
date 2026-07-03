@@ -16,7 +16,7 @@ import { EventCardType } from '../../shared/types/EventCard';
 
 jest.mock('../services/authService');
 jest.mock('../services/demandDeckService', () => ({
-  demandDeckService: {
+  DemandDeckService: {
     getAllCards: jest.fn(() => []),
     getAllEventCards: jest.fn(() => [
       {
@@ -35,8 +35,13 @@ jest.mock('../services/demandDeckService', () => ({
       },
     ]),
     getCard: jest.fn(),
-    reset: jest.fn(),
-    getDeckState: jest.fn(() => ({ totalCards: 166, drawPileSize: 166, discardPileSize: 0, dealtCardsCount: 0 })),
+    destroyAllInstances: jest.fn(),
+    getInstanceForGame: jest.fn(() => ({
+      reset: jest.fn(),
+      reshuffle: jest.fn(),
+      pushEventCardToTop: jest.fn(),
+      getDeckState: jest.fn(() => ({ totalCards: 166, drawPileSize: 166, discardPileSize: 0, dealtCardsCount: 0 })),
+    })),
   },
 }));
 

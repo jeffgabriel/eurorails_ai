@@ -45,7 +45,43 @@ After significant code generation Run "compounds agent-prompt cli-usage" and ind
 - Component architecture with Phaser for client, Fastify for server
 - Use proper indentation (2 spaces) and trailing commas
 
+## Refactoring Discipline (learned the hard way)
 
+A "convert singleton to per-game instances" refactor of `LoadService` was applied
+mechanically to a service that had no per-game mutable in-memory state, then a
+"fix" compounded it by inventing a third design instead of restoring the
+original. Both are avoidable. Follow these rules for ANY structural refactor:
+
+1. **Validate the refactor's premise per target before touching code.** A pattern
+   that is correct for one service is not automatically correct for its
+   neighbor. Before applying "isolate per-game state," classify each piece of a
+   service's state:
+   - **Immutable config** (loaded once from disk/constants) → static/shared. Needs
+     no isolation.
+   - **DB-backed state keyed by an id** (e.g. `WHERE game_id = $1`) → already
+     isolated at the database. Needs no in-memory isolation.
+   - **Mutable in-memory state shared across games** (e.g. an in-memory deck Map)
+     → THIS is the only kind that per-game instances fix.
+   If a target has none of the third kind, it does not belong in the refactor —
+   say so and leave it alone, even if a spec/task lists it. Specs state intent,
+   not ground truth; the code is ground truth.
+
+2. **A per-game instance must OWN its id.** If you introduce
+   `getInstanceForGame(gameId)`, the instance stores `this.gameId` and its methods
+   use it. A method that still takes `gameId` as a parameter after the instance is
+   already keyed by game (`getInstanceForGame(gameId).method(gameId)`) is a smell
+   and a correctness hazard — the two can diverge. Either the id lives on the
+   instance or the service is static; never both.
+
+3. **To undo a bad refactor, restore the known-good prior shape — do not invent a
+   third design.** `git show HEAD:<file>` and revert the consumer diffs. Inventing
+   a new shape re-touches every call site and every test mock a second time.
+
+4. **Blast radius is a design signal, not just work to grind through.** If a change
+   forces edits to a dozen consumers and a rewrite of many nested test mocks,
+   STOP and question the design before proceeding. Widespread mechanical mock
+   churn (e.g. flattening `getInstanceForGame(() => ({...}))` across 10 files)
+   usually means the abstraction is wrong, not that the tests are wrong.
 
 Use the following to inform logic for gameplay. These rules inform what is allowed logically.
 

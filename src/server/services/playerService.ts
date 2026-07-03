@@ -4,7 +4,7 @@ import { getTrainCapacity } from "../../shared/services/trainProperties";
 import { LoadService } from "./loadService";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
-import { demandDeckService } from "./demandDeckService";
+import { DemandDeckService } from "./demandDeckService";
 import { TrackService, getRiverEdgeKeys, segmentCrossesRiver } from "./trackService";
 import { DemandCard } from "../../shared/types/DemandCard";
 import { LoadType } from "../../shared/types/LoadTypes";
@@ -330,6 +330,7 @@ export class PlayerService {
     // ALWAYS draw 3 initial cards server-side (ignore any client-provided cards)
     // Cards must be drawn server-side to ensure proper deck management and prevent duplicates
     // Event cards drawn during initial deal are discarded and replaced per game rules
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const handCardIds: number[] = [];
     while (handCardIds.length < 3) {
       const drawResult = demandDeckService.drawCard();
@@ -556,6 +557,7 @@ export class PlayerService {
    * @returns Array of players, with hands filtered based on requestingUserId
    */
   static async getPlayers(gameId: string, requestingUserId: string): Promise<Player[]> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     try {
       const query = `
@@ -626,7 +628,7 @@ export class PlayerService {
             // Reconcile in-memory deck state after server restarts:
             // ensure cards present in DB hands are considered dealt and removed from draw/discard piles.
             demandDeckService.ensureCardIsDealt(cardId);
-            const card = demandDeckService.getCard(cardId);
+            const card = DemandDeckService.getCard(cardId);
             if (!card) {
               console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
               return null;
@@ -1057,6 +1059,7 @@ export class PlayerService {
     loadType: string,
     cardId: number
   ): Promise<{ newCard: any }> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     try {
       await client.query('BEGIN');
@@ -1134,6 +1137,7 @@ export class PlayerService {
     | { restricted: true; reason: string }
     | { restricted?: false; payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: DemandCard }
   > {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     let drewCardId: number | null = null;
     let discardedCardId: number | null = null;
@@ -1218,7 +1222,7 @@ export class PlayerService {
         throw new Error("Demand card not in hand");
       }
 
-      const demandCard = demandDeckService.getCard(cardId);
+      const demandCard = DemandDeckService.getCard(cardId);
       if (!demandCard) {
         throw new Error("Invalid demand card");
       }
@@ -1790,6 +1794,7 @@ export class PlayerService {
     | { kind: "deliver"; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; restoredCard: DemandCard; removedCardId: number }
     | { kind: "move"; updatedMoney: number; restoredPosition: { row: number; col: number; x?: number; y?: number }; ownersReversed: Array<{ playerId: string; amount: number }>; feeTotal: number }
   > {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     try {
       await client.query("BEGIN");
@@ -1969,7 +1974,7 @@ export class PlayerService {
         throw new Error("Invalid payment on action");
       }
 
-      const restoredCard = demandDeckService.getCard(restoredCardId);
+      const restoredCard = DemandDeckService.getCard(restoredCardId);
       if (!restoredCard) {
         throw new Error("Invalid demand card on action");
       }
@@ -2043,6 +2048,7 @@ export class PlayerService {
     drawnIds: number[],
     discardedEventIds: number[] = []
   ): Promise<{ newHandIds: number[] }> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     // Discard old hand (must be currently dealt).
     for (const id of handIds) {
       demandDeckService.discardCard(id);
@@ -2090,6 +2096,7 @@ export class PlayerService {
     gameId: string,
     playerId: string
   ): Promise<{ newHandIds: number[] }> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     const discardedIds: number[] = [];
     const drawnIds: number[] = [];
@@ -2167,6 +2174,7 @@ export class PlayerService {
     gameId: string,
     userId: string
   ): Promise<{ currentPlayerIndex: number; nextPlayerId: string; nextPlayerName: string }> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     const discardedIds: number[] = [];
     const drawnIds: number[] = [];
@@ -2358,6 +2366,7 @@ export class PlayerService {
    * Note: Does NOT advance turn or increment current_turn_number.
    */
   static async restartForUser(gameId: string, userId: string): Promise<Player> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     const discardedIds: number[] = [];
     const drawnIds: number[] = [];

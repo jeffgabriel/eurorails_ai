@@ -5,7 +5,7 @@ import '@jest/globals';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { cleanDatabase } from '../db/index';
 import { TerrainType, TrainType } from '../../shared/types/GameTypes';
-import { demandDeckService } from '../services/demandDeckService';
+import { DemandDeckService } from '../services/demandDeckService';
 import { TrackService } from '../services/trackService';
 
 // Force Jest to run this test file serially
@@ -31,7 +31,7 @@ describe('PlayerService Integration Tests', () => {
 
     beforeEach(async () => {
         gameId = uuidv4();
-        demandDeckService.reset();
+        DemandDeckService.destroyAllInstances();
         await runQuery(async (client) => {
             await client.query(
                 'INSERT INTO games (id, status, current_player_index, max_players) VALUES ($1, $2, $3, $4)',
@@ -723,7 +723,7 @@ describe('PlayerService Integration Tests', () => {
 
     describe('Load Delivery', () => {
         it('should deliver a load immediately server-side and prevent double delivery', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId = uuidv4();
             await db.query(
@@ -752,7 +752,7 @@ describe('PlayerService Integration Tests', () => {
 
             const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
             const cardId: number = playerRow.rows[0].hand[0];
-            const card = demandDeckService.getCard(cardId);
+            const card = DemandDeckService.getCard(cardId);
             expect(card).toBeTruthy();
             if (!card) {
                 throw new Error('Expected demand card to exist');
@@ -801,7 +801,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should undo the last delivery and restore money, load, and the discarded demand card', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId = uuidv4();
             await db.query(
@@ -830,7 +830,7 @@ describe('PlayerService Integration Tests', () => {
 
             const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
             const cardId: number = playerRow.rows[0].hand[0];
-            const card = demandDeckService.getCard(cardId);
+            const card = DemandDeckService.getCard(cardId);
             expect(card).toBeTruthy();
             if (!card) throw new Error('Expected demand card to exist');
 
@@ -868,11 +868,11 @@ describe('PlayerService Integration Tests', () => {
             expect(after.rows[0].hand).not.toContain(delivered.newCard.id);
 
             // The card should no longer be considered dealt after undo.
-            expect(demandDeckService.returnDealtCardToTop(delivered.newCard.id)).toBe(false);
+            expect(DemandDeckService.getInstanceForGame(gameId).returnDealtCardToTop(delivered.newCard.id)).toBe(false);
         });
 
         it('should correctly undo delivery when debt was repaid from the payoff', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId = uuidv4();
             await db.query(
@@ -901,7 +901,7 @@ describe('PlayerService Integration Tests', () => {
 
             const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
             const cardId: number = playerRow.rows[0].hand[0];
-            const card = demandDeckService.getCard(cardId);
+            const card = DemandDeckService.getCard(cardId);
             expect(card).toBeTruthy();
             if (!card) throw new Error('Expected demand card to exist');
 
@@ -958,7 +958,7 @@ describe('PlayerService Integration Tests', () => {
 
     describe('Discard hand (skip turn)', () => {
         it('should discard all 3 cards, draw 3 new cards, and advance the turn', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId1 = uuidv4();
             const userId2 = uuidv4();
@@ -1008,7 +1008,7 @@ describe('PlayerService Integration Tests', () => {
                 hand: []
             } as any);
 
-            const beforeDeck = demandDeckService.getDeckState();
+            const beforeDeck = DemandDeckService.getInstanceForGame(gameId).getDeckState();
             const beforePlayerRow = await db.query('SELECT hand, current_turn_number FROM players WHERE id = $1', [playerId1]);
             const oldHand: number[] = beforePlayerRow.rows[0].hand;
             const oldTurnNumber: number = beforePlayerRow.rows[0].current_turn_number;
@@ -1018,7 +1018,7 @@ describe('PlayerService Integration Tests', () => {
             const result = await PlayerService.discardHandForUser(gameId, userId1);
             expect(result.currentPlayerIndex).toBe(1);
 
-            const afterDeck = demandDeckService.getDeckState();
+            const afterDeck = DemandDeckService.getInstanceForGame(gameId).getDeckState();
             // At least 3 cards discarded (old hand); may be more if event cards were drawn and discarded
             expect(afterDeck.discardPileSize).toBeGreaterThanOrEqual(beforeDeck.discardPileSize + 3);
             // All dealt cards should be accounted for (3 new hand cards dealt, same net count)
@@ -1038,7 +1038,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should reject discard when it is not your turn', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId1 = uuidv4();
             const userId2 = uuidv4();
@@ -1085,7 +1085,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should reject discard when turn_build_cost > 0', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId1 = uuidv4();
             const userId2 = uuidv4();
@@ -1136,7 +1136,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should reject discard when server-tracked actions exist this turn', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId1 = uuidv4();
             const userId2 = uuidv4();
@@ -1383,7 +1383,7 @@ describe('PlayerService Integration Tests', () => {
 
     describe('Restart (reset) - mercy rule', () => {
         it('should restart the active player: reset money/train/loads/position, replace hand, and clear track (without ending turn)', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId1 = uuidv4();
             const userId2 = uuidv4();
@@ -1508,7 +1508,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should reject restart when it is not your turn', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId1 = uuidv4();
             const userId2 = uuidv4();
@@ -1555,7 +1555,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should reject restart when turn_build_cost > 0', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId1 = uuidv4();
             const userId2 = uuidv4();
@@ -1606,7 +1606,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should reject restart when server-tracked actions exist this turn', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId1 = uuidv4();
             const userId2 = uuidv4();
@@ -2011,7 +2011,7 @@ describe('PlayerService Integration Tests', () => {
 
     describe('Mercy Borrowing - deliverLoadForUser debt repayment', () => {
         it('should apply full payment to money when no debt exists', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId = uuidv4();
             await db.query(
@@ -2042,7 +2042,7 @@ describe('PlayerService Integration Tests', () => {
 
             const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
             const cardId: number = playerRow.rows[0].hand[0];
-            const card = demandDeckService.getCard(cardId);
+            const card = DemandDeckService.getCard(cardId);
             if (!card) throw new Error('Expected demand card to exist');
             const demand = card.demands[0];
 
@@ -2067,7 +2067,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should clear debt and give excess to money when debt < payment', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId = uuidv4();
             await db.query(
@@ -2098,7 +2098,7 @@ describe('PlayerService Integration Tests', () => {
 
             const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
             const cardId: number = playerRow.rows[0].hand[0];
-            const card = demandDeckService.getCard(cardId);
+            const card = DemandDeckService.getCard(cardId);
             if (!card) throw new Error('Expected demand card to exist');
             const demand = card.demands[0];
 
@@ -2124,7 +2124,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should reduce debt and give nothing to money when debt > payment', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId = uuidv4();
             await db.query(
@@ -2155,7 +2155,7 @@ describe('PlayerService Integration Tests', () => {
 
             const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
             const cardId: number = playerRow.rows[0].hand[0];
-            const card = demandDeckService.getCard(cardId);
+            const card = DemandDeckService.getCard(cardId);
             if (!card) throw new Error('Expected demand card to exist');
             const demand = card.demands[0];
 
@@ -2181,7 +2181,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should clear debt exactly when debt == payment', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId = uuidv4();
             await db.query(
@@ -2209,7 +2209,7 @@ describe('PlayerService Integration Tests', () => {
 
             const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
             const cardId: number = playerRow.rows[0].hand[0];
-            const card = demandDeckService.getCard(cardId);
+            const card = DemandDeckService.getCard(cardId);
             if (!card) throw new Error('Expected demand card to exist');
             const demand = card.demands[0];
 
@@ -2237,7 +2237,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should persist debt changes to database after delivery', async () => {
-            demandDeckService.reset();
+            DemandDeckService.destroyAllInstances();
 
             const userId = uuidv4();
             await db.query(
@@ -2268,7 +2268,7 @@ describe('PlayerService Integration Tests', () => {
 
             const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
             const cardId: number = playerRow.rows[0].hand[0];
-            const card = demandDeckService.getCard(cardId);
+            const card = DemandDeckService.getCard(cardId);
             if (!card) throw new Error('Expected demand card to exist');
             const demand = card.demands[0];
 
