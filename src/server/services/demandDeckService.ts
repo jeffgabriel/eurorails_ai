@@ -333,6 +333,23 @@ export class DemandDeckService {
   }
 
   /**
+   * Reshuffle the draw pile and discard pile together, preserving dealt cards
+   * (cards currently in player hands). Use when the deck appears corrupted
+   * (e.g. too many event cards in sequence).
+   */
+  public reshuffle(): { drawPileSize: number; discardPileSize: number; dealtCardsCount: number } {
+    // Merge discard pile back into draw pile
+    this.drawPile.push(...this.discardPile);
+    this.discardPile = [];
+    this.shuffleDrawPile();
+    return {
+      drawPileSize: this.drawPile.length,
+      discardPileSize: 0,
+      dealtCardsCount: this.dealtCards.size,
+    };
+  }
+
+  /**
    * Reset the deck state (for testing)
    * Returns all dealt cards back to the draw pile and resets state
    */

@@ -126,7 +126,9 @@ export class EventCardOverlay {
       `Drawn by: ${payload.drawingPlayerName}`,
       `Duration: ${payload.duration === 'immediate' ? 'Immediate effect' : 'Until end of next turn'}`,
     ];
-    if (payload.affectedPlayerIds.length > 0) {
+    if (payload.affectedPlayerNames && payload.affectedPlayerNames.length > 0) {
+      metaLines.push(`Affected: ${payload.affectedPlayerNames.join(', ')}`);
+    } else if (payload.affectedPlayerIds.length > 0) {
       metaLines.push(`Affected: ${payload.affectedPlayerIds.join(', ')}`);
     }
     if (payload.effectSummary) {

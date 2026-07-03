@@ -199,7 +199,7 @@ export class TrackService {
         client: PoolClient,
         gameId: string,
         riverName: string
-    ): Promise<Array<{ playerId: string; removedCount: number; newTotalCost: number }>> {
+    ): Promise<Array<{ playerId: string; removedCount: number; newTotalCost: number; removedMileposts: string[] }>> {
         // Resolve river edge keys; throw if unknown
         const riverEdgeKeys = getRiverEdgeKeys(riverName);
         if (!riverEdgeKeys) {
@@ -215,7 +215,7 @@ export class TrackService {
             [gameId]
         );
 
-        const results: Array<{ playerId: string; removedCount: number; newTotalCost: number }> = [];
+        const results: Array<{ playerId: string; removedCount: number; newTotalCost: number; removedMileposts: string[] }> = [];
 
         for (const row of lockedRows.rows) {
             const playerId: string = row.player_id;
@@ -224,13 +224,22 @@ export class TrackService {
                 : (row.segments || []) as TrackSegment[];
 
             const segments = rawSegments as TrackSegment[];
+            const removed = segments.filter(seg => segmentCrossesRiver(seg, riverEdgeKeys));
             const remaining = segments.filter(seg => !segmentCrossesRiver(seg, riverEdgeKeys));
-            const removedCount = segments.length - remaining.length;
+            const removedCount = removed.length;
 
             if (removedCount === 0) {
                 // No segments to remove — skip update
                 continue;
             }
+
+            // Collect unique milepost keys from removed segments for map highlighting
+            const milespostSet = new Set<string>();
+            for (const seg of removed) {
+                milespostSet.add(`${seg.from.row},${seg.from.col}`);
+                milespostSet.add(`${seg.to.row},${seg.to.col}`);
+            }
+            const removedMileposts = Array.from(milespostSet);
 
             const newTotalCost = remaining.reduce((sum, seg) => sum + seg.cost, 0);
 
@@ -241,7 +250,7 @@ export class TrackService {
                 [JSON.stringify(remaining), newTotalCost, gameId, playerId]
             );
 
-            results.push({ playerId, removedCount, newTotalCost });
+            results.push({ playerId, removedCount, newTotalCost, removedMileposts });
         }
 
         return results;

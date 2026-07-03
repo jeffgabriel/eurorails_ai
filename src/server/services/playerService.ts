@@ -114,12 +114,44 @@ export class PlayerService {
     if (emissions.length === 0) return;
 
     try {
-      const { emitEventCardDrawn, emitEventEffectApplied } = await import('./socketService');
+      const { emitEventCardDrawn, emitEventEffectApplied, emitToGame } = await import('./socketService');
 
       for (const { gameId, eventResult, drawingPlayerName, card } of emissions) {
         const affectedPlayerIds = eventResult.perPlayerEffects.map((e) => e.playerId);
         const duration = eventResult.persistentEffectDescriptor ? 'persistent' : 'immediate';
-        const effectSummary = `${card.type} affecting ${eventResult.affectedZone.length} mileposts`;
+
+        // Resolve affected player IDs to display names
+        let affectedPlayerNames: string[] = [];
+        if (affectedPlayerIds.length > 0) {
+          try {
+            const nameRows = await db.query(
+              'SELECT id, name FROM players WHERE id = ANY($1)',
+              [affectedPlayerIds],
+            );
+            const nameMap = new Map<string, string>();
+            for (const row of nameRows.rows) {
+              nameMap.set(row.id, row.name as string);
+            }
+            affectedPlayerNames = affectedPlayerIds.map(
+              (id) => nameMap.get(id) ?? 'Unknown Player',
+            );
+          } catch (nameErr) {
+            console.warn(`[PlayerService] Could not resolve affected player names: ${nameErr}`);
+            affectedPlayerNames = affectedPlayerIds.map(() => 'Unknown Player');
+          }
+        }
+
+        // Build flood-specific summary when segments were removed
+        let effectSummary: string;
+        if (eventResult.floodSegmentsRemoved.length > 0) {
+          const parts = eventResult.floodSegmentsRemoved.map((r, i) => {
+            const name = affectedPlayerNames[i] ?? 'Unknown Player';
+            return `${r.removedCount} segment(s) from ${name}`;
+          });
+          effectSummary = `Flood on ${eventResult.floodedRiver ?? 'river'}: ${parts.join(', ')}`;
+        } else {
+          effectSummary = `${card.type} affecting ${eventResult.affectedZone.length} mileposts`;
+        }
 
         emitEventCardDrawn(gameId, {
           gameId,
@@ -128,6 +160,7 @@ export class PlayerService {
           drawingPlayerName,
           affectedZone: eventResult.affectedZone,
           affectedPlayerIds,
+          affectedPlayerNames,
           effectSummary,
           duration,
           timestamp: new Date().toISOString(),
@@ -140,6 +173,20 @@ export class PlayerService {
             effects: eventResult.perPlayerEffects,
             timestamp: new Date().toISOString(),
           });
+        }
+
+        // Flood events remove track segments server-side — notify clients to
+        // re-fetch tracks so their in-memory state stays in sync with the DB.
+        // Without this, the next client saveTrackState would overwrite the
+        // removal with stale data.
+        if (eventResult.floodSegmentsRemoved.length > 0) {
+          for (const r of eventResult.floodSegmentsRemoved) {
+            emitToGame(gameId, 'track:updated', {
+              gameId,
+              playerId: r.playerId,
+              timestamp: Date.now(),
+            });
+          }
         }
       }
     } catch (emitErr) {

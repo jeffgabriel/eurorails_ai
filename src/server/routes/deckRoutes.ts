@@ -113,6 +113,33 @@ router.post('/debug/push-event', (req, res) => {
   }
 });
 
+// Debug endpoint: reshuffle the draw+discard piles, preserving dealt cards
+router.post('/debug/reshuffle', (req, res) => {
+  try {
+    const testSecret = req.headers['x-test-secret'] as string;
+    const isTestEnvironment = process.env.NODE_ENV === 'test';
+    const isValidTestRequest = isTestEnvironment || testSecret === 'test-reset-secret';
+
+    if (!isValidTestRequest) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        details: 'This endpoint is only available in test/debug mode'
+      });
+    }
+
+    const result = demandDeckService.reshuffle();
+    return res.status(200).json({
+      message: 'Deck reshuffled (dealt cards preserved)',
+      ...result,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      error: 'Server error',
+      details: error.message || 'Failed to reshuffle deck'
+    });
+  }
+});
+
 // Get all event card definitions
 router.get('/events', authenticateToken, (req, res) => {
   try {
