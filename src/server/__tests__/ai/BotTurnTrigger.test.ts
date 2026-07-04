@@ -71,7 +71,7 @@ jest.mock('../../services/ai/connectedMajorCities', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────
 
-import { onTurnChange, pendingBotTurns, checkBotVictory, queuedBotTurns, onHumanReconnect } from '../../services/ai/BotTurnTrigger';
+import { onTurnChange, pendingBotTurns, checkBotVictory, queuedBotTurns, onHumanReconnect, cleanupBotTurnState } from '../../services/ai/BotTurnTrigger';
 import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { db } from '../../db/index';
 import { emitToGame, emitVictoryTriggered, emitGameOver } from '../../services/socketService';
@@ -907,5 +907,44 @@ describe('BotTurnTrigger — stuck bot recovery on reconnect', () => {
     await new Promise(resolve => setTimeout(resolve, 100));
 
     expect(mockTakeTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe('BotTurnTrigger.cleanupBotTurnState — BE-003', () => {
+  beforeEach(() => {
+    pendingBotTurns.clear();
+    queuedBotTurns.clear();
+  });
+
+  it('removes both pending and queued entries for the target game', () => {
+    pendingBotTurns.add('game-A');
+    queuedBotTurns.set('game-A', { gameId: 'game-A', currentPlayerIndex: 0, currentPlayerId: 'p1' });
+
+    cleanupBotTurnState('game-A');
+
+    expect(pendingBotTurns.has('game-A')).toBe(false);
+    expect(queuedBotTurns.has('game-A')).toBe(false);
+  });
+
+  it('leaves other games\' tracking state untouched', () => {
+    pendingBotTurns.add('game-A');
+    pendingBotTurns.add('game-B');
+    queuedBotTurns.set('game-B', { gameId: 'game-B', currentPlayerIndex: 1, currentPlayerId: 'p2' });
+
+    cleanupBotTurnState('game-A');
+
+    expect(pendingBotTurns.has('game-B')).toBe(true);
+    expect(queuedBotTurns.has('game-B')).toBe(true);
+  });
+
+  it('is idempotent — cleaning a game with no tracked state does not throw', () => {
+    expect(() => cleanupBotTurnState('nonexistent-game')).not.toThrow();
+    expect(() => cleanupBotTurnState('nonexistent-game')).not.toThrow();
+  });
+
+  it('ignores an empty gameId', () => {
+    pendingBotTurns.add('game-A');
+    cleanupBotTurnState('');
+    expect(pendingBotTurns.has('game-A')).toBe(true);
   });
 });
