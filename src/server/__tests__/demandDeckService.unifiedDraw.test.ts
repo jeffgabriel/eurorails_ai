@@ -370,6 +370,20 @@ describe('DemandDeckService unified draw pile', () => {
       expect(second.getDeckState().drawPileSize).toBe(166);
     });
 
+    it('should leave other games untouched when one game is destroyed', () => {
+      const a = DemandDeckService.getInstanceForGame('game-A');
+      const b = DemandDeckService.getInstanceForGame('game-B');
+      b.drawCard();
+      b.drawCard();
+
+      DemandDeckService.destroyInstance('game-A');
+
+      // game-B's instance and its deck state must survive game-A's teardown.
+      expect(DemandDeckService.getInstanceForGame('game-B')).toBe(b);
+      expect(b.getDeckState().dealtCardsCount).toBe(2);
+      expect(b.getDeckState().drawPileSize).toBe(164);
+    });
+
     it('should treat destroyInstance for an unknown game as a no-op', () => {
       expect(() => DemandDeckService.destroyInstance('never-created')).not.toThrow();
     });
