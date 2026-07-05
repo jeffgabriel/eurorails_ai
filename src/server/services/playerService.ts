@@ -15,6 +15,7 @@ import { TrackSegment } from "../../shared/types/TrackTypes";
 import { EventCardService } from "./EventCardService";
 import { activeEffectManager } from "./ActiveEffectManager";
 import { EventCardType, EventCardResult, EventCard } from "../../shared/types/EventCard";
+import { cleanupGameState } from "./gameCleanupService";
 
 type TurnActionDeliver = {
   kind: "deliver";
@@ -1030,11 +1031,18 @@ export class PlayerService {
     }
 
     const query = `
-            UPDATE games 
+            UPDATE games
             SET status = $1, updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
         `;
     await db.query(query, [finalStatus, gameId]);
+
+    // When a game reaches a terminal state, release its per-game in-memory
+    // state. Idempotent, so it is safe even if the game was already cleaned up
+    // via another path (e.g. VictoryService.resolveVictory).
+    if (finalStatus === "completed" || finalStatus === "abandoned") {
+      await cleanupGameState(gameId);
+    }
   }
 
   static async endAllActiveGames(): Promise<void> {

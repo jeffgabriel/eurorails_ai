@@ -2,6 +2,7 @@ import { db } from '../db';
 import { VictoryState, VICTORY_INITIAL_THRESHOLD, VICTORY_TIE_THRESHOLD } from '../../shared/types/GameTypes';
 import { TrackService } from './trackService';
 import { TrackSegment } from '../../shared/types/TrackTypes';
+import { cleanupGameState } from './gameCleanupService';
 
 export interface MajorCityCoordinate {
   name: string;
@@ -237,6 +238,9 @@ export class VictoryService {
         [gameId, winner.id]
       );
 
+      // Game is over — release per-game in-memory state.
+      await cleanupGameState(gameId);
+
       return {
         gameOver: true,
         winnerId: winner.id,
@@ -270,6 +274,9 @@ export class VictoryService {
       `UPDATE games SET status = 'completed', winner_id = $2 WHERE id = $1`,
       [gameId, winner.id]
     );
+
+    // Game is over — release per-game in-memory state.
+    await cleanupGameState(gameId);
 
     return {
       gameOver: true,
