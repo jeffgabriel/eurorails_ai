@@ -6,7 +6,7 @@ export class CitySelectionManager extends SimpleDropDownList {
   public scene: Phaser.Scene;
   private gameState: FullGameState;
   private mapRenderer: MapRenderer;
-  private onCitySelected: (
+  private onCitySelected!: (
     playerId: string,
     x: number,
     y: number,
@@ -15,7 +15,6 @@ export class CitySelectionManager extends SimpleDropDownList {
   ) => Promise<void>;
   private dropdownDomElement: any | null = null; // RexUI DropDownList type
   private isHandCollapsed: () => boolean;
-  private dropdown: Phaser.GameObjects.GameObject;
   private static style = {
     list: {
       maxHeight: 200,
@@ -26,7 +25,7 @@ export class CitySelectionManager extends SimpleDropDownList {
       // createTrackCallback: function (scene) {
       //   return scene.rexUI.add.roundRectangle({ width: 10, color: 0x808588 });
       // },
-      createThumbCallback: function (scene) {
+      createThumbCallback: function (scene: any) {
         return scene.rexUI.add.roundRectangle({
           width: 14,
           height: 24,
@@ -89,7 +88,7 @@ export class CitySelectionManager extends SimpleDropDownList {
       return;
     }
     this.onCitySelected = onCitySelected;
-    this.on("button.click", (_dropDownList, _listPanel, selectedOption) => {
+    this.on("button.click", (_dropDownList: any, _listPanel: any, selectedOption: any) => {
       const selectedCity = selectedOption.value;
       this.onCitySelected(
         playerId,

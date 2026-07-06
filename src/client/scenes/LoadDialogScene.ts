@@ -30,8 +30,8 @@ export class LoadDialogScene extends Scene {
     private uiManager!: UIManager;
     private turnActionManager: TurnActionManager | null = null;
     private loadService: LoadService;
-    private gameStateService: GameStateService;
-    private playerStateService: PlayerStateService;
+    private gameStateService!: GameStateService;
+    private playerStateService!: PlayerStateService;
     private dialogContainer!: Phaser.GameObjects.Container;
     private errorText: Phaser.GameObjects.Text | null = null;
 
