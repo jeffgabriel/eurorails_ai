@@ -179,6 +179,31 @@ export class MovementPhasePlanner {
           }
         }
 
+        // JIRA-249 Layer 3: Runtime arrival guard — verify load is present before deliver.
+        // If the bot arrived at a delivery city but the load is not in context.loads,
+        // the route is stale/malformed. Abandon the current stop and trigger a replan
+        // rather than emitting PassTurn or a failed deliver action.
+        if (
+          currentStop.action === 'deliver' &&
+          !context.loads.includes(currentStop.loadType)
+        ) {
+          console.warn(
+            `${tag} arrived_for_deliver_but_load_not_carried: ` +
+            `loadType=${currentStop.loadType} city=${targetCity} ` +
+            `context.loads=[${context.loads.join(',')}] — abandoning stop, triggering replan.`,
+          );
+          trace.a2.terminationReason = 'arrived_for_deliver_but_load_not_carried';
+          trace.outputPlan = plans.map(p => p.type);
+          // Advance past the malformed stop so the route does not loop on it.
+          activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
+          return MovementPhasePlanner.makeResult(
+            activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn,
+            snapshot, context, false, false,
+            replanLlmLog, replanSystemPrompt, replanUserPrompt,
+            pendingUpgradeAction, upgradeSuppressionReason,
+          );
+        }
+
         const _stopActionStart = Date.now();
         const actionResult = await TurnExecutorPlanner.executeStopAction(
           currentStop,

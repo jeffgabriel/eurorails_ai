@@ -2929,6 +2929,124 @@ describe('JIRA-207B: TripPlanner pre-LLM short-circuit (R10c)', () => {
   });
 });
 
+// ── JIRA-248 Layer 2: Affordability gate bypass for carried-load demands ──────
+
+describe('JIRA-248 Layer 2: TripPlanner affordability gate bypass for carried-load demands', () => {
+  let RouteValidatorMock: jest.MockedObject<typeof import('../../services/ai/RouteValidator').RouteValidator>;
+
+  beforeAll(() => {
+    RouteValidatorMock = jest.requireMock('../../services/ai/RouteValidator').RouteValidator;
+    RouteValidatorMock.validate.mockReturnValue({ valid: true, errors: [] });
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+    RouteValidatorMock.validate.mockReturnValue({ valid: true, errors: [] });
+  });
+
+  /**
+   * UT1: bot has low money → all fresh demands are isAffordable=false.
+   * One carried-load demand has isLoadOnTrain=true && isDeliveryReachable=true.
+   * Expected: actionableDemands is NOT empty — carried-load demand bypasses gate.
+   * The planner should NOT return no_actionable_options.
+   */
+  it('UT1: unaffordable fresh demands + carried-load demand → carried-load bypasses gate (not no_actionable_options)', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    const context = makeContext({
+      loads: ['Fish'],
+      demands: [
+        // Carried load — not affordable (high track cost) but isLoadOnTrain=true
+        makeDemand({
+          cardIndex: 1, loadType: 'Fish', supplyCity: null, deliveryCity: 'Zurich',
+          payout: 20, isAffordable: false, isLoadOnTrain: true, isDeliveryReachable: true,
+        }),
+        // Fresh demand — also not affordable
+        makeDemand({
+          cardIndex: 2, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin',
+          payout: 15, isAffordable: false, isLoadOnTrain: false, isDeliveryReachable: true,
+        }),
+      ],
+    });
+
+    const memory = makeMemory({ activeRoute: null });
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], memory);
+
+    // Must NOT return no_actionable_options — carried-load bypasses gate
+    expect(result.selection?.fallbackReason).not.toBe('no_actionable_options');
+    // LLM not called (single-option short-circuit fires for the one actionable carried-load demand)
+    expect(chatFn).not.toHaveBeenCalled();
+    // A route should be returned (single_option_shortcircuit)
+    expect(result.selection?.fallbackReason).toBe('single_option_shortcircuit');
+  });
+
+  /**
+   * UT2: no carried loads, all fresh demands are isAffordable=false.
+   * Expected: no_actionable_options (existing behavior preserved).
+   */
+  it('UT2: no carried loads + all fresh demands unaffordable → no_actionable_options (existing behavior preserved)', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    const context = makeContext({
+      loads: [],
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: false, isLoadOnTrain: false }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12, isAffordable: false, isLoadOnTrain: false }),
+      ],
+    });
+
+    const memory = makeMemory({ activeRoute: null });
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], memory);
+
+    expect(result.selection?.fallbackReason).toBe('no_actionable_options');
+    expect(chatFn).not.toHaveBeenCalled();
+  });
+
+  /**
+   * UT3: both affordable fresh demands AND carried-load demands are present.
+   * Expected: actionableDemands contains both → LLM is called (≥2 actionable).
+   */
+  it('UT3: affordable fresh demand + carried-load demand → both in actionable set, LLM called', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    const llmResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'deliver', load: 'Fish', city: 'Zurich', demandCardId: 1, payment: 20 },
+        ],
+        reasoning: 'deliver carried Fish',
+      },
+    ], 0);
+    chatFn.mockResolvedValue({ text: llmResponse, usage: { input: 50, output: 30 } });
+
+    const context = makeContext({
+      loads: ['Fish'],
+      demands: [
+        // Carried load demand
+        makeDemand({
+          cardIndex: 1, loadType: 'Fish', supplyCity: null, deliveryCity: 'Zurich',
+          payout: 20, isAffordable: false, isLoadOnTrain: true, isDeliveryReachable: true,
+        }),
+        // Affordable fresh demand
+        makeDemand({
+          cardIndex: 2, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin',
+          payout: 15, isAffordable: true, isLoadOnTrain: false, isDeliveryReachable: true,
+        }),
+      ],
+    });
+
+    const memory = makeMemory({ activeRoute: null });
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], memory);
+
+    // With 2 actionable demands (1 carried + 1 affordable), LLM is called
+    expect(chatFn).toHaveBeenCalledTimes(1);
+    expect(result.route).not.toBeNull();
+  });
+});
+
 // ── TEST-002: Game 5302ee21 reproduction tests (AC22, AC23) ─────────────────
 
 describe('JIRA-207B: Game 5302ee21 reproduction tests (TEST-002)', () => {

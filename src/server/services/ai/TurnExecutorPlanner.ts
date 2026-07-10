@@ -117,6 +117,12 @@ export interface CompositionTrace {
     stopActionMs: number;
     stopActionCount: number;
   };
+  /**
+   * JIRA-249/250: Structured records of candidates rejected by the grammar
+   * validator (isCandidateGrammaticallyValid) before scoring. Optional —
+   * only populated when the deterministic planner is active and rejections occur.
+   */
+  candidateRejections?: import('./DeterministicTripPlanner').CandidateRejection[];
   /** JIRA-179: Build Route Resolver candidate comparison — only present when ENABLE_BUILD_RESOLVER=true */
   buildResolver?: {
     enabled: true;

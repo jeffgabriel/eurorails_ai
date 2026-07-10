@@ -791,6 +791,18 @@ export function computeBestDemandContext(
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/**
+ * Build a count map of how many times each loadType appears in bot.loads.
+ * Used by computeAllDemandContexts to track multiplicity-aware carry assignment.
+ */
+function buildCarriedLoadCounts(loads: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const load of loads) {
+    counts.set(load, (counts.get(load) ?? 0) + 1);
+  }
+  return counts;
+}
+
 export function computeAllDemandContexts(
   snapshot: WorldSnapshot,
   network: ReturnType<typeof buildTrackNetwork> | null,
@@ -800,12 +812,42 @@ export function computeAllDemandContexts(
   connectedMajorCities: string[],
   saturatedCityKeys?: Set<string>,
 ): DemandContext[] {
+  // Track remaining carried-load "slots" per loadType. When a demand matches
+  // a loadType the bot is carrying, we consume one slot and mark that demand
+  // as already-on-train (supplyCity = null). Once all slots for a loadType
+  // are consumed, remaining matching demands are treated as fresh pickups.
+  const remainingCarriedCounts = buildCarriedLoadCounts(snapshot.bot.loads);
+
   const contexts: DemandContext[] = [];
   for (const resolved of snapshot.bot.resolvedDemands) {
     for (const demand of resolved.demands) {
-      contexts.push(
-        computeBestDemandContext(resolved.cardId, demand, snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities, saturatedCityKeys),
-      );
+      const remaining = remainingCarriedCounts.get(demand.loadType) ?? 0;
+      if (remaining > 0) {
+        // Consume one carried slot: treat this demand as already-on-train.
+        // Use the original snapshot — loads already contains this loadType.
+        remainingCarriedCounts.set(demand.loadType, remaining - 1);
+        contexts.push(
+          computeBestDemandContext(
+            resolved.cardId, demand, snapshot, network, gridPoints,
+            reachableCities, citiesOnNetwork, connectedMajorCities, saturatedCityKeys,
+          ),
+        );
+      } else {
+        // No carried slot available for this loadType: demand requires a fresh pickup.
+        // Strip this loadType entirely from loads so computeBestDemandContext does not
+        // treat it as already-on-train and assigns a real supplyCity.
+        const loadsWithoutThisType = snapshot.bot.loads.filter(l => l !== demand.loadType);
+        const freshSnapshot: WorldSnapshot = {
+          ...snapshot,
+          bot: { ...snapshot.bot, loads: loadsWithoutThisType },
+        };
+        contexts.push(
+          computeBestDemandContext(
+            resolved.cardId, demand, freshSnapshot, network, gridPoints,
+            reachableCities, citiesOnNetwork, connectedMajorCities, saturatedCityKeys,
+          ),
+        );
+      }
     }
   }
   return contexts;
