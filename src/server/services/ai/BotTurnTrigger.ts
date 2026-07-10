@@ -76,6 +76,18 @@ interface QueuedTurn {
 export const queuedBotTurns = new Map<string, QueuedTurn>();
 
 /**
+ * Remove all in-memory bot-turn tracking for a game at game end.
+ * Both collections are keyed directly by gameId, so completed/abandoned games
+ * don't leak guard-set or queued-turn entries. Idempotent — a gameId with no
+ * tracked state is a no-op.
+ */
+export function cleanupBotTurnState(gameId: string): void {
+  if (!gameId) return;
+  pendingBotTurns.delete(gameId);
+  queuedBotTurns.delete(gameId);
+}
+
+/**
  * Check whether any human player has an active socket connection to the game room.
  * Uses Socket.IO room membership — bots don't have sockets, so any connected
  * socket in the room must belong to a human player.

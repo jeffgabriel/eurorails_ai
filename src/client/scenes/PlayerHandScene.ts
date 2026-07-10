@@ -9,6 +9,11 @@ import { TrainInteractionManager } from "../components/TrainInteractionManager";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { TrainType } from "../../shared/types/GameTypes";
+import { ActiveEffectHUD } from "../components/ActiveEffectHUD";
+import { useGameStore } from "../lobby/store/game.store";
+import { authenticatedFetch } from "../services/authenticatedFetch";
+import { config } from "../config/apiConfig";
+import { ActiveEffectSummary } from "../../shared/types/EventCard";
 
 interface PlayerHandSceneData {
   gameState: FullGameState;
@@ -75,6 +80,8 @@ export class PlayerHandScene extends Phaser.Scene {
   private confirmTrainPurchaseModal: Phaser.GameObjects.Container | null = null;
   private borrowAmountModal: Phaser.GameObjects.Container | null = null;
   private toastContainer: Phaser.GameObjects.Container | null = null;
+  private activeEffectHUD: ActiveEffectHUD | null = null;
+  private unsubActiveEffects: (() => void) | null = null;
 
   // Card dimensions
   private readonly CARD_WIDTH = 170;
@@ -271,6 +278,12 @@ export class PlayerHandScene extends Phaser.Scene {
     }
     if (this.crayonHighlightCircle) {
       this.crayonHighlightCircle.setVisible(this.isDrawingMode);
+    }
+
+    // Update active effects HUD (store may have changed since last full refresh)
+    if (this.activeEffectHUD) {
+      const effects = useGameStore.getState().activeEffects;
+      this.activeEffectHUD.updateEffects(effects);
     }
 
     // Re-layout once (text size can change)
@@ -1771,6 +1784,7 @@ export class PlayerHandScene extends Phaser.Scene {
     this.createCitySelectionSection(this.infoSizer);
     this.createNameAndMoneySection(this.infoSizer);
     this.createBuildCostSection(this.infoSizer);
+    this.createActiveEffectsSection(this.infoSizer);
     this.createMoreActionsSection(this.infoSizer);
 
     this.rootSizer.add(this.infoSizer, {
@@ -1779,6 +1793,60 @@ export class PlayerHandScene extends Phaser.Scene {
       padding: { left: 10, right: 10 },
       expand: false,
     });
+  }
+
+  private createActiveEffectsSection(parentSizer: any): void {
+    // Destroy any existing HUD and store subscription before creating a new one
+    if (this.activeEffectHUD) {
+      this.activeEffectHUD.destroy();
+      this.activeEffectHUD = null;
+    }
+    if (this.unsubActiveEffects) {
+      this.unsubActiveEffects();
+      this.unsubActiveEffects = null;
+    }
+
+    this.activeEffectHUD = new ActiveEffectHUD(this);
+
+    // Initial render with current store state
+    const initialEffects = useGameStore.getState().activeEffects;
+    this.activeEffectHUD.updateEffects(initialEffects);
+
+    // Fetch active effects from server to ensure we have the latest state
+    // (handles page refresh where state:init may not have arrived yet)
+    if (this.gameState?.id) {
+      this.fetchActiveEffects(this.gameState.id);
+    }
+
+    parentSizer.add(this.activeEffectHUD.getSizer(), {
+      proportion: 0,
+      align: "left",
+      padding: { top: 2, bottom: 2 },
+      expand: false,
+    });
+
+    // Subscribe to store changes for reactive updates
+    this.unsubActiveEffects = useGameStore.subscribe((state) => {
+      if (this.activeEffectHUD) {
+        this.activeEffectHUD.updateEffects(state.activeEffects);
+        this.rootSizer?.layout?.();
+      }
+    });
+  }
+
+  private async fetchActiveEffects(gameId: string): Promise<void> {
+    try {
+      const response = await authenticatedFetch(
+        `${config.apiBaseUrl}/api/game/${gameId}/active-effects`,
+      );
+      if (!response.ok) return;
+      const data = await response.json();
+      if (Array.isArray(data.activeEffects)) {
+        useGameStore.getState().setActiveEffects(data.activeEffects as ActiveEffectSummary[]);
+      }
+    } catch {
+      // Non-fatal: the store subscription will pick up effects from state:init
+    }
   }
 
   private createMoreActionsSection(parentSizer: any): void {
@@ -2104,6 +2172,16 @@ export class PlayerHandScene extends Phaser.Scene {
     this.closeBorrowAmountModal();
     this.closeConfirmTrainPurchaseModal();
     this.closeActionsModal();
+
+    // Unsubscribe from store and destroy active effects HUD
+    if (this.unsubActiveEffects) {
+      this.unsubActiveEffects();
+      this.unsubActiveEffects = null;
+    }
+    if (this.activeEffectHUD) {
+      this.activeEffectHUD.destroy();
+      this.activeEffectHUD = null;
+    }
 
     // Destroy train card
     if (this.trainCard) {

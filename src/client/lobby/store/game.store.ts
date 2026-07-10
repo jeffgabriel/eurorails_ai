@@ -26,6 +26,8 @@ interface GameStoreState {
   activeEffects: ActiveEffectSummary[];
   /** Event card overlay awaiting player acknowledgment */
   pendingEventOverlay: EventCardDrawnPayload | null;
+  /** Event overlays drawn while another is still showing, shown FIFO after dismissal */
+  eventOverlayQueue: EventCardDrawnPayload[];
   /** Visual mutations queued while an event overlay is visible */
   pendingVisualUpdates: QueuedUpdate[];
   /** Client-side cache of event card definitions, keyed by card ID */
@@ -66,6 +68,17 @@ type GameStore = GameStoreState & GameStoreActions;
 /** Module-level timer handle for auto-dismiss (cleared on manual dismiss) */
 let overlayAutoDismissTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * (Re)start the auto-dismiss timer for the currently shown event overlay.
+ * Clears any existing timer first so only one is ever pending.
+ */
+function startOverlayAutoDismiss(dismiss: () => void): void {
+  if (overlayAutoDismissTimer !== null) {
+    clearTimeout(overlayAutoDismissTimer);
+  }
+  overlayAutoDismissTimer = setTimeout(dismiss, EVENT_OVERLAY_AUTO_DISMISS_MS);
+}
+
 export const useGameStore = create<GameStore>((set, get) => ({
   // Initial state
   gameState: null,
@@ -76,6 +89,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   connectionStatus: 'disconnected',
   activeEffects: [],
   pendingEventOverlay: null,
+  eventOverlayQueue: [],
   pendingVisualUpdates: [],
   eventCardCache: new Map(),
 
@@ -94,8 +108,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // Set up event listeners
       socketService.onInit((data) => {
         get().applyStateInit(data.gameState, data.serverSeq);
-        set({ 
-          isConnected: true, 
+        // Restore active effects from state:init (server includes them on reconnect)
+        const initData = data as Record<string, unknown>;
+        if (Array.isArray(initData.activeEffects)) {
+          get().setActiveEffects(initData.activeEffects as ActiveEffectSummary[]);
+        }
+        set({
+          isConnected: true,
           isLoading: false,
           connectionStatus: 'connected'
         });
@@ -168,6 +187,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       connectionStatus: 'disconnected',
       clientSeq: 0,
       pendingEventOverlay: null,
+      eventOverlayQueue: [],
       pendingVisualUpdates: [],
       activeEffects: [],
     });
@@ -300,17 +320,35 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   showEventOverlay: (payload: EventCardDrawnPayload) => {
-    // Clear any existing auto-dismiss timer
-    if (overlayAutoDismissTimer !== null) {
-      clearTimeout(overlayAutoDismissTimer);
+    // For persistent effects, immediately add to activeEffects so the HUD updates,
+    // regardless of the card's position in the popup queue. The server only
+    // broadcasts event:active-effects on reconnect, so we derive an
+    // ActiveEffectSummary from the drawn card payload here.
+    if (payload.duration === 'persistent') {
+      get().addActiveEffect({
+        cardId: payload.card.id,
+        cardType: payload.card.type,
+        drawingPlayerId: payload.drawingPlayerId,
+        drawingPlayerName: payload.drawingPlayerName,
+        expiresAfterTurnNumber: 0, // Unknown from payload; HUD shows "active" as fallback
+        affectedZone: payload.affectedZone,
+        effectSummary: payload.effectSummary,
+      });
     }
 
-    set({ pendingEventOverlay: payload });
+    // If an overlay is already showing, enqueue this one (FIFO) rather than
+    // overwriting the current popup — back-to-back event cards must each be
+    // shown and acknowledged. Do not touch the current card's dismiss timer.
+    if (get().pendingEventOverlay !== null) {
+      set(state => ({
+        eventOverlayQueue: [...state.eventOverlayQueue, payload],
+      }));
+      return;
+    }
 
-    // Start a 30-second auto-dismiss timer
-    overlayAutoDismissTimer = setTimeout(() => {
-      get().dismissEventOverlay();
-    }, EVENT_OVERLAY_AUTO_DISMISS_MS);
+    // No overlay showing — display this one and start its auto-dismiss timer.
+    set({ pendingEventOverlay: payload });
+    startOverlayAutoDismiss(() => get().dismissEventOverlay());
   },
 
   dismissEventOverlay: () => {
@@ -320,9 +358,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
       overlayAutoDismissTimer = null;
     }
 
+    // Promote the next queued overlay, if any. An overlay remains active, so
+    // visual mutations stay gated — do NOT flush pending visual updates yet.
+    const queue = get().eventOverlayQueue;
+    if (queue.length > 0) {
+      const [next, ...rest] = queue;
+      set({ pendingEventOverlay: next, eventOverlayQueue: rest });
+      startOverlayAutoDismiss(() => get().dismissEventOverlay());
+      return;
+    }
+
     set({ pendingEventOverlay: null });
 
-    // Flush all queued visual updates now that overlay is dismissed
+    // No overlay remains — flush all queued visual updates now.
     get().flushPendingVisualUpdates();
   },
 

@@ -336,3 +336,203 @@ describe('areSegmentsEqual', () => {
     expect(areSegmentsEqual(a, b)).toBe(false);
   });
 });
+
+// ── Real game data: Rhein flood (card 133) ─────────────────────────────────
+
+describe('Rhein flood with real game data (game b35239b7, player ab08d98d)', () => {
+  const GAME_ID = 'b35239b7-b1ef-4aa4-9470-d7a3cc3c9bda';
+  const PLAYER_ID = 'ab08d98d-933e-47bc-93ba-4efeac9d4616';
+
+  /**
+   * Actual track segments from the DB for this player.
+   * 35 segments, total cost 57.
+   *
+   * Of these, 4 cross river edges (per waterCrossings.json):
+   *   - (22,40)->(23,39) cost 3  — Rhein (+ Meuse confluence)
+   *   - (24,39)->(25,39) cost 3  — Meuse only (NOT Rhein)
+   *   - (27,41)->(27,42) cost 3  — Rhein
+   *   - (20,46)->(20,47) cost 5  — Elbe (must NOT be removed by Rhein flood)
+   */
+  const realSegments = [
+    makeSegment(21, 39, 21, 40, 1),
+    makeSegment(21, 40, 21, 41, 1),
+    makeSegment(21, 41, 21, 42, 1),
+    makeSegment(21, 42, 21, 43, 1),
+    makeSegment(21, 43, 21, 44, 1),
+    makeSegment(21, 44, 20, 45, 3),
+    makeSegment(20, 39, 19, 38, 4),
+    makeSegment(19, 34, 18, 34, 1),
+    makeSegment(18, 34, 18, 33, 1),
+    makeSegment(18, 33, 17, 32, 1),
+    makeSegment(17, 32, 16, 32, 1),
+    makeSegment(16, 32, 15, 31, 1),
+    makeSegment(15, 31, 15, 30, 1),
+    makeSegment(15, 30, 14, 30, 1),
+    makeSegment(20, 45, 20, 46, 1),
+    makeSegment(20, 46, 20, 47, 5),  // Elbe crossing
+    makeSegment(20, 47, 20, 48, 1),
+    makeSegment(20, 48, 20, 49, 1),
+    makeSegment(20, 49, 20, 50, 1),
+    makeSegment(20, 50, 20, 51, 1),
+    makeSegment(20, 51, 20, 52, 1),
+    makeSegment(20, 52, 21, 52, 1),
+    makeSegment(21, 52, 21, 53, 3),
+    makeSegment(21, 40, 22, 40, 1),
+    makeSegment(22, 40, 23, 39, 3),  // Rhein crossing
+    makeSegment(23, 39, 24, 39, 1),
+    makeSegment(24, 39, 25, 38, 1),
+    makeSegment(24, 39, 25, 39, 3),  // Meuse crossing (not Rhein)
+    makeSegment(25, 39, 26, 40, 1),
+    makeSegment(26, 40, 27, 40, 2),
+    makeSegment(27, 40, 27, 41, 2),
+    makeSegment(27, 41, 27, 42, 3),  // Rhein crossing
+    makeSegment(27, 42, 27, 43, 2),
+    makeSegment(27, 43, 28, 44, 1),
+    makeSegment(28, 44, 29, 44, 3),
+  ];
+
+  it('identifies and removes the 2 Rhein-crossing segments (not Meuse or Elbe)', async () => {
+    const querySpy = jest.fn<() => Promise<any>>();
+    querySpy.mockResolvedValueOnce({
+      rows: [{
+        player_id: PLAYER_ID,
+        segments: JSON.stringify(realSegments),
+        total_cost: 57,
+      }],
+    });
+    querySpy.mockResolvedValue({ rows: [] });
+
+    const client = { query: querySpy } as unknown as PoolClient;
+    const result = await TrackService.removeSegmentsCrossingRiver(client, GAME_ID, 'Rhein');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].playerId).toBe(PLAYER_ID);
+    expect(result[0].removedCount).toBe(2);
+    expect(result[0].newTotalCost).toBe(51); // 57 - (3 + 3)
+
+    // Verify the UPDATE wrote the correct remaining segments
+    const allCalls = querySpy.mock.calls as unknown as Array<[string, unknown[]]>;
+    const updateCall = allCalls.find(([sql]) => sql.includes('UPDATE player_tracks'));
+    expect(updateCall).toBeDefined();
+    const remaining = JSON.parse(updateCall![1][0] as string) as TrackSegment[];
+    expect(remaining).toHaveLength(33);
+
+    // The Elbe crossing (20,46)->(20,47) must survive
+    const elbeCrossing = remaining.find(
+      s => s.from.row === 20 && s.from.col === 46 && s.to.row === 20 && s.to.col === 47,
+    );
+    expect(elbeCrossing).toBeDefined();
+
+    // The Meuse-only crossing (24,39)->(25,39) must survive
+    const meuseCrossing = remaining.find(
+      s => s.from.row === 24 && s.from.col === 39 && s.to.row === 25 && s.to.col === 39,
+    );
+    expect(meuseCrossing).toBeDefined();
+
+    // The 2 Rhein crossings must be gone
+    const rheinEdges = [
+      { fr: 22, fc: 40, tr: 23, tc: 39 },
+      { fr: 27, fc: 41, tr: 27, tc: 42 },
+    ];
+    for (const e of rheinEdges) {
+      const found = remaining.find(
+        s => s.from.row === e.fr && s.from.col === e.fc && s.to.row === e.tr && s.to.col === e.tc,
+      );
+      expect(found).toBeUndefined();
+    }
+  });
+});
+
+// ── Real game data: Donau flood (game 1b4eeca9, player 3d948c08) ─────────
+
+describe('Donau flood with real game data (game 1b4eeca9, player 3d948c08)', () => {
+  const GAME_ID = '1b4eeca9-c4cd-449b-8c97-743bee28edda';
+  const PLAYER_ID = '3d948c08-acc2-46f1-a715-82d1d254aae1';
+
+  /**
+   * Real segment data from player_tracks. The segment (39,55)->(38,56)
+   * crosses the Donau river and should be removed. The other two segments
+   * do not cross the Donau and must survive.
+   */
+  const realSegments: TrackSegment[] = [
+    {
+      from: { x: 2895, y: 1875, col: 55, row: 39, terrain: TerrainType.Mountain },
+      to:   { x: 2920, y: 1830, col: 56, row: 38, terrain: TerrainType.MediumCity },
+      cost: 7,
+    },
+    {
+      from: { x: 920, y: 2280, col: 16, row: 48, terrain: TerrainType.MediumCity },
+      to:   { x: 945, y: 2235, col: 16, row: 47, terrain: TerrainType.Mountain },
+      cost: 1,
+    },
+    {
+      from: { x: 945, y: 2235, col: 16, row: 47, terrain: TerrainType.Mountain },
+      to:   { x: 995, y: 2235, col: 17, row: 47, terrain: TerrainType.Mountain },
+      cost: 1,
+    },
+  ];
+
+  it('removes the Donau-crossing segment (39,55)->(38,56) and preserves others', async () => {
+    const querySpy = jest.fn<() => Promise<any>>();
+    querySpy.mockResolvedValueOnce({
+      rows: [{
+        player_id: PLAYER_ID,
+        segments: JSON.stringify(realSegments),
+        total_cost: 9,
+      }],
+    });
+    querySpy.mockResolvedValue({ rows: [] });
+
+    const client = { query: querySpy } as unknown as PoolClient;
+    const result = await TrackService.removeSegmentsCrossingRiver(client, GAME_ID, 'Donau');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].playerId).toBe(PLAYER_ID);
+    expect(result[0].removedCount).toBe(1);
+    expect(result[0].newTotalCost).toBe(2); // 9 - 7
+
+    // Verify removedMileposts includes the crossing segment endpoints
+    expect(result[0].removedMileposts).toContain('39,55');
+    expect(result[0].removedMileposts).toContain('38,56');
+
+    // Verify the UPDATE wrote the correct remaining segments
+    const allCalls = querySpy.mock.calls as unknown as Array<[string, unknown[]]>;
+    const updateCall = allCalls.find(([sql]) => sql.includes('UPDATE player_tracks'));
+    expect(updateCall).toBeDefined();
+    const remaining = JSON.parse(updateCall![1][0] as string) as TrackSegment[];
+    expect(remaining).toHaveLength(2);
+
+    // The Donau crossing must be gone
+    const donauCrossing = remaining.find(
+      s => (s.from.row === 39 && s.from.col === 55 && s.to.row === 38 && s.to.col === 56) ||
+           (s.from.row === 38 && s.from.col === 56 && s.to.row === 39 && s.to.col === 55),
+    );
+    expect(donauCrossing).toBeUndefined();
+
+    // Non-crossing segments must survive
+    const safeSeg1 = remaining.find(
+      s => s.from.row === 48 && s.from.col === 16 && s.to.row === 47 && s.to.col === 16,
+    );
+    expect(safeSeg1).toBeDefined();
+  });
+
+  it('handles segments stored as parsed JSONB (not string)', async () => {
+    const querySpy = jest.fn<() => Promise<any>>();
+    querySpy.mockResolvedValueOnce({
+      rows: [{
+        player_id: PLAYER_ID,
+        segments: realSegments, // already parsed, not a string
+        total_cost: 9,
+      }],
+    });
+    querySpy.mockResolvedValue({ rows: [] });
+
+    const client = { query: querySpy } as unknown as PoolClient;
+    const result = await TrackService.removeSegmentsCrossingRiver(client, GAME_ID, 'Donau');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].removedCount).toBe(1);
+    expect(result[0].removedMileposts).toContain('39,55');
+    expect(result[0].removedMileposts).toContain('38,56');
+  });
+});

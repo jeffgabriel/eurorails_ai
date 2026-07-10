@@ -124,19 +124,17 @@ jest.mock('../../../shared/services/TrackNetworkService', () => ({
 // Mock DemandDeckService (used by WorldSnapshotService for demand resolution)
 jest.mock('../../services/demandDeckService', () => ({
   DemandDeckService: {
-    getInstance: jest.fn(() => ({
-      getCard: jest.fn((cardId: number) => {
-        if (cardId === 1) {
-          return {
-            id: 1,
-            demands: [
-              { city: 'Berlin', resource: 'Steel', payment: 50 },
-            ],
-          };
-        }
-        return undefined;
-      }),
-    })),
+    getCard: jest.fn((cardId: number) => {
+      if (cardId === 1) {
+        return {
+          id: 1,
+          demands: [
+            { city: 'Berlin', resource: 'Steel', payment: 50 },
+          ],
+        };
+      }
+      return undefined;
+    }),
   },
 }));
 

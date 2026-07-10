@@ -30,8 +30,8 @@ export class LoadDialogScene extends Scene {
     private uiManager!: UIManager;
     private turnActionManager: TurnActionManager | null = null;
     private loadService: LoadService;
-    private gameStateService: GameStateService;
-    private playerStateService: PlayerStateService;
+    private gameStateService!: GameStateService;
+    private playerStateService!: PlayerStateService;
     private dialogContainer!: Phaser.GameObjects.Container;
     private errorText: Phaser.GameObjects.Text | null = null;
 
@@ -412,14 +412,16 @@ export class LoadDialogScene extends Scene {
                 this.gameState.id
             );
 
-            if (!delivered) {
+            if (!delivered || ('restricted' in delivered)) {
                 // Best-effort compensation: re-pickup the load so the global pool doesn't drift
                 try {
                     await this.loadService.pickupLoad(load.type, this.city.name, this.gameState.id);
                 } catch {
                     // ignore
                 }
-                throw new Error('Failed to deliver load');
+                // Show the restriction reason (e.g. active Strike) or a generic failure message
+                const reason = delivered && 'reason' in delivered ? delivered.reason : 'Failed to deliver load';
+                throw new Error(reason);
             }
             
             // #region agent log
@@ -446,7 +448,7 @@ export class LoadDialogScene extends Scene {
             this.closeDialog();
         } catch (error) {
             console.error('Failed to deliver load:', error);
-            
+
             // Rollback state changes that may have occurred in PlayerStateService
             const localPlayer = this.playerStateService.getLocalPlayer();
             if (localPlayer) {
@@ -454,12 +456,13 @@ export class LoadDialogScene extends Scene {
                 localPlayer.trainState.loads = originalLoads;
                 localPlayer.money = originalMoney;
             }
-            
-            // Show error message to user
+
+            // Show the actual error message (e.g. Strike restriction) instead of a generic one
+            const errorMessage = error instanceof Error ? error.message : 'Failed to deliver load. Please try again.';
             const errorText = new Phaser.GameObjects.Text(
                 this,
                 0, 0,
-                'Failed to deliver load. Please try again.',
+                errorMessage,
                 {
                     color: '#ff0000',
                     fontSize: '16px'

@@ -62,6 +62,7 @@ const makeDrawnPayload = (cardId = 125): EventCardDrawnPayload => ({
   drawingPlayerName: 'Alice',
   affectedZone: ['r10c20'],
   affectedPlayerIds: ['player-2'],
+  affectedPlayerNames: ['Bob'],
   effectSummary: 'All trains within 3 mileposts of Berlin lose 1 turn and 1 load.',
   duration: 'immediate',
   timestamp: new Date().toISOString(),
@@ -82,6 +83,7 @@ const resetStore = () => {
   useGameStore.setState({
     activeEffects: [],
     pendingEventOverlay: null,
+    eventOverlayQueue: [],
     pendingVisualUpdates: [],
     eventCardCache: new Map(),
     gameState: null,
@@ -109,6 +111,10 @@ describe('Game Store — Event Management (FE-001)', () => {
 
     it('initializes pendingEventOverlay as null', () => {
       expect(useGameStore.getState().pendingEventOverlay).toBeNull();
+    });
+
+    it('initializes eventOverlayQueue as empty array', () => {
+      expect(useGameStore.getState().eventOverlayQueue).toEqual([]);
     });
 
     it('initializes pendingVisualUpdates as empty array', () => {
@@ -147,31 +153,62 @@ describe('Game Store — Event Management (FE-001)', () => {
       expect(useGameStore.getState().pendingEventOverlay).toBeNull();
     });
 
-    it('replaces an existing overlay (resets auto-dismiss timer)', () => {
+    it('queues a second overlay behind the first instead of overwriting it', () => {
+      const payload1 = makeDrawnPayload(125);
+      const payload2 = makeDrawnPayload(126);
+
+      act(() => {
+        useGameStore.getState().showEventOverlay(payload1);
+        useGameStore.getState().showEventOverlay(payload2);
+      });
+
+      // First card stays visible; second is queued (not swallowed).
+      expect(useGameStore.getState().pendingEventOverlay?.card.id).toBe(125);
+      expect(useGameStore.getState().eventOverlayQueue).toHaveLength(1);
+      expect(useGameStore.getState().eventOverlayQueue[0].card.id).toBe(126);
+    });
+
+    it('does NOT reset the current card\'s auto-dismiss timer when a second is queued', () => {
       const payload1 = makeDrawnPayload(125);
       const payload2 = makeDrawnPayload(126);
 
       act(() => {
         useGameStore.getState().showEventOverlay(payload1);
       });
-      // Advance 15s — should NOT dismiss yet
+      // Advance 15s, then queue a second card.
       act(() => {
         jest.advanceTimersByTime(15_000);
+        useGameStore.getState().showEventOverlay(payload2);
       });
       expect(useGameStore.getState().pendingEventOverlay?.card.id).toBe(125);
 
-      // Show a second overlay — timer should reset
-      act(() => {
-        useGameStore.getState().showEventOverlay(payload2);
-      });
-      expect(useGameStore.getState().pendingEventOverlay?.card.id).toBe(126);
-
-      // Advance another 15s (total 30s from first show, 15s from second show)
+      // Advance another 15s → 30s total from the first show. The first card's
+      // timer fires (it was NOT reset), auto-dismissing it and promoting the queued card.
       act(() => {
         jest.advanceTimersByTime(15_000);
       });
-      // Overlay should still be visible (30s from second show not elapsed)
-      expect(useGameStore.getState().pendingEventOverlay).not.toBeNull();
+      expect(useGameStore.getState().pendingEventOverlay?.card.id).toBe(126);
+      expect(useGameStore.getState().eventOverlayQueue).toHaveLength(0);
+    });
+
+    it('adds a persistent card to activeEffects immediately even while queued behind another', () => {
+      const immediate = makeDrawnPayload(124); // duration: 'immediate' by default
+      const persistent: EventCardDrawnPayload = {
+        ...makeDrawnPayload(130),
+        card: { ...makeDrawnPayload(130).card, id: 130, type: EventCardType.Snow },
+        duration: 'persistent',
+      };
+
+      act(() => {
+        useGameStore.getState().showEventOverlay(immediate);
+        useGameStore.getState().showEventOverlay(persistent);
+      });
+
+      // Persistent card is still queued for its popup...
+      expect(useGameStore.getState().pendingEventOverlay?.card.id).toBe(124);
+      expect(useGameStore.getState().eventOverlayQueue[0].card.id).toBe(130);
+      // ...but its effect is already reflected in the HUD-driving activeEffects.
+      expect(useGameStore.getState().activeEffects.some(e => e.cardId === 130)).toBe(true);
     });
   });
 
@@ -210,6 +247,62 @@ describe('Game Store — Event Management (FE-001)', () => {
         useGameStore.getState().dismissEventOverlay();
       });
       expect(useGameStore.getState().pendingVisualUpdates).toHaveLength(0);
+    });
+
+    it('promotes the next queued overlay on dismiss, then clears on the final dismiss', () => {
+      const payload1 = makeDrawnPayload(125);
+      const payload2 = makeDrawnPayload(126);
+
+      act(() => {
+        useGameStore.getState().showEventOverlay(payload1);
+        useGameStore.getState().showEventOverlay(payload2);
+      });
+
+      // Dismiss first → second is promoted.
+      act(() => {
+        useGameStore.getState().dismissEventOverlay();
+      });
+      expect(useGameStore.getState().pendingEventOverlay?.card.id).toBe(126);
+      expect(useGameStore.getState().eventOverlayQueue).toHaveLength(0);
+
+      // Dismiss second → nothing left.
+      act(() => {
+        useGameStore.getState().dismissEventOverlay();
+      });
+      expect(useGameStore.getState().pendingEventOverlay).toBeNull();
+    });
+
+    it('does not flush queued visual updates until the last overlay is dismissed', () => {
+      useGameStore.setState({ gameState: makeGameState() });
+
+      const payload1 = makeDrawnPayload(125);
+      const payload2 = makeDrawnPayload(126);
+      act(() => {
+        useGameStore.getState().showEventOverlay(payload1);
+        useGameStore.getState().showEventOverlay(payload2);
+      });
+
+      // Queue a visual update while overlays are showing.
+      act(() => {
+        useGameStore.getState().enqueueVisualUpdate({
+          kind: 'generic_patch',
+          patch: { currentTurnUserId: 'u2' },
+        });
+      });
+
+      // Dismiss the first — an overlay is still active, so updates must remain queued.
+      act(() => {
+        useGameStore.getState().dismissEventOverlay();
+      });
+      expect(useGameStore.getState().pendingVisualUpdates).toHaveLength(1);
+      expect(useGameStore.getState().gameState?.currentTurnUserId).toBe('u1');
+
+      // Dismiss the last — now updates flush and apply.
+      act(() => {
+        useGameStore.getState().dismissEventOverlay();
+      });
+      expect(useGameStore.getState().pendingVisualUpdates).toHaveLength(0);
+      expect(useGameStore.getState().gameState?.currentTurnUserId).toBe('u2');
     });
 
     it('cancels the auto-dismiss timer on manual dismiss', () => {

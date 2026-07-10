@@ -6,6 +6,10 @@ import { TrainInteractionManager } from "./TrainInteractionManager";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { TrackDrawingManager } from "./TrackDrawingManager";
 import { CameraController } from "./CameraController";
+import { useGameStore } from "../lobby/store/game.store";
+import { EventCardType, ActiveEffectSummary } from "../../shared/types/EventCard";
+import { authenticatedFetch } from "../services/authenticatedFetch";
+import { config } from "../config/apiConfig";
 
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
@@ -29,6 +33,7 @@ export class PlayerHandDisplay {
   private currentContainer: Phaser.GameObjects.Container | null = null;
   private lastDrawingMode: boolean = false;
   private lastTrackCost: number = 0;
+  private unsubActiveEffects: (() => void) | null = null;
 
   constructor(
     scene: Phaser.Scene,
@@ -85,9 +90,31 @@ export class PlayerHandDisplay {
     // Clear target container
     targetContainer.removeAll(true);
 
+    // Clean up previous active effects subscription
+    if (this.unsubActiveEffects) {
+      this.unsubActiveEffects();
+      this.unsubActiveEffects = null;
+    }
+
     // Always show status bar when collapsed
     if (this.isCollapsed) {
       this.createStatusBar(targetContainer);
+
+      // Fetch active effects from server to handle page refresh timing
+      this.fetchActiveEffects();
+
+      // Subscribe to active effects changes so the status bar updates reactively
+      let prevEffectsLength = useGameStore.getState().activeEffects.length;
+      this.unsubActiveEffects = useGameStore.subscribe((state) => {
+        if (state.activeEffects.length !== prevEffectsLength) {
+          prevEffectsLength = state.activeEffects.length;
+          if (this.isCollapsed && this.currentContainer) {
+            this.currentContainer.removeAll(true);
+            this.createStatusBar(this.currentContainer);
+          }
+        }
+      });
+
       // Update the scene if it's running (shouldn't be, but just in case)
       const playerHandScene = this.scene.scene.get("PlayerHandScene");
       if (playerHandScene && playerHandScene.scene.isActive()) {
@@ -216,6 +243,36 @@ export class PlayerHandDisplay {
 
     statusBar.add(statusText);
 
+    // Show active event effects indicator when effects are active
+    const activeEffects = useGameStore.getState().activeEffects;
+    if (activeEffects.length > 0) {
+      const icons: Record<string, string> = {
+        [EventCardType.Strike]: '\u26d4',
+        [EventCardType.Derailment]: '\u26a0\ufe0f',
+        [EventCardType.Snow]: '\u2744\ufe0f',
+        [EventCardType.Flood]: '\u{1F30A}',
+        [EventCardType.ExcessProfitTax]: '\u{1F4B0}',
+      };
+      const effectLabels = activeEffects.map(e => {
+        const icon = icons[e.cardType] ?? '\u{1F4CB}';
+        return `${icon} ${e.cardType}`;
+      });
+      const effectText = this.scene.add
+        .text(
+          statusText.x + statusText.width + 20,
+          this.STATUS_BAR_HEIGHT / 2,
+          effectLabels.join('  '),
+          {
+            color: '#ffdd88',
+            fontSize: '14px',
+            fontStyle: 'bold',
+            fontFamily: UI_FONT_FAMILY,
+          }
+        )
+        .setOrigin(0, 0.5);
+      statusBar.add(effectText);
+    }
+
     // Add mini train icon
     if (currentPlayer.trainType) {
       const trainType = currentPlayer.trainType
@@ -312,6 +369,23 @@ export class PlayerHandDisplay {
     }
     if (this.container) {
       this.container.destroy();
+    }
+  }
+
+  private async fetchActiveEffects(): Promise<void> {
+    const gameId = this.gameState?.id;
+    if (!gameId) return;
+    try {
+      const response = await authenticatedFetch(
+        `${config.apiBaseUrl}/api/game/${gameId}/active-effects`,
+      );
+      if (!response.ok) return;
+      const data = await response.json();
+      if (Array.isArray(data.activeEffects)) {
+        useGameStore.getState().setActiveEffects(data.activeEffects as ActiveEffectSummary[]);
+      }
+    } catch {
+      // Non-fatal: effects will arrive via socket state:init
     }
   }
 }

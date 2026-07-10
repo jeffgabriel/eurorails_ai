@@ -452,7 +452,7 @@ export class PlayerStateService {
         loadType: LoadType,
         cardId: number,
         gameId: string
-    ): Promise<{ payment: number; newCardId: number } | null> {
+    ): Promise<{ payment: number; newCardId: number } | { restricted: true; reason: string } | null> {
         if (!this.localPlayer || !this.localPlayerId) {
             console.error('Cannot deliver load: no local player');
             return null;
@@ -479,7 +479,12 @@ export class PlayerStateService {
                 return null;
             }
 
-            const result: { payment: number; updatedMoney: number; updatedLoads: LoadType[]; newCard: DemandCard } = await response.json();
+            const result = await response.json();
+
+            // Handle game-state restrictions (e.g. active Strike blocking delivery)
+            if (result.restricted) {
+                return { restricted: true, reason: result.reason || 'Action restricted by active event' };
+            }
             if (
                 !result?.newCard ||
                 typeof result.payment !== 'number' ||

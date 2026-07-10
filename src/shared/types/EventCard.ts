@@ -242,6 +242,7 @@ export interface EventCardDrawnPayload {
   drawingPlayerName: string;
   affectedZone: string[];
   affectedPlayerIds: string[];
+  affectedPlayerNames: string[];
   effectSummary: string;
   duration: 'immediate' | 'persistent';
   timestamp: string;
@@ -305,7 +306,7 @@ export interface EventCardResult {
   affectedZone: string[];
   perPlayerEffects: PerPlayerEffect[];
   /** Non-empty only for Flood events */
-  floodSegmentsRemoved: Array<{ playerId: string; removedCount: number }>;
+  floodSegmentsRemoved: Array<{ playerId: string; removedCount: number; removedMileposts: string[] }>;
   /** Present for all event types that produce persistent effects */
   persistentEffectDescriptor?: ActiveEffectDescriptor;
   /** Flood only — river name for addActiveEffect persistence */

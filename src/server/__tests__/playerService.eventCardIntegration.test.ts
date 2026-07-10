@@ -10,8 +10,10 @@
  */
 
 import { PlayerService } from '../services/playerService';
-import { demandDeckService } from '../services/demandDeckService';
+// DemandDeckService is mocked below; alias the shared mock instance the factory exposes.
+const demandDeckService = jest.requireMock('../services/demandDeckService').demandDeckService as Record<string, jest.Mock>;
 import { EventCardService } from '../services/EventCardService';
+import { emitToGame } from '../services/socketService';
 
 // Mock socketService to prevent real socket emissions
 jest.mock('../services/socketService', () => ({
@@ -20,7 +22,10 @@ jest.mock('../services/socketService', () => ({
   emitEventCardDrawn: jest.fn(),
   emitEventEffectApplied: jest.fn(),
   emitEventEffectExpired: jest.fn(),
+  emitToGame: jest.fn(),
 }));
+
+const mockEmitToGame = emitToGame as jest.Mock;
 
 // Mock the database module
 jest.mock('../db/index', () => {
@@ -39,17 +44,29 @@ jest.mock('../db/index', () => {
 });
 
 // Mock DemandDeckService
-jest.mock('../services/demandDeckService', () => ({
-  demandDeckService: {
+jest.mock('../services/demandDeckService', () => {
+  // getCard is a static definitional accessor; share one fn so tests that
+  // configure it (via the instance alias) also drive the static call.
+  const getCard = jest.fn();
+  const instance = {
     discardCard: jest.fn(),
     discardEventCard: jest.fn(),
     drawCard: jest.fn(),
-    getCard: jest.fn(),
+    getCard,
     returnDealtCardToTop: jest.fn(),
     returnDiscardedCardToDealt: jest.fn(),
     returnDiscardedEventCardToDrawPile: jest.fn(),
-  },
-}));
+  };
+  return {
+    demandDeckService: instance,
+    DemandDeckService: {
+      getCard,
+      getInstanceForGame: jest.fn(() => instance),
+      destroyInstance: jest.fn(),
+      destroyAllInstances: jest.fn(),
+    },
+  };
+});
 
 // Mock EventCardService — prevents real DB calls during event card processing
 jest.mock('../services/EventCardService', () => ({
@@ -328,5 +345,53 @@ describe('PlayerService.deliverLoadForUser × EventCardService (BE-005)', () => 
     await expect(
       PlayerService.deliverLoadForUser(gameId, userId, city, resource as any, cardId),
     ).rejects.toThrow('Failed to draw new card');
+  });
+
+  it('emits track:updated for each player whose segments were removed by a flood event', async () => {
+    // Flood event removes track from two players — post-COMMIT flush must notify
+    // both so their in-memory track state re-syncs with the DB (prevents stale
+    // saveTrackState from resurrecting the removed segments).
+    (EventCardService.processEventCard as jest.Mock).mockResolvedValueOnce({
+      cardId: 140,
+      cardType: 'Flood',
+      drawingPlayerId: playerId,
+      affectedZone: [],
+      perPlayerEffects: [],
+      floodedRiver: 'Donau',
+      floodSegmentsRemoved: [
+        { playerId: 'player-A', removedCount: 2, removedMileposts: ['10,5', '10,6'] },
+        { playerId: 'player-B', removedCount: 1, removedMileposts: ['12,3'] },
+      ],
+    });
+
+    (demandDeckService.drawCard as jest.Mock)
+      .mockReturnValueOnce(makeEventCard(140))
+      .mockReturnValueOnce(makeDemandCard(99));
+
+    await PlayerService.deliverLoadForUser(gameId, userId, city, resource as any, cardId);
+
+    const trackUpdates = mockEmitToGame.mock.calls.filter(([, event]) => event === 'track:updated');
+    expect(trackUpdates).toHaveLength(2);
+    expect(mockEmitToGame).toHaveBeenCalledWith(
+      gameId,
+      'track:updated',
+      expect.objectContaining({ gameId, playerId: 'player-A' }),
+    );
+    expect(mockEmitToGame).toHaveBeenCalledWith(
+      gameId,
+      'track:updated',
+      expect.objectContaining({ gameId, playerId: 'player-B' }),
+    );
+  });
+
+  it('does not emit track:updated when no flood segments were removed', async () => {
+    (demandDeckService.drawCard as jest.Mock)
+      .mockReturnValueOnce(makeEventCard(121))
+      .mockReturnValueOnce(makeDemandCard(99));
+
+    await PlayerService.deliverLoadForUser(gameId, userId, city, resource as any, cardId);
+
+    const trackUpdates = mockEmitToGame.mock.calls.filter(([, event]) => event === 'track:updated');
+    expect(trackUpdates).toHaveLength(0);
   });
 });

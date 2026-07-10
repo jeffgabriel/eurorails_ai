@@ -17,14 +17,31 @@ function eventDrawKey(eventCardId: number): number {
   return -eventCardId;
 }
 
+/**
+ * Per-game demand/event deck.
+ *
+ * Card definitions (demand + event cards and their lookup maps) are immutable
+ * configuration loaded once from disk and shared across all games via static
+ * fields. The mutable deck state — draw pile, discard pile, and dealt set — is
+ * isolated per game: each game gets its own instance via
+ * {@link DemandDeckService.getInstanceForGame}. This prevents one game's draws
+ * and discards from corrupting another game's deck.
+ */
 export class DemandDeckService {
-  private static instance: DemandDeckService;
-  private demandCards: DemandCard[] = [];
-  private eventCards: EventCard[] = [];
+  // ---- Shared, immutable card configuration (loaded once from disk) ----
+  private static demandCards: DemandCard[] = [];
+  private static eventCards: EventCard[] = [];
   /** Lookup by real (positive) ID for demand cards */
-  private demandCardMap: Map<number, DemandCard> = new Map();
+  private static demandCardMap: Map<number, DemandCard> = new Map();
   /** Lookup by real (positive) ID for event cards */
-  private eventCardMap: Map<number, EventCard> = new Map();
+  private static eventCardMap: Map<number, EventCard> = new Map();
+  private static configLoaded = false;
+
+  // ---- Per-game instance registry ----
+  private static instances: Map<string, DemandDeckService> = new Map();
+
+  // ---- Per-game mutable deck state ----
+  private readonly gameId: string;
   /** Draw pile entries: positive = demand card ID, negative = -(event card ID) */
   private drawPile: number[] = [];
   /** Discard pile entries: same encoding as drawPile */
@@ -32,33 +49,59 @@ export class DemandDeckService {
   /** Dealt entries: same encoding as drawPile (negative for event cards) */
   private dealtCards: Set<number> = new Set();
 
-  private constructor() {
-    this.loadCards();
+  private constructor(gameId: string) {
+    this.gameId = gameId;
+    DemandDeckService.ensureConfigLoaded();
+    this.initializeDeck();
   }
 
   /**
-   * For testing only: destroy the singleton so the next getInstance() creates a fresh one.
-   * Do NOT call this in production code.
+   * Get (or lazily create) the demand deck for a specific game. Each game owns
+   * an isolated draw/discard/dealt state; the card definitions are shared.
    */
-  public static destroyInstanceForTesting(): void {
-    DemandDeckService.instance = undefined as unknown as DemandDeckService;
-  }
-
-  public static getInstance(): DemandDeckService {
-    if (!DemandDeckService.instance) {
-      DemandDeckService.instance = new DemandDeckService();
+  public static getInstanceForGame(gameId: string): DemandDeckService {
+    if (!gameId || typeof gameId !== 'string') {
+      throw new Error('DemandDeckService.getInstanceForGame requires a non-empty gameId');
     }
-    return DemandDeckService.instance;
+    let instance = DemandDeckService.instances.get(gameId);
+    if (!instance) {
+      instance = new DemandDeckService(gameId);
+      DemandDeckService.instances.set(gameId, instance);
+    }
+    return instance;
   }
 
-  private loadCards(): void {
+  /**
+   * Remove a game's deck from the registry. Call at game end to release the
+   * in-memory deck state. Idempotent — destroying an unknown game is a no-op.
+   */
+  public static destroyInstance(gameId: string): void {
+    DemandDeckService.instances.delete(gameId);
+  }
+
+  /**
+   * Remove every game's deck from the registry. Testing only — lets a test
+   * suite start from a clean slate between cases.
+   */
+  public static destroyAllInstances(): void {
+    DemandDeckService.instances.clear();
+  }
+
+  /**
+   * Load the immutable card definitions from disk exactly once. Subsequent
+   * calls are no-ops. Shared across all per-game instances.
+   */
+  private static ensureConfigLoaded(): void {
+    if (DemandDeckService.configLoaded) {
+      return;
+    }
     try {
       // Load demand cards
       const demandConfigPath = path.resolve(__dirname, '../../../configuration/demand_cards.json');
       const demandRawData = fs.readFileSync(demandConfigPath, 'utf8');
       const demandJsonData = JSON.parse(demandRawData);
 
-      this.demandCards = demandJsonData.DemandCards.map((card: RawDemandCard): DemandCard => ({
+      const demandCards: DemandCard[] = demandJsonData.DemandCards.map((card: RawDemandCard): DemandCard => ({
         id: card.id,
         demands: card.demands.map(demand => ({
           city: demand.city,
@@ -68,7 +111,7 @@ export class DemandDeckService {
       }));
 
       // Validate that each demand card has exactly 3 demands
-      const invalidCards = this.demandCards.filter(card => card.demands.length !== 3);
+      const invalidCards = demandCards.filter(card => card.demands.length !== 3);
       if (invalidCards.length > 0) {
         throw new Error(`Found cards with incorrect number of demands: ${invalidCards.map(c => c.id).join(', ')}`);
       }
@@ -78,7 +121,7 @@ export class DemandDeckService {
       const eventRawData = fs.readFileSync(eventConfigPath, 'utf8');
       const rawEventCards: RawEventCard[] = JSON.parse(eventRawData);
 
-      this.eventCards = rawEventCards.map((card: RawEventCard): EventCard => ({
+      const eventCards: EventCard[] = rawEventCards.map((card: RawEventCard): EventCard => ({
         id: card.id,
         type: card.type,
         title: card.title,
@@ -87,19 +130,30 @@ export class DemandDeckService {
       }));
 
       // Build lookup maps (separate, no ID collision)
-      this.demandCardMap = new Map(this.demandCards.map(c => [c.id, c]));
-      this.eventCardMap = new Map(this.eventCards.map(c => [c.id, c]));
-
-      // Initialize unified draw pile: positive IDs for demand, negative for event
-      this.drawPile = [
-        ...this.demandCards.map(c => c.id),
-        ...this.eventCards.map(c => eventDrawKey(c.id)),
-      ];
-      this.shuffleDrawPile();
+      DemandDeckService.demandCards = demandCards;
+      DemandDeckService.eventCards = eventCards;
+      DemandDeckService.demandCardMap = new Map(demandCards.map(c => [c.id, c]));
+      DemandDeckService.eventCardMap = new Map(eventCards.map(c => [c.id, c]));
+      DemandDeckService.configLoaded = true;
     } catch (error) {
       console.error('Failed to load cards:', error);
       throw error;
     }
+  }
+
+  /**
+   * Build a fresh, shuffled draw pile for this game from the shared card
+   * definitions and clear the discard/dealt state.
+   */
+  private initializeDeck(): void {
+    // Initialize unified draw pile: positive IDs for demand, negative for event
+    this.drawPile = [
+      ...DemandDeckService.demandCards.map(c => c.id),
+      ...DemandDeckService.eventCards.map(c => eventDrawKey(c.id)),
+    ];
+    this.discardPile = [];
+    this.dealtCards = new Set();
+    this.shuffleDrawPile();
   }
 
   private shuffleDrawPile(): void {
@@ -113,11 +167,11 @@ export class DemandDeckService {
   /** Convert an internal draw-pile key to a CardDrawResult, or null if not found. */
   private resolveDrawKey(drawKey: number): CardDrawResult | null {
     if (drawKey > 0) {
-      const card = this.demandCardMap.get(drawKey);
+      const card = DemandDeckService.demandCardMap.get(drawKey);
       return card ? { type: 'demand', card } : null;
     } else {
       const realId = -drawKey;
-      const card = this.eventCardMap.get(realId);
+      const card = DemandDeckService.eventCardMap.get(realId);
       return card ? { type: 'event', card } : null;
     }
   }
@@ -139,15 +193,6 @@ export class DemandDeckService {
   }
 
   /**
-   * Ensure a card is marked as dealt in the in-memory deck state.
-   *
-   * This is used to reconcile deck state after a server restart: players' hands are persisted
-   * in Postgres, but the deck's dealtCards/drawPile/discardPile are currently in-memory only.
-   *
-   * If the card is found in the draw pile or discard pile, it is removed from that pile to
-   * prevent duplicates, then added to dealtCards.
-   */
-  /**
    * Ensure a demand card is marked as dealt in the in-memory deck state.
    *
    * This is used to reconcile deck state after a server restart: players' hands are persisted
@@ -156,7 +201,7 @@ export class DemandDeckService {
    * Only applicable to demand cards (player hands never contain event cards).
    */
   public ensureCardIsDealt(cardId: number): boolean {
-    if (!this.demandCardMap.has(cardId)) {
+    if (!DemandDeckService.demandCardMap.has(cardId)) {
       return false;
     }
     const drawKey = cardId; // Demand cards: drawKey === cardId (positive)
@@ -182,7 +227,7 @@ export class DemandDeckService {
    */
   public discardCard(cardId: number): void {
     const drawKey = cardId; // Demand cards use positive IDs as draw keys
-    if (!this.demandCardMap.has(cardId)) {
+    if (!DemandDeckService.demandCardMap.has(cardId)) {
       throw new Error(`Invalid card ID: ${cardId}`);
     }
     if (!this.dealtCards.has(drawKey)) {
@@ -203,7 +248,7 @@ export class DemandDeckService {
    */
   public discardEventCard(eventCardId: number): void {
     const drawKey = eventDrawKey(eventCardId);
-    if (!this.eventCardMap.has(eventCardId)) {
+    if (!DemandDeckService.eventCardMap.has(eventCardId)) {
       throw new Error(`Invalid event card ID: ${eventCardId}`);
     }
     if (!this.dealtCards.has(drawKey)) {
@@ -219,7 +264,7 @@ export class DemandDeckService {
    * Only applicable to demand cards.
    */
   public returnDealtCardToTop(cardId: number): boolean {
-    if (!this.demandCardMap.has(cardId)) {
+    if (!DemandDeckService.demandCardMap.has(cardId)) {
       return false;
     }
     const drawKey = cardId; // demand card: positive key
@@ -237,7 +282,7 @@ export class DemandDeckService {
    * Only applicable to demand cards.
    */
   public returnDiscardedCardToDealt(cardId: number): boolean {
-    if (!this.demandCardMap.has(cardId)) {
+    if (!DemandDeckService.demandCardMap.has(cardId)) {
       return false;
     }
     const drawKey = cardId; // demand card: positive key
@@ -255,7 +300,7 @@ export class DemandDeckService {
    * Used for rollback compensation when a transaction fails after event cards were discarded.
    */
   public returnDiscardedEventCardToDrawPile(eventCardId: number): boolean {
-    if (!this.eventCardMap.has(eventCardId)) {
+    if (!DemandDeckService.eventCardMap.has(eventCardId)) {
       return false;
     }
     const drawKey = eventDrawKey(eventCardId);
@@ -268,24 +313,32 @@ export class DemandDeckService {
     return true;
   }
 
-  /** Returns all demand cards (legacy accessor). */
-  public getAllCards(): DemandCard[] {
-    return [...this.demandCards];
+  // ---- Definitional accessors (card-level data, shared; not per-game state) ----
+  // These describe "what is printed on a card" and never touch a game's deck,
+  // so they are static: callers that only need card definitions (e.g. the
+  // definitional deck routes) must NOT construct a per-game instance.
+
+  /** Returns all demand card definitions. */
+  public static getAllCards(): DemandCard[] {
+    DemandDeckService.ensureConfigLoaded();
+    return [...DemandDeckService.demandCards];
   }
 
-  /** Returns a demand card by ID, or undefined if not found. */
-  public getCard(cardId: number): DemandCard | undefined {
-    return this.demandCardMap.get(cardId);
+  /** Returns a demand card definition by ID, or undefined if not found. */
+  public static getCard(cardId: number): DemandCard | undefined {
+    DemandDeckService.ensureConfigLoaded();
+    return DemandDeckService.demandCardMap.get(cardId);
   }
 
   /** Returns all event card definitions. */
-  public getAllEventCards(): EventCard[] {
-    return [...this.eventCards];
+  public static getAllEventCards(): EventCard[] {
+    DemandDeckService.ensureConfigLoaded();
+    return [...DemandDeckService.eventCards];
   }
 
   /** Total number of unique cards in the unified pool (demand + event). */
   get totalCardCount(): number {
-    return this.demandCards.length + this.eventCards.length;
+    return DemandDeckService.demandCards.length + DemandDeckService.eventCards.length;
   }
 
   // For debugging/testing purposes
@@ -296,7 +349,7 @@ export class DemandDeckService {
     dealtCardsCount: number
   } {
     return {
-      totalCards: this.demandCards.length + this.eventCards.length,
+      totalCards: DemandDeckService.demandCards.length + DemandDeckService.eventCards.length,
       drawPileSize: this.drawPile.length,
       discardPileSize: this.discardPile.length,
       dealtCardsCount: this.dealtCards.size
@@ -310,7 +363,7 @@ export class DemandDeckService {
    * Debug/testing only.
    */
   public pushEventCardToTop(eventCardId: number): void {
-    const card = this.eventCardMap.get(eventCardId);
+    const card = DemandDeckService.eventCardMap.get(eventCardId);
     if (!card) {
       throw new Error(`Event card ${eventCardId} not found`);
     }
@@ -333,21 +386,28 @@ export class DemandDeckService {
   }
 
   /**
-   * Reset the deck state (for testing)
-   * Returns all dealt cards back to the draw pile and resets state
+   * Reshuffle the draw pile and discard pile together, preserving dealt cards
+   * (cards currently in player hands). Use when the deck appears corrupted
+   * (e.g. too many event cards in sequence).
+   */
+  public reshuffle(): { drawPileSize: number; discardPileSize: number; dealtCardsCount: number } {
+    // Merge discard pile back into draw pile
+    this.drawPile.push(...this.discardPile);
+    this.discardPile = [];
+    this.shuffleDrawPile();
+    return {
+      drawPileSize: this.drawPile.length,
+      discardPileSize: 0,
+      dealtCardsCount: this.dealtCards.size,
+    };
+  }
+
+  /**
+   * Reset this game's deck state (for testing).
+   * Rebuilds a fresh, shuffled draw pile from the shared card definitions and
+   * clears the discard/dealt state.
    */
   public reset(): void {
-    this.loadCards(); // Reload cards from JSON configuration to ensure fresh state
-    this.dealtCards.clear();
-    this.discardPile = [];
-    // Reinitialize draw pile with all card IDs (demand + event)
-    this.drawPile = [
-      ...this.demandCards.map(c => c.id),
-      ...this.eventCards.map(c => eventDrawKey(c.id)),
-    ];
-    this.shuffleDrawPile();
+    this.initializeDeck();
   }
 }
-
-// Export a singleton instance
-export const demandDeckService = DemandDeckService.getInstance();

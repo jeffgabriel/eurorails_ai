@@ -1,25 +1,11 @@
 import { db } from '../db/index';
 import { PlayerTrackState, TrackSegment } from '../../shared/types/GameTypes';
 import { PoolClient } from 'pg';
-import riversData from '../../../configuration/rivers.json';
-
-/**
- * Shape of an entry in configuration/rivers.json
- */
-interface RiverEdgeData {
-  Start: { Row: number; Col: number };
-  End: { Row: number; Col: number };
-}
-
-interface RiverData {
-  Name: string;
-  Edges: RiverEdgeData[];
-}
+import { getRiverEdgeKeysByName } from '../../shared/config/waterCrossings';
 
 /**
  * Build a canonical edge key "r1,c1|r2,c2" with the numerically smaller
- * coordinate first (by row, then col). Using numeric comparison avoids
- * lexicographic issues (e.g. "10,0" < "2,0" in string comparison).
+ * coordinate first (by row, then col).
  */
 function canonicalEdgeKey(r1: number, c1: number, r2: number, c2: number): string {
   const aFirst = r1 < r2 || (r1 === r2 && c1 <= c2);
@@ -27,25 +13,12 @@ function canonicalEdgeKey(r1: number, c1: number, r2: number, c2: number): strin
 }
 
 /**
- * Build a set of canonical edge keys for all edges belonging to the named river.
+ * Return the set of all river crossing edge keys for the named river,
+ * using the complete attribution data from waterCrossings.json.
  * Returns null if the river is not found.
- *
- * Note: rivers.json stores End coordinates with Row/Col transposed relative to
- * the hex grid coordinate system. We swap them here to get correct adjacency.
  */
 export function getRiverEdgeKeys(riverName: string): Set<string> | null {
-  const rivers = riversData as RiverData[];
-  const river = rivers.find(r => r.Name === riverName);
-  if (!river) return null;
-
-  const keys = new Set<string>();
-  for (const edge of river.Edges) {
-    // End coords are transposed in rivers.json — swap Row/Col
-    const endRow = edge.End.Col;
-    const endCol = edge.End.Row;
-    keys.add(canonicalEdgeKey(edge.Start.Row, edge.Start.Col, endRow, endCol));
-  }
-  return keys;
+  return getRiverEdgeKeysByName(riverName);
 }
 
 /**
@@ -240,7 +213,7 @@ export class TrackService {
         client: PoolClient,
         gameId: string,
         riverName: string
-    ): Promise<Array<{ playerId: string; removedCount: number; newTotalCost: number }>> {
+    ): Promise<Array<{ playerId: string; removedCount: number; newTotalCost: number; removedMileposts: string[] }>> {
         // Resolve river edge keys; throw if unknown
         const riverEdgeKeys = getRiverEdgeKeys(riverName);
         if (!riverEdgeKeys) {
@@ -256,7 +229,7 @@ export class TrackService {
             [gameId]
         );
 
-        const results: Array<{ playerId: string; removedCount: number; newTotalCost: number }> = [];
+        const results: Array<{ playerId: string; removedCount: number; newTotalCost: number; removedMileposts: string[] }> = [];
 
         for (const row of lockedRows.rows) {
             const playerId: string = row.player_id;
@@ -265,13 +238,22 @@ export class TrackService {
                 : (row.segments || []) as TrackSegment[];
 
             const segments = rawSegments as TrackSegment[];
+            const removed = segments.filter(seg => segmentCrossesRiver(seg, riverEdgeKeys));
             const remaining = segments.filter(seg => !segmentCrossesRiver(seg, riverEdgeKeys));
-            const removedCount = segments.length - remaining.length;
+            const removedCount = removed.length;
 
             if (removedCount === 0) {
                 // No segments to remove — skip update
                 continue;
             }
+
+            // Collect unique milepost keys from removed segments for map highlighting
+            const milespostSet = new Set<string>();
+            for (const seg of removed) {
+                milespostSet.add(`${seg.from.row},${seg.from.col}`);
+                milespostSet.add(`${seg.to.row},${seg.to.col}`);
+            }
+            const removedMileposts = Array.from(milespostSet);
 
             const newTotalCost = remaining.reduce((sum, seg) => sum + seg.cost, 0);
 
@@ -290,7 +272,7 @@ export class TrackService {
                 [JSON.stringify(remaining), newTotalCost, JSON.stringify(removedSegments), gameId, playerId]
             );
 
-            results.push({ playerId, removedCount, newTotalCost });
+            results.push({ playerId, removedCount, newTotalCost, removedMileposts });
         }
 
         return results;

@@ -451,8 +451,8 @@ describe('EventCardService: Flood', () => {
     mockDb.connect.mockResolvedValue(client);
 
     mockTrack.removeSegmentsCrossingRiver.mockResolvedValue([
-      { playerId: DRAWING_PLAYER, removedCount: 2, newTotalCost: 8 },
-      { playerId: OTHER_PLAYER, removedCount: 1, newTotalCost: 3 },
+      { playerId: DRAWING_PLAYER, removedCount: 2, newTotalCost: 8, removedMileposts: ['10,5', '10,6', '11,5'] },
+      { playerId: OTHER_PLAYER, removedCount: 1, newTotalCost: 3, removedMileposts: ['12,7', '12,8'] },
     ]);
 
     (client.query as jest.Mock).mockImplementation(async (sql: unknown) => {
@@ -501,8 +501,8 @@ describe('EventCardService: Flood', () => {
     const mockEmit = emitToGame as jest.Mock;
 
     mockTrack.removeSegmentsCrossingRiver.mockResolvedValue([
-      { playerId: DRAWING_PLAYER, removedCount: 2, newTotalCost: 8 },
-      { playerId: OTHER_PLAYER, removedCount: 1, newTotalCost: 3 },
+      { playerId: DRAWING_PLAYER, removedCount: 2, newTotalCost: 8, removedMileposts: ['10,5', '10,6'] },
+      { playerId: OTHER_PLAYER, removedCount: 1, newTotalCost: 3, removedMileposts: ['12,7'] },
     ]);
 
     (client.query as jest.Mock).mockImplementation(async (sql: unknown) => {
@@ -557,7 +557,7 @@ describe('EventCardService: Flood', () => {
     const mockEmit = emitToGame as jest.Mock;
 
     mockTrack.removeSegmentsCrossingRiver.mockResolvedValue([
-      { playerId: DRAWING_PLAYER, removedCount: 1, newTotalCost: 0 },
+      { playerId: DRAWING_PLAYER, removedCount: 1, newTotalCost: 0, removedMileposts: ['10,5'] },
     ]);
 
     (client.query as jest.Mock).mockImplementation(async (sql: unknown) => {

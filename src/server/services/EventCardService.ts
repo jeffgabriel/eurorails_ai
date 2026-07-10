@@ -414,7 +414,16 @@ export class EventCardService {
     const floodSegmentsRemoved = removalResults.map(r => ({
       playerId: r.playerId,
       removedCount: r.removedCount,
+      removedMileposts: r.removedMileposts,
     }));
+
+    // Flatten all removed mileposts into affectedZone for map highlighting
+    const allRemovedMileposts = new Set<string>();
+    for (const r of removalResults) {
+      for (const mp of r.removedMileposts) {
+        allRemovedMileposts.add(mp);
+      }
+    }
 
     const descriptor: ActiveEffectDescriptor = await buildDescriptor(
       card, drawingPlayerId, gameId, client, [],
@@ -424,7 +433,7 @@ export class EventCardService {
       cardId: card.id,
       cardType: card.type,
       drawingPlayerId,
-      affectedZone: [],
+      affectedZone: Array.from(allRemovedMileposts),
       perPlayerEffects,
       floodSegmentsRemoved,
       persistentEffectDescriptor: descriptor,

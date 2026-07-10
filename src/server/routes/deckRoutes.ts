@@ -1,17 +1,23 @@
 import express from 'express';
-import { demandDeckService } from '../services/demandDeckService';
+import { DemandDeckService } from '../services/demandDeckService';
 import { authenticateToken } from '../middleware/authMiddleware';
 
 const router = express.Router();
 
+// ---------------------------------------------------------------------------
+// Definitional endpoints — "what is printed on a card".
+// These are card-level data shared across all games, so they use the static
+// definitional accessors and take no gameId.
+// ---------------------------------------------------------------------------
+
 // Get all demand cards
 router.get('/demand', (req, res) => {
   try {
-    const cards = demandDeckService.getAllCards();
+    const cards = DemandDeckService.getAllCards();
     return res.status(200).json(cards);
   } catch (error: any) {
     console.error('Error fetching demand cards:', error);
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Server error',
       details: error.message || 'An unexpected error occurred'
     });
@@ -29,7 +35,7 @@ router.get('/demand/:cardId', (req, res) => {
       });
     }
 
-    const card = demandDeckService.getCard(cardId);
+    const card = DemandDeckService.getCard(cardId);
     if (!card) {
       return res.status(404).json({
         error: 'Not found',
@@ -40,59 +46,81 @@ router.get('/demand/:cardId', (req, res) => {
     return res.status(200).json(card);
   } catch (error: any) {
     console.error('Error fetching demand card:', error);
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Server error',
       details: error.message || 'An unexpected error occurred'
     });
   }
 });
 
-// Test-only endpoint to reset the deck
-// Allows reset in test environment or when called with test secret header
+// Get all event card definitions
+router.get('/events', authenticateToken, (req, res) => {
+  try {
+    const cards = DemandDeckService.getAllEventCards();
+    return res.status(200).json(cards);
+  } catch (error: any) {
+    console.error('Error fetching event cards:', error);
+    return res.status(500).json({
+      error: 'Server error',
+      details: error.message || 'An unexpected error occurred'
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Deck-operational endpoints — act on a game's live deck state.
+// Per-game debug operations require a gameId. The reset endpoint clears ALL
+// per-game decks (test hygiene) and therefore takes no gameId.
+// ---------------------------------------------------------------------------
+
+/** Guards a request to test/debug-only endpoints. */
+function isTestOrDebugRequest(req: express.Request): boolean {
+  const testSecret = req.headers['x-test-secret'] as string;
+  const isTestEnvironment = process.env.NODE_ENV === 'test';
+  return isTestEnvironment || testSecret === 'test-reset-secret';
+}
+
+// Test-only endpoint: clear every game's in-memory deck so a fresh test run
+// starts from a clean slate. Not per-game — resets all decks at once.
 router.post('/reset', (req, res) => {
   try {
-    const testSecret = req.headers['x-test-secret'] as string;
-    const isTestEnvironment = process.env.NODE_ENV === 'test';
-    const isValidTestRequest = isTestEnvironment || testSecret === 'test-reset-secret';
-    
-    // Only allow in test environment or with test secret
-    if (!isValidTestRequest) {
+    if (!isTestOrDebugRequest(req)) {
       return res.status(403).json({
         error: 'Forbidden',
         details: 'This endpoint is only available in test mode'
       });
     }
 
-    demandDeckService.reset();
+    DemandDeckService.destroyAllInstances();
     return res.status(200).json({
-      message: 'Deck reset successfully',
-      deckState: demandDeckService.getDeckState()
+      message: 'All game decks cleared'
     });
   } catch (error: any) {
-    console.error('Error resetting deck:', error);
-    return res.status(500).json({ 
+    console.error('Error resetting decks:', error);
+    return res.status(500).json({
       error: 'Server error',
       details: error.message || 'An unexpected error occurred'
     });
   }
 });
 
-// Debug endpoint: push an event card to the top of the draw pile
-// Guarded the same way as /reset — test env or test-secret header
+// Debug endpoint: push an event card to the top of a specific game's draw pile
 router.post('/debug/push-event', (req, res) => {
   try {
-    const testSecret = req.headers['x-test-secret'] as string;
-    const isTestEnvironment = process.env.NODE_ENV === 'test';
-    const isValidTestRequest = isTestEnvironment || testSecret === 'test-reset-secret';
-
-    if (!isValidTestRequest) {
+    if (!isTestOrDebugRequest(req)) {
       return res.status(403).json({
         error: 'Forbidden',
         details: 'This endpoint is only available in test/debug mode'
       });
     }
 
-    const { eventCardId } = req.body;
+    const { gameId, eventCardId } = req.body;
+    if (typeof gameId !== 'string' || gameId.length === 0) {
+      return res.status(400).json({
+        error: 'Invalid request',
+        details: 'gameId is required'
+      });
+    }
     if (typeof eventCardId !== 'number' || isNaN(eventCardId)) {
       return res.status(400).json({
         error: 'Invalid request',
@@ -100,10 +128,11 @@ router.post('/debug/push-event', (req, res) => {
       });
     }
 
-    demandDeckService.pushEventCardToTop(eventCardId);
+    const deck = DemandDeckService.getInstanceForGame(gameId);
+    deck.pushEventCardToTop(eventCardId);
     return res.status(200).json({
-      message: `Event card ${eventCardId} pushed to top of draw pile`,
-      deckState: demandDeckService.getDeckState()
+      message: `Event card ${eventCardId} pushed to top of draw pile for game ${gameId}`,
+      deckState: deck.getDeckState()
     });
   } catch (error: any) {
     return res.status(400).json({
@@ -113,16 +142,33 @@ router.post('/debug/push-event', (req, res) => {
   }
 });
 
-// Get all event card definitions
-router.get('/events', authenticateToken, (req, res) => {
+// Debug endpoint: reshuffle a specific game's draw+discard piles, preserving dealt cards
+router.post('/debug/reshuffle', (req, res) => {
   try {
-    const cards = demandDeckService.getAllEventCards();
-    return res.status(200).json(cards);
+    if (!isTestOrDebugRequest(req)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        details: 'This endpoint is only available in test/debug mode'
+      });
+    }
+
+    const { gameId } = req.body;
+    if (typeof gameId !== 'string' || gameId.length === 0) {
+      return res.status(400).json({
+        error: 'Invalid request',
+        details: 'gameId is required'
+      });
+    }
+
+    const result = DemandDeckService.getInstanceForGame(gameId).reshuffle();
+    return res.status(200).json({
+      message: `Deck reshuffled for game ${gameId} (dealt cards preserved)`,
+      ...result,
+    });
   } catch (error: any) {
-    console.error('Error fetching event cards:', error);
     return res.status(500).json({
       error: 'Server error',
-      details: error.message || 'An unexpected error occurred'
+      details: error.message || 'Failed to reshuffle deck'
     });
   }
 });

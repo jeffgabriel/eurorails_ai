@@ -4,7 +4,7 @@ import { getTrainCapacity } from "../../shared/services/trainProperties";
 import { LoadService } from "./loadService";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
-import { demandDeckService } from "./demandDeckService";
+import { DemandDeckService } from "./demandDeckService";
 import { TrackService, getRiverEdgeKeys, segmentCrossesRiver, areSegmentsEqual } from "./trackService";
 import { DemandCard } from "../../shared/types/DemandCard";
 import { LoadType } from "../../shared/types/LoadTypes";
@@ -23,8 +23,9 @@ import {
   isMovementOnOwnRailBlocked,
   isPickupDeliveryBlocked,
 } from "./restrictionPredicates";
+import { cleanupGameState } from "./gameCleanupService";
 
-// ── Event-card restriction errors ────────────────────────────────────────────
+// ── Event-card restriction errors ────────────────────────────────
 
 /**
  * Closed union of machine-readable error codes for event card restriction
@@ -155,12 +156,44 @@ export class PlayerService {
     if (emissions.length === 0) return;
 
     try {
-      const { emitEventCardDrawn, emitEventEffectApplied } = await import('./socketService');
+      const { emitEventCardDrawn, emitEventEffectApplied, emitToGame } = await import('./socketService');
 
       for (const { gameId, eventResult, drawingPlayerName, card } of emissions) {
         const affectedPlayerIds = eventResult.perPlayerEffects.map((e) => e.playerId);
         const duration = eventResult.persistentEffectDescriptor ? 'persistent' : 'immediate';
-        const effectSummary = `${card.type} affecting ${eventResult.affectedZone.length} mileposts`;
+
+        // Resolve affected player IDs to display names
+        let affectedPlayerNames: string[] = [];
+        if (affectedPlayerIds.length > 0) {
+          try {
+            const nameRows = await db.query(
+              'SELECT id, name FROM players WHERE id = ANY($1)',
+              [affectedPlayerIds],
+            );
+            const nameMap = new Map<string, string>();
+            for (const row of nameRows.rows) {
+              nameMap.set(row.id, row.name as string);
+            }
+            affectedPlayerNames = affectedPlayerIds.map(
+              (id) => nameMap.get(id) ?? 'Unknown Player',
+            );
+          } catch (nameErr) {
+            console.warn(`[PlayerService] Could not resolve affected player names: ${nameErr}`);
+            affectedPlayerNames = affectedPlayerIds.map(() => 'Unknown Player');
+          }
+        }
+
+        // Build flood-specific summary when segments were removed
+        let effectSummary: string;
+        if (eventResult.floodSegmentsRemoved.length > 0) {
+          const parts = eventResult.floodSegmentsRemoved.map((r, i) => {
+            const name = affectedPlayerNames[i] ?? 'Unknown Player';
+            return `${r.removedCount} segment(s) from ${name}`;
+          });
+          effectSummary = `Flood on ${eventResult.floodedRiver ?? 'river'}: ${parts.join(', ')}`;
+        } else {
+          effectSummary = `${card.type} affecting ${eventResult.affectedZone.length} mileposts`;
+        }
 
         emitEventCardDrawn(gameId, {
           gameId,
@@ -169,6 +202,7 @@ export class PlayerService {
           drawingPlayerName,
           affectedZone: eventResult.affectedZone,
           affectedPlayerIds,
+          affectedPlayerNames,
           effectSummary,
           duration,
           timestamp: new Date().toISOString(),
@@ -181,6 +215,20 @@ export class PlayerService {
             effects: eventResult.perPlayerEffects,
             timestamp: new Date().toISOString(),
           });
+        }
+
+        // Flood events remove track segments server-side — notify clients to
+        // re-fetch tracks so their in-memory state stays in sync with the DB.
+        // Without this, the next client saveTrackState would overwrite the
+        // removal with stale data.
+        if (eventResult.floodSegmentsRemoved.length > 0) {
+          for (const r of eventResult.floodSegmentsRemoved) {
+            emitToGame(gameId, 'track:updated', {
+              gameId,
+              playerId: r.playerId,
+              timestamp: Date.now(),
+            });
+          }
         }
       }
     } catch (emitErr) {
@@ -324,6 +372,7 @@ export class PlayerService {
     // ALWAYS draw 3 initial cards server-side (ignore any client-provided cards)
     // Cards must be drawn server-side to ensure proper deck management and prevent duplicates
     // Event cards drawn during initial deal are discarded and replaced per game rules
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const handCardIds: number[] = [];
     while (handCardIds.length < 3) {
       const drawResult = demandDeckService.drawCard();
@@ -550,6 +599,7 @@ export class PlayerService {
    * @returns Array of players, with hands filtered based on requestingUserId
    */
   static async getPlayers(gameId: string, requestingUserId: string): Promise<Player[]> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     try {
       const query = `
@@ -620,7 +670,7 @@ export class PlayerService {
             // Reconcile in-memory deck state after server restarts:
             // ensure cards present in DB hands are considered dealt and removed from draw/discard piles.
             demandDeckService.ensureCardIsDealt(cardId);
-            const card = demandDeckService.getCard(cardId);
+            const card = DemandDeckService.getCard(cardId);
             if (!card) {
               console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
               return null;
@@ -1022,11 +1072,18 @@ export class PlayerService {
     }
 
     const query = `
-            UPDATE games 
+            UPDATE games
             SET status = $1, updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
         `;
     await db.query(query, [finalStatus, gameId]);
+
+    // When a game reaches a terminal state, release its per-game in-memory
+    // state. Idempotent, so it is safe even if the game was already cleaned up
+    // via another path (e.g. VictoryService.resolveVictory).
+    if (finalStatus === "completed" || finalStatus === "abandoned") {
+      await cleanupGameState(gameId);
+    }
   }
 
   static async endAllActiveGames(): Promise<void> {
@@ -1051,6 +1108,7 @@ export class PlayerService {
     loadType: string,
     cardId: number
   ): Promise<{ newCard: any }> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     try {
       await client.query('BEGIN');
@@ -1124,7 +1182,11 @@ export class PlayerService {
     city: string,
     loadType: LoadType,
     cardId: number
-  ): Promise<{ payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: DemandCard; cardsDrawnDuringAction: number }> {
+  ): Promise<
+    | { restricted: true; reason: string }
+    | { restricted?: false; payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: DemandCard; cardsDrawnDuringAction: number }
+  > {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     let drewCardId: number | null = null;
     let discardedCardId: number | null = null;
@@ -1185,16 +1247,23 @@ export class PlayerService {
       // ── Event card restriction checks ─────────────────────────────────────
       // Check pickup/delivery restrictions from active event effects (coastal Strike)
       const deliveryRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId);
-      const deliveryCityKey = getCityMilepointKey(city) ?? '';
-      const deliveryBlocked = isPickupDeliveryBlocked(deliveryRestrictions, deliveryCityKey);
-      if (deliveryBlocked.blocked) {
-        console.warn(
-          `[PlayerService] Delivery rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${city} cityKey=${deliveryCityKey}`,
-        );
-        throw new ActionRestrictionError(
-          'COASTAL_STRIKE_BLOCKED',
-          `Delivery blocked by active event (Strike): city ${city} is within the coastal strike zone`,
-        );
+      if (deliveryRestrictions.length > 0) {
+        const cityKey = PlayerService.getCityMilepointKey(city);
+        for (const restriction of deliveryRestrictions) {
+          if (restriction.type === 'no_pickup_delivery_in_zone') {
+            const zoneSet = new Set(restriction.zone);
+            if (cityKey && zoneSet.has(cityKey)) {
+              console.warn(
+                `[PlayerService] Delivery rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${city} cityKey=${cityKey}`,
+              );
+              await client.query("ROLLBACK");
+              return {
+                restricted: true,
+                reason: `Strike in effect: no pickups or deliveries allowed at ${city}`,
+              };
+            }
+          }
+        }
       }
       // ── End restriction checks ────────────────────────────────────────────
 
@@ -1202,7 +1271,7 @@ export class PlayerService {
         throw new Error("Demand card not in hand");
       }
 
-      const demandCard = demandDeckService.getCard(cardId);
+      const demandCard = DemandDeckService.getCard(cardId);
       if (!demandCard) {
         throw new Error("Invalid demand card");
       }
@@ -1771,6 +1840,7 @@ export class PlayerService {
     | { kind: "deliver"; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; restoredCard: DemandCard; removedCardId: number }
     | { kind: "move"; updatedMoney: number; restoredPosition: { row: number; col: number; x?: number; y?: number }; ownersReversed: Array<{ playerId: string; amount: number }>; feeTotal: number }
   > {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     try {
       await client.query("BEGIN");
@@ -1950,7 +2020,7 @@ export class PlayerService {
         throw new Error("Invalid payment on action");
       }
 
-      const restoredCard = demandDeckService.getCard(restoredCardId);
+      const restoredCard = DemandDeckService.getCard(restoredCardId);
       if (!restoredCard) {
         throw new Error("Invalid demand card on action");
       }
@@ -2024,6 +2094,7 @@ export class PlayerService {
     drawnIds: number[],
     discardedEventIds: number[] = []
   ): Promise<{ newHandIds: number[] }> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     // Discard old hand (must be currently dealt).
     for (const id of handIds) {
       demandDeckService.discardCard(id);
@@ -2071,6 +2142,7 @@ export class PlayerService {
     gameId: string,
     playerId: string
   ): Promise<{ newHandIds: number[] }> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     const discardedIds: number[] = [];
     const drawnIds: number[] = [];
@@ -2148,6 +2220,7 @@ export class PlayerService {
     gameId: string,
     userId: string
   ): Promise<{ currentPlayerIndex: number; nextPlayerId: string; nextPlayerName: string }> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     const discardedIds: number[] = [];
     const drawnIds: number[] = [];
@@ -2339,6 +2412,7 @@ export class PlayerService {
    * Note: Does NOT advance turn or increment current_turn_number.
    */
   static async restartForUser(gameId: string, userId: string): Promise<Player> {
+    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     const discardedIds: number[] = [];
     const drawnIds: number[] = [];

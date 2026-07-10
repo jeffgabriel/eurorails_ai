@@ -13,13 +13,18 @@ import { LoadService } from "../services/LoadService";
 import { config } from "../config/apiConfig";
 import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
 import { DebugOverlay } from "../components/DebugOverlay";
+import { RiverDebugOverlay } from "../components/RiverDebugOverlay";
 import { LLMTranscriptOverlay } from "../components/LLMTranscriptOverlay";
 import { BotTrainAnimator } from "../components/BotTrainAnimator";
 import { GameToastManager } from "../components/GameToastManager";
 import { WhisperPanel, WhisperTurnEntry } from "../components/WhisperPanel";
 import { AutoRunBadge } from "../components/AutoRunBadge";
+import { MapHighlighter } from "../components/MapHighlighter";
+import { EventCardOverlay } from "../components/EventCardOverlay";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/mapConfig";
+import { useGameStore } from "../lobby/store/game.store";
+import { EventCardDrawnPayload, EventCardType } from "../../shared/types/EventCard";
 
 // Add type declaration for Phaser.Scene
 declare module "phaser" {
@@ -52,6 +57,7 @@ export class GameScene extends Phaser.Scene {
   private turnChangeSeq = 0;
   private loadsReferencePanel?: LoadsReferencePanel;
   private debugOverlay?: DebugOverlay;
+  private riverDebugOverlay?: RiverDebugOverlay;
   private botTrainAnimator?: BotTrainAnimator;
   private gameToastManager?: GameToastManager;
   private whisperPanel?: WhisperPanel;
@@ -63,6 +69,12 @@ export class GameScene extends Phaser.Scene {
   private socketUnsubAutoRunStatus?: () => void;
   private llmTranscriptOverlay?: LLMTranscriptOverlay;
   private socketUnsubLLMTranscript?: () => void;
+
+  // Event card UI components
+  private mapHighlighter?: MapHighlighter;
+  private eventCardOverlay?: EventCardOverlay;
+  private unsubEventOverlay?: () => void;
+  private unsubActiveEffects?: () => void;
 
   // Game state
   public gameState: FullGameState; // Keep public for compatibility with SettingsScene
@@ -637,6 +649,9 @@ export class GameScene extends Phaser.Scene {
     // Debug overlay (toggled with backtick key)
     this.debugOverlay = new DebugOverlay(this, this.gameStateService);
 
+    // River crossing debug overlay (toggled with F10)
+    this.riverDebugOverlay = new RiverDebugOverlay(this, this.mapContainer);
+
     // LLM transcript overlay (toggled with spacebar)
     this.llmTranscriptOverlay = new LLMTranscriptOverlay();
 
@@ -655,6 +670,11 @@ export class GameScene extends Phaser.Scene {
     // Auto-run badge (hidden by default)
     this.autoRunBadge = new AutoRunBadge(this);
 
+    // Event card overlay & map highlighting
+    this.mapHighlighter = new MapHighlighter(this, this.mapContainer);
+    this.setupEventOverlaySubscription();
+    this.setupActiveEffectsSubscription();
+
     try {
       const { socketService: svc } = await import('../lobby/shared/socket');
       if (svc) {
@@ -665,6 +685,19 @@ export class GameScene extends Phaser.Scene {
         this.socketUnsubBotTurnComplete?.();
         this.socketUnsubWhisperTurnHistory?.();
         this.socketUnsubAutoRunStatus?.();
+
+        // Wire event card socket listeners → Zustand store
+        // (The store's own connect() is not called from GameScene, so we must
+        // register these here so the overlay/highlight subscriptions fire.)
+        svc.onEventCardDrawn((payload) => {
+          useGameStore.getState().showEventOverlay(payload);
+        });
+        svc.onEventEffectExpired((payload) => {
+          useGameStore.getState().removeActiveEffect(payload.cardId);
+        });
+        svc.onActiveEffects((effects) => {
+          useGameStore.getState().setActiveEffects(effects);
+        });
 
         // F9 key listener — toggle auto-run
         this.input.keyboard?.on('keydown-F9', () => {
@@ -1431,6 +1464,79 @@ export class GameScene extends Phaser.Scene {
     return player?.name ?? 'Unknown Player';
   }
 
+  /**
+   * Subscribe to pendingEventOverlay store state.
+   * Shows/hides EventCardOverlay and activates MapHighlighter when an event card is drawn.
+   */
+  private setupEventOverlaySubscription(): void {
+    let prevOverlay = useGameStore.getState().pendingEventOverlay;
+
+    this.unsubEventOverlay = useGameStore.subscribe((state) => {
+      const overlay = state.pendingEventOverlay;
+      if (overlay === prevOverlay) return;
+
+      if (overlay && !prevOverlay) {
+        // New overlay — show EventCardOverlay and activate map highlighting.
+        this.showEventOverlay(overlay);
+      } else if (overlay && prevOverlay) {
+        // Another card arrived before the first was dismissed — replace it.
+        this.eventCardOverlay?.destroy();
+        this.showEventOverlay(overlay);
+      } else if (!overlay && prevOverlay) {
+        // Overlay dismissed — destroy it (MapHighlighter stays active until effect expires)
+        this.eventCardOverlay?.destroy();
+        this.eventCardOverlay = undefined;
+      }
+
+      prevOverlay = overlay;
+    });
+  }
+
+  /** Create and display an EventCardOverlay, activating map highlights if applicable. */
+  private showEventOverlay(overlay: EventCardDrawnPayload): void {
+    this.eventCardOverlay = new EventCardOverlay(
+      this,
+      overlay,
+      () => useGameStore.getState().dismissEventOverlay(),
+    );
+
+    if (overlay.affectedZone.length > 0 && this.mapHighlighter) {
+      const eventType = overlay.card.type as EventCardType;
+      this.mapHighlighter.activate(overlay.affectedZone, eventType, overlay.card.id);
+    }
+  }
+
+  /**
+   * Subscribe to activeEffects store state.
+   * Activates MapHighlighter zones for newly added effects (e.g. on reconnect)
+   * and deactivates zones when effects expire.
+   */
+  private setupActiveEffectsSubscription(): void {
+    let previousCardIds = new Set(
+      useGameStore.getState().activeEffects.map(e => e.cardId)
+    );
+
+    this.unsubActiveEffects = useGameStore.subscribe((state) => {
+      const currentCardIds = new Set(state.activeEffects.map(e => e.cardId));
+
+      // Activate highlights for newly added effects (e.g. restored on reconnect)
+      for (const effect of state.activeEffects) {
+        if (!previousCardIds.has(effect.cardId) && this.mapHighlighter && effect.affectedZone.length > 0) {
+          this.mapHighlighter.activate(effect.affectedZone, effect.cardType as EventCardType, effect.cardId);
+        }
+      }
+
+      // Deactivate highlights for removed effects
+      for (const cardId of previousCardIds) {
+        if (!currentCardIds.has(cardId) && this.mapHighlighter) {
+          this.mapHighlighter.deactivate(cardId);
+        }
+      }
+
+      previousCardIds = currentCardIds;
+    });
+  }
+
   // Clean up resources when scene is destroyed
   destroy(fromScene?: boolean): void {
     // Stop polling for turn changes
@@ -1477,6 +1583,7 @@ export class GameScene extends Phaser.Scene {
     this.socketUnsubDebugAny?.();
     this.socketUnsubDebugAny = undefined;
     this.debugOverlay?.destroy();
+    this.riverDebugOverlay?.destroy();
     this.socketUnsubLLMTranscript?.();
     this.socketUnsubLLMTranscript = undefined;
     this.llmTranscriptOverlay?.destroy();
@@ -1486,6 +1593,15 @@ export class GameScene extends Phaser.Scene {
     this.socketUnsubAutoRunStatus?.();
     this.socketUnsubAutoRunStatus = undefined;
     this.autoRunBadge?.destroy();
+
+    // Clean up event card UI subscriptions and components
+    this.unsubEventOverlay?.();
+    this.unsubEventOverlay = undefined;
+    this.unsubActiveEffects?.();
+    this.unsubActiveEffects = undefined;
+    this.mapHighlighter?.clear();
+    this.mapHighlighter = undefined;
+    this.eventCardOverlay = undefined;
   }
 
   /**

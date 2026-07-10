@@ -89,10 +89,9 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
 
   // Resolve demand cards from DemandDeckService
   const demandCardIds: number[] = Array.isArray(botRow.hand) ? botRow.hand : [];
-  const demandDeck = DemandDeckService.getInstance();
   const resolvedDemands: ResolvedDemand[] = [];
   for (const cardId of demandCardIds) {
-    const card = demandDeck.getCard(cardId);
+    const card = DemandDeckService.getCard(cardId);
     if (!card) continue;
     resolvedDemands.push({
       cardId: card.id,

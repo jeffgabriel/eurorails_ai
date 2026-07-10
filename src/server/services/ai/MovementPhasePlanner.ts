@@ -26,6 +26,7 @@ import {
   LlmAttempt,
   TerrainType,
   TrainType,
+  TrackSegment,
   TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
 import { isMovementHalfRate, isPickupDeliveryBlocked, getCityMilepointKey } from '../../services/restrictionPredicates';
@@ -554,12 +555,37 @@ export class MovementPhasePlanner {
                 previewBuildOrigin.row === currentPos.row &&
                 previewBuildOrigin.col === currentPos.col
               ) {
-                // Build origin is the bot's current position — set build target and
-                // continue so Phase B composes a BuildTrack action (no move needed).
-                console.warn(`${tag} a3_build_origin_is_current_pos — build origin matches current position, continuing to Phase B`);
+                // JIRA-247: Commit a3OriginResult as a BuildTrack plan directly
+                // instead of `continue`-ing the loop and deferring to Phase B.
+                // The prior partial fix set trace.build.target and looped, which
+                // re-entered A2/A3 with unchanged inputs (livelock to
+                // MAX_LOOP_ITERS) and then handed off to Phase B whose
+                // independent computeBuildSegments call returned [] at
+                // medium-city outer mileposts (game f3ed7b8f T95: bot at
+                // (4,61) building toward Stockholm Medium City at (4,62)).
+                // Truncate the path to fit the build budget — computeBuildSegments
+                // may return more segments than the bot can afford this turn.
+                const truncated: TrackSegment[] = [];
+                let accCost = 0;
+                for (const seg of a3OriginResult) {
+                  if (accCost + seg.cost > a3Budget) break;
+                  truncated.push(seg);
+                  accCost += seg.cost;
+                }
                 trace.a3.terminationReason = 'a3_build_origin_is_current_pos';
                 trace.build.target = a3BuildTarget.targetCity;
-                continue;
+                if (truncated.length > 0) {
+                  console.warn(`${tag} a3_build_origin_is_current_pos — committing ${truncated.length} seg(s) cost ${accCost}M toward ${a3BuildTarget.targetCity}`);
+                  trace.build.cost = accCost;
+                  plans.push({
+                    type: AIActionType.BuildTrack,
+                    segments: truncated,
+                    targetCity: a3BuildTarget.targetCity,
+                  });
+                } else {
+                  console.warn(`${tag} a3_build_origin_is_current_pos — budget ${a3Budget}M too small for cheapest segment (${a3OriginResult[0]?.cost ?? '?'}M), no build committed`);
+                }
+                break;
               } else {
                 const _a3MoveStart = Date.now();
                 const a3MoveResult = await ActionResolver.resolveMove(

@@ -124,3 +124,29 @@ export async function clearMemory(gameId: string, playerId: string): Promise<voi
     console.error(`[BotMemory] Failed to clear memory in DB for player ${playerId}:`, err);
   }
 }
+
+/**
+ * Clear all bot memory for an entire game at game end.
+ * Removes every in-memory entry keyed to this game (keys are `${gameId}:${playerId}`)
+ * and best-effort clears the persisted bot_memory for the game's bots.
+ * Idempotent — a gameId with no matching entries is a no-op.
+ */
+export async function clearGameMemory(gameId: string): Promise<void> {
+  if (!gameId) return;
+
+  const prefix = `${gameId}:`;
+  for (const key of memoryStore.keys()) {
+    if (key.startsWith(prefix)) {
+      memoryStore.delete(key);
+    }
+  }
+
+  try {
+    await db.query(
+      'UPDATE players SET bot_memory = NULL WHERE game_id = $1 AND is_bot = true',
+      [gameId],
+    );
+  } catch (err) {
+    console.error(`[BotMemory] Failed to clear game memory in DB for game ${gameId}:`, err);
+  }
+}
