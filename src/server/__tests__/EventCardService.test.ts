@@ -37,12 +37,20 @@ jest.mock('../services/trackService', () => ({
   },
   getRiverEdgeKeys: jest.fn<() => Set<string> | null>(),
   segmentCrossesRiver: jest.fn<() => boolean>(),
+  areSegmentsEqual: jest.fn<() => boolean>(),
+}));
+
+// ── Mock socketService ───────────────────────────────────────────────────────
+jest.mock('../services/socketService', () => ({
+  emitToGame: jest.fn(),
+  emitStatePatch: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
 }));
 
 import { EventCardService } from '../services/EventCardService';
 import { AreaOfEffectService } from '../services/AreaOfEffectService';
 import { TrackService } from '../services/trackService';
 import { db } from '../db/index';
+import { emitToGame } from '../services/socketService';
 import {
   EventCard,
   EventCardType,
@@ -485,6 +493,87 @@ describe('EventCardService: Flood', () => {
 
     expect(result.floodSegmentsRemoved).toHaveLength(0);
     expect(result.perPlayerEffects).toHaveLength(0);
+  });
+
+  it('emits track:updated for each affected player with reason: flood', async () => {
+    const { client } = makeMockClient();
+    mockDb.connect.mockResolvedValue(client);
+    const mockEmit = emitToGame as jest.Mock;
+
+    mockTrack.removeSegmentsCrossingRiver.mockResolvedValue([
+      { playerId: DRAWING_PLAYER, removedCount: 2, newTotalCost: 8, removedMileposts: ['10,5', '10,6'] },
+      { playerId: OTHER_PLAYER, removedCount: 1, newTotalCost: 3, removedMileposts: ['12,7'] },
+    ]);
+
+    (client.query as jest.Mock).mockImplementation(async (sql: unknown) => {
+      if ((sql as string).includes('current_turn_number')) {
+        return { rows: [{ id: DRAWING_PLAYER, current_turn_number: 1 }] };
+      }
+      return { rows: [] };
+    });
+
+    await EventCardService.processEventCard(
+      GAME_ID, makeFloodCard(), DRAWING_PLAYER, client,
+    );
+
+    // Should emit once per affected player
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+    expect(mockEmit).toHaveBeenCalledWith(GAME_ID, 'track:updated', expect.objectContaining({
+      playerId: DRAWING_PLAYER,
+      reason: 'flood',
+      gameId: GAME_ID,
+    }));
+    expect(mockEmit).toHaveBeenCalledWith(GAME_ID, 'track:updated', expect.objectContaining({
+      playerId: OTHER_PLAYER,
+      reason: 'flood',
+      gameId: GAME_ID,
+    }));
+  });
+
+  it('does NOT emit track:updated when no segments are affected', async () => {
+    const { client } = makeMockClient();
+    mockDb.connect.mockResolvedValue(client);
+    const mockEmit = emitToGame as jest.Mock;
+
+    mockTrack.removeSegmentsCrossingRiver.mockResolvedValue([]);
+
+    (client.query as jest.Mock).mockImplementation(async (sql: unknown) => {
+      if ((sql as string).includes('current_turn_number')) {
+        return { rows: [{ id: DRAWING_PLAYER, current_turn_number: 1 }] };
+      }
+      return { rows: [] };
+    });
+
+    await EventCardService.processEventCard(
+      GAME_ID, makeFloodCard(), DRAWING_PLAYER, client,
+    );
+
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it('event payload includes river name from the Flood effect', async () => {
+    const { client } = makeMockClient();
+    mockDb.connect.mockResolvedValue(client);
+    const mockEmit = emitToGame as jest.Mock;
+
+    mockTrack.removeSegmentsCrossingRiver.mockResolvedValue([
+      { playerId: DRAWING_PLAYER, removedCount: 1, newTotalCost: 0, removedMileposts: ['10,5'] },
+    ]);
+
+    (client.query as jest.Mock).mockImplementation(async (sql: unknown) => {
+      if ((sql as string).includes('current_turn_number')) {
+        return { rows: [{ id: DRAWING_PLAYER, current_turn_number: 1 }] };
+      }
+      return { rows: [] };
+    });
+
+    await EventCardService.processEventCard(
+      GAME_ID, makeFloodCard(), DRAWING_PLAYER, client,
+    );
+
+    expect(mockEmit).toHaveBeenCalledWith(GAME_ID, 'track:updated', expect.objectContaining({
+      river: 'Rhein',
+    }));
   });
 });
 

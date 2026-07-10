@@ -61,6 +61,7 @@ import { NewRoutePlanner } from './NewRoutePlanner';
 import { UPGRADE_DELIVERY_THRESHOLD } from './context/UpgradeGatingConstants';
 import { RECENT_DELIVERIES_WINDOW } from './StrategicConstants';
 import { detectVictoryClinch, findFinalVictoryRoute } from './victoryRules';
+import { isBotInPendingLostTurns } from '../../services/restrictionPredicates';
 
 /**
  * @deprecated Use UPGRADE_DELIVERY_THRESHOLD from UpgradeGatingConstants instead.
@@ -174,6 +175,8 @@ export interface BotTurnResult {
   initialBuildOptions?: InitialBuildPlan['evaluatedOptions'];
   // Double delivery pairings evaluated during initial build
   initialBuildPairings?: InitialBuildPlan['evaluatedPairings'];
+  /** Populated when a PlayerService action was rejected by an event card restriction */
+  rejectionReason?: { code: string; message: string };
 }
 
 export class AIStrategyEngine {
@@ -204,6 +207,39 @@ export class AIStrategyEngine {
       // Auto-place bot if no position and has track (skip during initialBuild — no train placement yet)
       if (!snapshot.bot.position && snapshot.bot.existingSegments.length > 0 && snapshot.gameStatus !== 'initialBuild') {
         await AIStrategyEngine.autoPlaceBot(snapshot, memory.activeRoute);
+      }
+
+      // ── Event card: Lost-turn pre-emption ──────────────────────────────────
+      // If a Derailment event recorded a pending lost turn for this bot,
+      // skip the entire turn and emit PassTurn immediately.  We check
+      // activeEffects from the snapshot so the decision is based on the same
+      // point-in-time read as all other planner decisions (no extra DB query).
+      if (isBotInPendingLostTurns(snapshot.activeEffects ?? [], botPlayerId)) {
+        const lostTurnCardId = snapshot.activeEffects
+          ?.find(e => e.pendingLostTurns.some(p => p.playerId === botPlayerId))
+          ?.cardId;
+        const lostTurnReasoning =
+          `Lost turn due to Derailment event card${lostTurnCardId != null ? ` #${lostTurnCardId}` : ''}.`;
+        console.info(`${tag} Lost-turn pre-emption: ${lostTurnReasoning}`);
+        const durationMs = Date.now() - startTime;
+        await updateMemory(gameId, botPlayerId, {
+          lastAction: AIActionType.PassTurn,
+          consecutiveDiscards: 0,
+          turnNumber: memory.turnNumber + 1,
+        });
+        flushTurnLog();
+        return {
+          action: AIActionType.PassTurn,
+          segmentsBuilt: 0,
+          cost: 0,
+          durationMs,
+          success: true,
+          reasoning: lostTurnReasoning,
+          actor: 'system' as const,
+          actorDetail: 'lost-turn-pre-emption',
+          llmLatencyMs: 0,
+          retried: false,
+        };
       }
 
       const botConfig = snapshot.bot.botConfig as BotConfig | null;
@@ -1016,6 +1052,7 @@ export class AIStrategyEngine {
           phaseBStripped: phaseBWasStripped,
           lockupTerminationReason,
         },
+        rejectionReason: result.rejectionReason,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

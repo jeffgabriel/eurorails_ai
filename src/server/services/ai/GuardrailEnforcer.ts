@@ -19,11 +19,22 @@
 import {
   WorldSnapshot,
   GuardrailPlanResult,
+  GateViolationCode,
   TurnPlan,
   TurnPlanMoveTrain,
+  TurnPlanBuildTrack,
+  TurnPlanPickupLoad,
+  TurnPlanDeliverLoad,
   GameContext,
   AIActionType,
 } from '../../../shared/types/GameTypes';
+import {
+  getCityMilepointKey,
+  isBotInPendingLostTurns,
+  isBuildBlockedAtMilepost,
+  isMovementBlockedAtDest,
+  isPickupDeliveryBlocked,
+} from '../restrictionPredicates';
 import {
   computeEffectivePathLength,
   isIntraCityEdge,
@@ -223,6 +234,98 @@ export class GuardrailEnforcer {
           plan: { ...plan, steps: newSteps },
           overridden: false,
         };
+      }
+    }
+
+    // ── Event card restriction gates ─────────────────────────────────────────
+    // These gates prevent the AI from planning actions that active event cards
+    // prohibit.  They run after the strategic guardrails because strategic
+    // overrides (force-deliver, discard-when-stuck) always take priority.
+
+    const activeEffects = snapshot.activeEffects ?? [];
+
+    // Gate: Lost Turn Pending — bot may not act when a Derailment lost turn is pending
+    if (isBotInPendingLostTurns(activeEffects, snapshot.bot.playerId) && planType !== AIActionType.PassTurn) {
+      console.warn(`[Guardrail LOST_TURN_PENDING] Bot has a pending lost turn — forcing PassTurn`);
+      return {
+        plan: { type: AIActionType.PassTurn },
+        overridden: true,
+        reason: 'Event card restriction: bot has a pending Derailment lost turn',
+        violationCode: 'LOST_TURN_PENDING' as GateViolationCode,
+      };
+    }
+
+    // Gate: Movement Restriction — reject MoveTrain to a blocked destination
+    const movementRestrictions = activeEffects.flatMap(e => e.restrictions.movement);
+    if (movementRestrictions.length > 0) {
+      const stepsToCheck = plan.type === 'MultiAction' ? plan.steps : [plan];
+      for (const step of stepsToCheck) {
+        if (step.type === AIActionType.MoveTrain) {
+          const movePlan = step as TurnPlanMoveTrain;
+          const dest = movePlan.path[movePlan.path.length - 1];
+          if (dest) {
+            const destKey = `${dest.row},${dest.col}`;
+            const blocked = isMovementBlockedAtDest(movementRestrictions, destKey);
+            if (blocked.blocked) {
+              console.warn(`[Guardrail MOVEMENT_RESTRICTION] Movement to ${destKey} is blocked by active event`);
+              return {
+                plan: { type: AIActionType.PassTurn },
+                overridden: true,
+                reason: `Event card restriction: movement to ${destKey} is blocked (Snow/blocked terrain)`,
+                violationCode: 'MOVEMENT_RESTRICTION_VIOLATION' as GateViolationCode,
+              };
+            }
+          }
+        }
+      }
+    }
+
+    // Gate: Build Restriction — reject BuildTrack to a blocked milepost
+    const buildRestrictions = activeEffects.flatMap(e => e.restrictions.build);
+    if (buildRestrictions.length > 0) {
+      const stepsToCheck = plan.type === 'MultiAction' ? plan.steps : [plan];
+      for (const step of stepsToCheck) {
+        if (step.type === AIActionType.BuildTrack) {
+          const buildPlan = step as TurnPlanBuildTrack;
+          for (const seg of (buildPlan.segments ?? [])) {
+            const destKey = `${seg.to.row},${seg.to.col}`;
+            const blocked = isBuildBlockedAtMilepost(buildRestrictions, destKey, snapshot.bot.playerId);
+            if (blocked.blocked) {
+              console.warn(`[Guardrail BUILD_RESTRICTION] Build to ${destKey} is blocked by active event (${blocked.reason})`);
+              return {
+                plan: { type: AIActionType.PassTurn },
+                overridden: true,
+                reason: `Event card restriction: build to ${destKey} is blocked (${blocked.reason})`,
+                violationCode: 'BUILD_RESTRICTION_VIOLATION' as GateViolationCode,
+              };
+            }
+          }
+        }
+      }
+    }
+
+    // Gate: Pickup/Delivery Restriction — reject PickupLoad or DeliverLoad at a blocked city
+    const pickupDeliveryRestrictions = activeEffects.flatMap(e => e.restrictions.pickupDelivery);
+    if (pickupDeliveryRestrictions.length > 0) {
+      const stepsToCheck = plan.type === 'MultiAction' ? plan.steps : [plan];
+      for (const step of stepsToCheck) {
+        const cityName =
+          step.type === AIActionType.PickupLoad ? (step as TurnPlanPickupLoad).city
+          : step.type === AIActionType.DeliverLoad ? (step as TurnPlanDeliverLoad).city
+          : null;
+        if (cityName) {
+          const cityKey = getCityMilepointKey(cityName) ?? '';
+          const blocked = isPickupDeliveryBlocked(pickupDeliveryRestrictions, cityKey);
+          if (blocked.blocked) {
+            console.warn(`[Guardrail PICKUP_DELIVERY_RESTRICTION] ${step.type} at ${cityName} is blocked by active event`);
+            return {
+              plan: { type: AIActionType.PassTurn },
+              overridden: true,
+              reason: `Event card restriction: ${step.type} at ${cityName} blocked by coastal Strike zone`,
+              violationCode: 'PICKUP_DELIVERY_RESTRICTION_VIOLATION' as GateViolationCode,
+            };
+          }
+        }
       }
     }
 

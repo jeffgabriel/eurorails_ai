@@ -13,7 +13,7 @@ jest.mock('../db/index', () => ({
   },
 }));
 
-import { TrackService, getRiverEdgeKeys, segmentCrossesRiver } from '../services/trackService';
+import { TrackService, getRiverEdgeKeys, segmentCrossesRiver, areSegmentsEqual } from '../services/trackService';
 import { TerrainType, TrackSegment } from '../../shared/types/GameTypes';
 import { PoolClient } from 'pg';
 
@@ -275,6 +275,65 @@ describe('TrackService.removeSegmentsCrossingRiver', () => {
     const result = await TrackService.removeSegmentsCrossingRiver(client, GAME_ID, 'Elbe');
     expect(result).toHaveLength(1);
     expect(result[0].removedCount).toBe(1);
+  });
+
+  it('appends removed segments to pending_flood_rebuilds in the UPDATE query', async () => {
+    const elbeKeys = getRiverEdgeKeys('Elbe')!;
+    const firstKey = Array.from(elbeKeys)[0];
+    const [fromPart, toPart] = firstKey.split('|');
+    const [fromRow, fromCol] = fromPart.split(',').map(Number);
+    const [toRow, toCol] = toPart.split(',').map(Number);
+
+    const crossingSeg = makeSegment(fromRow, fromCol, toRow, toCol, 3);
+    const safeSeg = makeSegment(1, 1, 1, 2, 2);
+
+    const { client, querySpy } = makeMockClient([
+      {
+        player_id: PLAYER_A,
+        segments: JSON.stringify([crossingSeg, safeSeg]),
+        total_cost: 5,
+      },
+    ]);
+
+    await TrackService.removeSegmentsCrossingRiver(client, GAME_ID, 'Elbe');
+
+    const allCalls = querySpy.mock.calls as unknown as Array<[string, unknown[]]>;
+    const updateCall = allCalls.find(([sql]) => sql.includes('pending_flood_rebuilds'));
+    expect(updateCall).toBeDefined();
+
+    // The 3rd param (index 2) should be the JSON of removed segments
+    const pendingJson = JSON.parse(updateCall![1][2] as string) as typeof crossingSeg[];
+    expect(pendingJson).toHaveLength(1);
+    expect(pendingJson[0].from.row).toBe(fromRow);
+    expect(pendingJson[0].from.col).toBe(fromCol);
+  });
+});
+
+// ── areSegmentsEqual ──────────────────────────────────────────────────────────
+
+describe('areSegmentsEqual', () => {
+  it('returns true when segments are identical (same direction)', () => {
+    const a = makeSegment(10, 5, 10, 6);
+    const b = makeSegment(10, 5, 10, 6);
+    expect(areSegmentsEqual(a, b)).toBe(true);
+  });
+
+  it('returns true for reversed direction (A→B equals B→A)', () => {
+    const a = makeSegment(10, 5, 10, 6);
+    const b = makeSegment(10, 6, 10, 5);
+    expect(areSegmentsEqual(a, b)).toBe(true);
+  });
+
+  it('returns false for different mileposts', () => {
+    const a = makeSegment(10, 5, 10, 6);
+    const b = makeSegment(10, 5, 10, 7);
+    expect(areSegmentsEqual(a, b)).toBe(false);
+  });
+
+  it('returns false when only one coordinate differs', () => {
+    const a = makeSegment(10, 5, 10, 6);
+    const b = makeSegment(10, 5, 11, 6);
+    expect(areSegmentsEqual(a, b)).toBe(false);
   });
 });
 

@@ -15,12 +15,13 @@ import {
 } from '../../../shared/types/GameTypes';
 import { LoadType } from '../../../shared/types/LoadTypes';
 import { emitToGame, emitStatePatch } from '../socketService';
-import { PlayerService } from '../playerService';
+import { PlayerService, ActionRestrictionError, ActionRestrictionErrorCode } from '../playerService';
 import { LoadService } from '../loadService';
 import { DemandDeckService } from '../demandDeckService';
 import { gridToPixel, loadGridPoints } from '../MapTopology';
 import { getTrainCapacity, getTrainSpeed } from '../../../shared/services/trainProperties';
 import { getCityNameAtPosition } from '../../../shared/services/cityPositionResolver';
+import { capture as captureSnapshot } from './WorldSnapshotService';
 
 export interface ExecutionResult {
   success: boolean;
@@ -33,6 +34,14 @@ export interface ExecutionResult {
   payment?: number;
   newCardId?: number;
   movementPath?: { row: number; col: number }[];
+  /** Populated when an ActionRestrictionError was caught — provides typed rejection info for logging */
+  rejectionReason?: { code: ActionRestrictionErrorCode; message: string };
+  /**
+   * Number of demand cards drawn as a result of this action.
+   * Non-zero values trigger a mid-turn re-snapshot so the bot sees any event
+   * cards drawn during card replacement.
+   */
+  cardsDrawnDuringAction?: number;
 }
 
 export class TurnExecutor {
@@ -104,7 +113,33 @@ export class TurnExecutor {
     }
 
     const option = TurnExecutor.planToOption(plan);
-    return TurnExecutor.execute(option, snapshot);
+    const result = await TurnExecutor.execute(option, snapshot);
+
+    // Mid-turn re-snapshot: when an action draws new cards (e.g., a delivery), the
+    // active event effects may have changed because event cards can be drawn as part
+    // of the card replacement.  Re-capture the snapshot so subsequent planner
+    // invocations (MovementPhasePlanner, BuildPhasePlanner) see the updated
+    // restriction state.  Hard guard: only once per executePlan call.
+    if (result.success && (result as { cardsDrawnDuringAction?: number }).cardsDrawnDuringAction) {
+      try {
+        const freshSnapshot = await captureSnapshot(snapshot.gameId, snapshot.bot.playerId);
+        // Mutate the caller's snapshot reference so downstream consumers within
+        // the same turn see the refreshed activeEffects and pendingFloodRebuilds.
+        snapshot.activeEffects = freshSnapshot.activeEffects;
+        snapshot.bot.pendingFloodRebuilds = freshSnapshot.bot.pendingFloodRebuilds;
+        console.info(
+          `[TurnExecutor] Mid-turn re-snapshot after ${plan.type} (cardsDrawn=${(result as any).cardsDrawnDuringAction}): refreshed activeEffects count=${freshSnapshot.activeEffects?.length ?? 0}`,
+        );
+      } catch (snapshotError) {
+        // Best-effort: a failed re-snapshot does not undo the executed action
+        console.warn(
+          `[TurnExecutor] Mid-turn re-snapshot failed (non-fatal):`,
+          snapshotError instanceof Error ? snapshotError.message : snapshotError,
+        );
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -310,13 +345,34 @@ export class TurnExecutor {
     const cost = plan.estimatedCost ?? newSegments.reduce((s, seg) => s + seg.cost, 0);
 
     // Delegate to PlayerService — handles UPSERT + money deduction in a transaction
-    const { remainingMoney } = await PlayerService.buildTrackForPlayer(
-      snapshot.gameId,
-      snapshot.bot.playerId,
-      newSegments,
-      snapshot.bot.existingSegments,
-      cost,
-    );
+    let buildResult: Awaited<ReturnType<typeof PlayerService.buildTrackForPlayer>>;
+    try {
+      buildResult = await PlayerService.buildTrackForPlayer(
+        snapshot.gameId,
+        snapshot.bot.playerId,
+        newSegments,
+        snapshot.bot.existingSegments,
+        cost,
+      );
+    } catch (buildError) {
+      if (buildError instanceof ActionRestrictionError) {
+        console.warn(
+          `[TurnExecutor] BuildTrack rejected by event card restriction: code=${buildError.code} message=${buildError.message}`,
+        );
+        return {
+          success: false,
+          action: AIActionType.BuildTrack,
+          cost: 0,
+          segmentsBuilt: 0,
+          remainingMoney: snapshot.bot.money,
+          durationMs: Date.now() - startTime,
+          error: buildError.message,
+          rejectionReason: { code: buildError.code, message: buildError.message },
+        };
+      }
+      throw buildError;
+    }
+    const { remainingMoney } = buildResult;
 
     // 3. Post-commit: audit record (best-effort — don't let a missing table
     //    undo a successful track build)
@@ -395,11 +451,31 @@ export class TurnExecutor {
     const pixel = gridToPixel(destination.row, destination.col);
 
     // Call PlayerService.moveTrainForUser (handles track usage fees in its own transaction)
-    const moveResult = await PlayerService.moveTrainForUser({
-      gameId: snapshot.gameId,
-      userId: snapshot.bot.userId,
-      to: { row: destination.row, col: destination.col, x: pixel.x, y: pixel.y },
-    });
+    let moveResult: Awaited<ReturnType<typeof PlayerService.moveTrainForUser>>;
+    try {
+      moveResult = await PlayerService.moveTrainForUser({
+        gameId: snapshot.gameId,
+        userId: snapshot.bot.userId,
+        to: { row: destination.row, col: destination.col, x: pixel.x, y: pixel.y },
+      });
+    } catch (moveError) {
+      if (moveError instanceof ActionRestrictionError) {
+        console.warn(
+          `[TurnExecutor] MoveTrain rejected by event card restriction: code=${moveError.code} message=${moveError.message}`,
+        );
+        return {
+          success: false,
+          action: AIActionType.MoveTrain,
+          cost: 0,
+          segmentsBuilt: 0,
+          remainingMoney: snapshot.bot.money,
+          durationMs: Date.now() - startTime,
+          error: moveError.message,
+          rejectionReason: { code: moveError.code, message: moveError.message },
+        };
+      }
+      throw moveError;
+    }
 
     const cost = moveResult?.feeTotal ?? 0;
     const remainingMoney = moveResult?.updatedMoney ?? 0;
@@ -477,12 +553,33 @@ export class TurnExecutor {
       : '';
 
     // Delegate to PlayerService — handles capacity check, array_append, dropped-load clear
-    const { updatedLoads } = await PlayerService.pickupLoadForPlayer(
-      snapshot.gameId,
-      snapshot.bot.playerId,
-      loadType as LoadType,
-      cityName,
-    );
+    let pickupResult: Awaited<ReturnType<typeof PlayerService.pickupLoadForPlayer>>;
+    try {
+      pickupResult = await PlayerService.pickupLoadForPlayer(
+        snapshot.gameId,
+        snapshot.bot.playerId,
+        loadType as LoadType,
+        cityName,
+      );
+    } catch (pickupError) {
+      if (pickupError instanceof ActionRestrictionError) {
+        console.warn(
+          `[TurnExecutor] PickupLoad rejected by event card restriction: code=${pickupError.code} message=${pickupError.message}`,
+        );
+        return {
+          success: false,
+          action: AIActionType.PickupLoad,
+          cost: 0,
+          segmentsBuilt: 0,
+          remainingMoney: snapshot.bot.money,
+          durationMs: Date.now() - startTime,
+          error: pickupError.message,
+          rejectionReason: { code: pickupError.code, message: pickupError.message },
+        };
+      }
+      throw pickupError;
+    }
+    const { updatedLoads } = pickupResult;
 
     // Update snapshot so subsequent steps see the correct loads (JIRA-220 follow-up
     // game e437ce9b — keep snapshot in sync with DB for mid-turn consumers like
@@ -588,6 +685,21 @@ export class TurnExecutor {
         cardId,
       );
     } catch (deliverError) {
+      if (deliverError instanceof ActionRestrictionError) {
+        console.warn(
+          `[TurnExecutor] DeliverLoad rejected by event card restriction: code=${deliverError.code} message=${deliverError.message}`,
+        );
+        return {
+          success: false,
+          action: AIActionType.DeliverLoad,
+          cost: 0,
+          segmentsBuilt: 0,
+          remainingMoney: snapshot.bot.money,
+          durationMs: Date.now() - startTime,
+          error: deliverError.message,
+          rejectionReason: { code: deliverError.code, message: deliverError.message },
+        };
+      }
       console.error(
         `[TurnExecutor.handleDeliverLoad] JIRA-188 delivery error:`,
         JSON.stringify({
@@ -712,6 +824,8 @@ export class TurnExecutor {
       durationMs: Date.now() - startTime,
       payment,
       newCardId,
+      // Delivery always draws exactly one demand card (plus any event cards processed)
+      cardsDrawnDuringAction: deliverResult.cardsDrawnDuringAction,
     };
   }
 

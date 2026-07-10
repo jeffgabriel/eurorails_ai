@@ -32,6 +32,8 @@ import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
 import type { PhaseAResult } from './schemas';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
+import { isBuildBlockedAtMilepost, isFloodRebuildBlocked } from '../../services/restrictionPredicates';
+import { BuildRestriction } from '../../../shared/types/EventCard';
 
 // ── PhaseBResult ──────────────────────────────────────────────────────────
 
@@ -157,6 +159,42 @@ export class BuildPhasePlanner {
             hasDelivery,
             routeComplete: false,
             routeAbandoned: true,
+            replanLlmLog: phaseAResult.replanLlmLog,
+            replanSystemPrompt: phaseAResult.replanSystemPrompt,
+            replanUserPrompt: phaseAResult.replanUserPrompt,
+            pendingUpgradeAction: phaseAResult.pendingUpgradeAction,
+            upgradeSuppressionReason: phaseAResult.upgradeSuppressionReason,
+          };
+        }
+      }
+    }
+
+    // ── Flood rebuild pre-step ────────────────────────────────────────────
+    // When the bot has pending Flood rebuild segments, prioritise rebuilding
+    // the first segment (FIFO) that is no longer blocked by an active Flood
+    // event.  If a rebuildable segment exists, return immediately with only
+    // the BuildTrack plan — normal routing is deferred to the next turn.
+    const pendingRebuilds = snapshot.bot.pendingFloodRebuilds ?? [];
+    if (pendingRebuilds.length > 0 && !phaseAResult.hasDelivery) {
+      const activeEffects = snapshot.activeEffects ?? [];
+      for (const seg of pendingRebuilds) {
+        const floodStillActive = isFloodRebuildBlocked(activeEffects, seg);
+        if (!floodStillActive.blocked) {
+          // Flood has cleared — this segment can be rebuilt now
+          const rebuildPlan: TurnPlan = {
+            type: AIActionType.BuildTrack,
+            segments: [seg],
+          };
+          console.info(
+            `[BuildPhasePlanner] Flood rebuild pre-step: rebuilding erased segment (${seg.from.row},${seg.from.col})→(${seg.to.row},${seg.to.col})`,
+          );
+          trace.outputPlan = [AIActionType.BuildTrack];
+          return {
+            plans: [...phaseAResult.accumulatedPlans, rebuildPlan],
+            updatedRoute: activeRoute,
+            hasDelivery: phaseAResult.hasDelivery,
+            routeComplete: false,
+            routeAbandoned: false,
             replanLlmLog: phaseAResult.replanLlmLog,
             replanSystemPrompt: phaseAResult.replanSystemPrompt,
             replanUserPrompt: phaseAResult.replanUserPrompt,

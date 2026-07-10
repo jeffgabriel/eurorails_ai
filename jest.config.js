@@ -67,9 +67,16 @@ module.exports = {
     },
 
     {
+      // Unit tests: pure logic, no real database. Deterministic — this is the CI gate.
+      // Real-DB tests live in the 'server-integration' project (see below) and are
+      // excluded here via the *.integration.test.ts suffix and the integration/ dir.
       displayName: 'server',
       testEnvironment: 'node',
       testMatch: ['<rootDir>/src/server/__tests__/**/*.test.ts'],
+      testPathIgnorePatterns: [
+        '\\.integration\\.test\\.ts$',
+        '<rootDir>/src/server/__tests__/integration/',
+      ],
       setupFiles: ['<rootDir>/src/server/__tests__/setupFiles.ts'],
       setupFilesAfterEnv: ['<rootDir>/src/server/__tests__/setup.ts'],
       maxWorkers: 1,
@@ -89,6 +96,43 @@ module.exports = {
       transformIgnorePatterns: ['/node_modules/(?!(uuid)/)'],
       // Map the ESM-only claude-agent-sdk to a CJS-compatible stub for Jest.
       // Real usage is in production code; tests mock this at the module boundary.
+      moduleNameMapper: {
+        '^@anthropic-ai/claude-agent-sdk$': '<rootDir>/src/server/__tests__/mocks/claudeAgentSdk.mock.js',
+      },
+    },
+
+    {
+      // Integration tests: exercise a real Postgres (eurorails_test). Kept OUT of the
+      // unit gate because they share one physical DB and are inherently order/state
+      // sensitive. Run serially in their own process via `npm run test:integration`.
+      // A server test belongs here if it imports the real `../db` pool — name it
+      // `*.integration.test.ts` (or place it in __tests__/integration/).
+      displayName: 'server-integration',
+      testEnvironment: 'node',
+      testMatch: [
+        '<rootDir>/src/server/__tests__/**/*.integration.test.ts',
+        '<rootDir>/src/server/__tests__/integration/**/*.test.ts',
+      ],
+      setupFiles: ['<rootDir>/src/server/__tests__/setupFiles.ts'],
+      setupFilesAfterEnv: [
+        '<rootDir>/src/server/__tests__/setup.ts',
+        '<rootDir>/src/server/__tests__/setup.integration.ts',
+      ],
+      maxWorkers: 1,
+
+      transform: {
+        '^.+\\.(ts|tsx)$': [
+          'ts-jest',
+          {
+            tsconfig: 'tsconfig.json',
+            diagnostics: { ignoreCodes: [1343] },
+            isolatedModules: false,
+            useESM: false,
+          },
+        ],
+        '^.+\\.(js|jsx)$': 'babel-jest',
+      },
+      transformIgnorePatterns: ['/node_modules/(?!(uuid)/)'],
       moduleNameMapper: {
         '^@anthropic-ai/claude-agent-sdk$': '<rootDir>/src/server/__tests__/mocks/claudeAgentSdk.mock.js',
       },

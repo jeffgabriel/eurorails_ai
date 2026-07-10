@@ -31,6 +31,20 @@ export function segmentCrossesRiver(segment: TrackSegment, riverEdgeKeys: Set<st
   return riverEdgeKeys.has(key);
 }
 
+/**
+ * Return true if two track segments connect the same two mileposts.
+ * Direction-independent: (A→B) equals (B→A) because a railway runs both ways.
+ */
+export function areSegmentsEqual(a: TrackSegment, b: TrackSegment): boolean {
+  const forwardMatch =
+    a.from.row === b.from.row && a.from.col === b.from.col &&
+    a.to.row === b.to.row && a.to.col === b.to.col;
+  const reverseMatch =
+    a.from.row === b.to.row && a.from.col === b.to.col &&
+    a.to.row === b.from.row && a.to.col === b.from.col;
+  return forwardMatch || reverseMatch;
+}
+
 export class TrackService {
     static async saveTrackState(gameId: string, playerId: string, trackState: PlayerTrackState): Promise<void> {
         const client = await db.connect();
@@ -243,11 +257,19 @@ export class TrackService {
 
             const newTotalCost = remaining.reduce((sum, seg) => sum + seg.cost, 0);
 
+            // Removed segments are appended to pending_flood_rebuilds so the
+            // bot knows which bridges need to be rebuilt.  We read the current
+            // value and append rather than overwriting, to preserve any rebuilds
+            // that may already be queued from a previous Flood event.
+            const removedSegments = segments.filter(seg => segmentCrossesRiver(seg, riverEdgeKeys));
+
             await client.query(
                 `UPDATE player_tracks
-                 SET segments = $1, total_cost = $2
-                 WHERE game_id = $3 AND player_id = $4`,
-                [JSON.stringify(remaining), newTotalCost, gameId, playerId]
+                 SET segments = $1,
+                     total_cost = $2,
+                     pending_flood_rebuilds = COALESCE(pending_flood_rebuilds, '[]'::jsonb) || $3::jsonb
+                 WHERE game_id = $4 AND player_id = $5`,
+                [JSON.stringify(remaining), newTotalCost, JSON.stringify(removedSegments), gameId, playerId]
             );
 
             results.push({ playerId, removedCount, newTotalCost, removedMileposts });

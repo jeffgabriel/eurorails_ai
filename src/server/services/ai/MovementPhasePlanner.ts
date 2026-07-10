@@ -29,6 +29,7 @@ import {
   TrackSegment,
   TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
+import { isMovementHalfRate, isPickupDeliveryBlocked, getCityMilepointKey } from '../../services/restrictionPredicates';
 import {
   resolveBuildTarget,
   applyStopEffectToLocalState,
@@ -107,7 +108,26 @@ export class MovementPhasePlanner {
 
     const plans: TurnPlan[] = [];
     let hasDelivery = false;
-    let remainingBudget = context.speed;
+
+    // ── Event card: half-rate movement adjustment ─────────────────────────
+    // When a Snow event is active and the bot's current position is within
+    // the half-rate zone, the bot moves at half speed this turn.  We cap the
+    // planning budget now so the loop never emits more moves than allowed.
+    // PlayerService enforces this at execution time; halving here prevents the
+    // planner from committing to unreachable stops.
+    let remainingBudget: number;
+    if (snapshot.bot.position) {
+      const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
+      const movementRestrictions = (snapshot.activeEffects ?? []).flatMap(e => e.restrictions.movement);
+      if (isMovementHalfRate(movementRestrictions, posKey)) {
+        remainingBudget = Math.ceil(context.speed / 2);
+        console.info(`[MovementPhasePlanner] Half-rate movement: budget capped ${context.speed} → ${remainingBudget}`);
+      } else {
+        remainingBudget = context.speed;
+      }
+    } else {
+      remainingBudget = context.speed;
+    }
     let lastMoveTargetCity: string | null = null;
     let replanLlmLog: LlmAttempt[] | undefined;
     let replanSystemPrompt: string | undefined;
@@ -142,6 +162,23 @@ export class MovementPhasePlanner {
 
       // ── Already at the stop city? Execute the action ─────────────────
       if (TurnExecutorPlanner.isBotAtCity(context, targetCity)) {
+        // Event card: skip pickup/delivery if the city is in a coastal Strike zone.
+        // PlayerService will enforce this at execution time, but we skip here to
+        // prevent the planner from stalling on a blocked stop indefinitely.
+        if (currentStop.action === 'pickup' || currentStop.action === 'deliver') {
+          const pickupDeliveryRestrictions = (snapshot.activeEffects ?? []).flatMap(e => e.restrictions.pickupDelivery);
+          if (pickupDeliveryRestrictions.length > 0) {
+            const cityKey = getCityMilepointKey(targetCity) ?? '';
+            const blocked = isPickupDeliveryBlocked(pickupDeliveryRestrictions, cityKey);
+            if (blocked.blocked) {
+              console.info(
+                `${tag} Pickup/delivery at ${targetCity} skipped: city is in coastal Strike zone (key=${cityKey})`,
+              );
+              break; // Exit movement loop; bot can't make progress this turn
+            }
+          }
+        }
+
         const _stopActionStart = Date.now();
         const actionResult = await TurnExecutorPlanner.executeStopAction(
           currentStop,
