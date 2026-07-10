@@ -36,6 +36,12 @@ jest.mock('../../services/ai/PathCostEstimator', () => ({
   clearPathCostCache: jest.fn(),
 }));
 
+// Mock BotMemory so updateMemory (called by end-game lock hook) doesn't hit the DB
+const mockUpdateMemory = jest.fn().mockResolvedValue(undefined);
+jest.mock('../../services/ai/BotMemory', () => ({
+  updateMemory: mockUpdateMemory,
+}));
+
 // Mock MapTopology to control grid + city lookup
 // Using Map<string, any> since the mock grid is just for test fixtures
 const mockGrid = new Map<string, { row: number; col: number; terrain: number; name?: string }>();
@@ -58,6 +64,7 @@ import {
   PRUNE_MAX_BUILD_M,
   HOP_AVG_COST_M,
   AFFORDABILITY_FLOOR_M,
+  WIN_COMPLETING_MAX_TURNS,
   classifyGamePhase,
   detectCarriedLoads,
   normalizeRows,
@@ -2884,5 +2891,380 @@ describe('JIRA-249/250: enumerateCandidates includes carry floor and corridor ca
 
     const corridorCandidates = candidates.filter(c => c.id.startsWith('corridor:'));
     expect(corridorCandidates.length).toBeGreaterThan(0);
+  });
+});
+
+// ── JIRA-255 Layer A: End-game lock mechanism ──────────────────────────
+
+describe('JIRA-255 Layer A: end-game lock in planTripDeterministic', () => {
+  beforeEach(() => {
+    mockUpdateMemory.mockClear();
+    // Default cheapPrune: always keep
+    mockEstimateGraphPathCost.mockReturnValue({
+      buildCost: 0, pathLength: 1, estimatedTurns: 1, reachable: true, newSegments: [],
+    });
+    // Default simulateTrip: feasible result
+    mockSimulateTrip.mockReturnValue({
+      feasible: true,
+      finalCashRelative: 20,
+      turnsToComplete: 3,
+      totalBuildCost: 0,
+      builtSegments: [],
+      minCashRelative: 0,
+    });
+  });
+
+  /** A demand that cheapPrune keeps and simulateTrip scores as feasible */
+  function makeSingleDemand(): DemandContext {
+    return makeDemand({ cardIndex: 0, loadType: 'Coal', deliveryCity: 'Paris', payout: 25 });
+  }
+
+  it('sets endGameLocked=true when cash > 200 and lock was false', () => {
+    const memory = makeMemory({ endGameLocked: false });
+    const snap = makeSnapshot({ money: 205 });
+    const ctx = makeContext([makeSingleDemand()]);
+
+    planTripDeterministic(snap, ctx, memory);
+
+    expect(memory.endGameLocked).toBe(true);
+    expect(mockUpdateMemory).toHaveBeenCalledWith('test-game', 'bot-1', { endGameLocked: true });
+  });
+
+  it('sets endGameLocked=true when classifyGamePhase returns late (turn >= 80)', () => {
+    const memory = makeMemory({ endGameLocked: false, deliveryCount: 5 });
+    // money <= 200 but turn=80 → late
+    const snap: WorldSnapshot = {
+      ...makeSnapshot({ money: 100 }),
+      turnNumber: 80,
+    };
+    const ctx = makeContext([makeSingleDemand()]);
+
+    planTripDeterministic(snap, ctx, memory);
+
+    expect(memory.endGameLocked).toBe(true);
+    expect(mockUpdateMemory).toHaveBeenCalledWith('test-game', 'bot-1', { endGameLocked: true });
+  });
+
+  it('does not set endGameLocked when cash <= 200 and phase is not late', () => {
+    const memory = makeMemory({ deliveryCount: 1 });
+    // money=100, turn=10 (default in makeSnapshot), deliveries=1, cmc=0 → early phase
+    const snap = makeSnapshot({ money: 100 });
+    const ctx = makeContext([makeSingleDemand()]);
+
+    planTripDeterministic(snap, ctx, memory);
+
+    // Lock was not set — remains absent (undefined)
+    expect(memory.endGameLocked).toBeFalsy();
+    expect(mockUpdateMemory).not.toHaveBeenCalledWith('test-game', 'bot-1', { endGameLocked: true });
+  });
+
+  it('endGameLocked remains true when already set (sticky, not re-set on cash dip)', () => {
+    const memory = makeMemory({ endGameLocked: true });
+    // money now only 150 (post-build dip) — lock should stay
+    const snap = makeSnapshot({ money: 150 });
+    const ctx = makeContext([makeSingleDemand()]);
+
+    mockUpdateMemory.mockClear();
+    planTripDeterministic(snap, ctx, memory);
+
+    expect(memory.endGameLocked).toBe(true);
+    // updateMemory should NOT be called again since lock was already set
+    expect(mockUpdateMemory).not.toHaveBeenCalledWith('test-game', 'bot-1', { endGameLocked: true });
+  });
+
+  it('sets endGameLocked=true when citiesConnected >= 5 (late via classifyGamePhase)', () => {
+    const memory = makeMemory({ endGameLocked: false, deliveryCount: 10 });
+    // money=50 but 5 cities connected → late phase
+    const snap = makeSnapshot({ money: 50 });
+    const ctx = makeContext([makeSingleDemand()], {
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E'],
+    });
+
+    planTripDeterministic(snap, ctx, memory);
+
+    expect(memory.endGameLocked).toBe(true);
+    expect(mockUpdateMemory).toHaveBeenCalledWith('test-game', 'bot-1', { endGameLocked: true });
+  });
+});
+
+// ── JIRA-255 Layer B: cheapPrune end-game carve-out ────────────────────
+
+describe('JIRA-255 Layer B: cheapPrune end-game carve-out', () => {
+  const defaultOpts = {
+    pruneMaxTurns: PRUNE_MAX_TURNS,
+    pruneMaxBuildM: PRUNE_MAX_BUILD_M,
+    hopAvgCostM: HOP_AVG_COST_M,
+  };
+
+  beforeEach(() => {
+    mockEstimateGraphPathCost.mockReset();
+  });
+
+  /** Candidate worth payout=67, buildCost=0 → net=67 */
+  function makeWinCandidate() {
+    return {
+      id: 'win-candidate',
+      rows: [],
+      stops: [
+        { action: 'pickup' as const, loadType: 'Hops', city: 'Cardiff' },
+        { action: 'deliver' as const, loadType: 'Hops', city: 'Paris' },
+      ],
+      payout: 67,
+    };
+  }
+
+  it('keeps win-completing candidate with turns=16 when endGameLocked=true (exceeds PRUNE_MAX_TURNS)', () => {
+    // estTurns=16 > PRUNE_MAX_TURNS(12), but win-completing → keep
+    mockEstimateGraphPathCost
+      .mockReturnValueOnce({ reachable: true, buildCost: 0, pathLength: 72, estimatedTurns: 8 })
+      .mockReturnValueOnce({ reachable: true, buildCost: 0, pathLength: 72, estimatedTurns: 8 });
+
+    const memory = { endGameLocked: true };
+    // cash=227, payout=67, estBuild=0 → candidateNet=67 → 227+67=294 >= 280 (fullWinCost with 30M track)
+    const snap = makeSnapshot({ money: 227 });
+    const ctx = {
+      unconnectedMajorCities: [
+        { cityName: 'A', estimatedCost: 5 },
+        { cityName: 'B', estimatedCost: 7 },
+        { cityName: 'C', estimatedCost: 9 },
+        { cityName: 'D', estimatedCost: 9 },
+      ],
+      connectedMajorCities: ['X', 'Y', 'Z'],
+    };
+
+    const result = cheapPrune(makeWinCandidate(), { row: 5, col: 5 }, 9, defaultOpts, snap, memory, ctx);
+    expect(result.keep).toBe(true);
+    expect(result.estTurns).toBe(16);
+  });
+
+  it('prunes win-completing candidate with turns=30 (exceeds WIN_COMPLETING_MAX_TURNS)', () => {
+    // estTurns=30 > WIN_COMPLETING_MAX_TURNS(25) → always pruned
+    mockEstimateGraphPathCost
+      .mockReturnValueOnce({ reachable: true, buildCost: 0, pathLength: 135, estimatedTurns: 15 })
+      .mockReturnValueOnce({ reachable: true, buildCost: 0, pathLength: 135, estimatedTurns: 15 });
+
+    const memory = { endGameLocked: true };
+    const snap = makeSnapshot({ money: 227 });
+    const ctx = {
+      unconnectedMajorCities: [{ cityName: 'A', estimatedCost: 5 }],
+      connectedMajorCities: ['X', 'Y', 'Z', 'W', 'V', 'U'],
+    };
+
+    const result = cheapPrune(makeWinCandidate(), { row: 5, col: 5 }, 9, defaultOpts, snap, memory, ctx);
+    expect(result.keep).toBe(false);
+    expect(result.estTurns).toBe(30);
+  });
+
+  it('prunes a candidate with turns=16 when endGameLocked=false (standard rule applies)', () => {
+    mockEstimateGraphPathCost
+      .mockReturnValueOnce({ reachable: true, buildCost: 0, pathLength: 72, estimatedTurns: 8 })
+      .mockReturnValueOnce({ reachable: true, buildCost: 0, pathLength: 72, estimatedTurns: 8 });
+
+    const memory = { endGameLocked: false };
+    const snap = makeSnapshot({ money: 227 });
+    const result = cheapPrune(makeWinCandidate(), { row: 5, col: 5 }, 9, defaultOpts, snap, memory);
+    expect(result.keep).toBe(false);
+    expect(result.estTurns).toBe(16);
+  });
+
+  it('prunes a non-win-completing candidate even if turns<=WIN_COMPLETING_MAX_TURNS and endGameLocked=true', () => {
+    // turns=16, but net=1 → 227+1=228 < 280 → not win-completing → pruned
+    mockEstimateGraphPathCost
+      .mockReturnValueOnce({ reachable: true, buildCost: 0, pathLength: 72, estimatedTurns: 8 })
+      .mockReturnValueOnce({ reachable: true, buildCost: 0, pathLength: 72, estimatedTurns: 8 });
+
+    const memory = { endGameLocked: true };
+    const snap = makeSnapshot({ money: 227 });
+    const ctx = {
+      unconnectedMajorCities: [
+        { cityName: 'A', estimatedCost: 5 }, { cityName: 'B', estimatedCost: 7 },
+        { cityName: 'C', estimatedCost: 9 }, { cityName: 'D', estimatedCost: 9 },
+      ],
+      connectedMajorCities: ['X', 'Y', 'Z'],
+    };
+    const lowPayoutCandidate = { ...makeWinCandidate(), payout: 1 };
+
+    const result = cheapPrune(lowPayoutCandidate, { row: 5, col: 5 }, 9, defaultOpts, snap, memory, ctx);
+    expect(result.keep).toBe(false);
+  });
+});
+
+// ── JIRA-255 Layer C: end-game two-tier ranking via planTripDeterministic ─
+
+describe('JIRA-255 Layer C: end-game ranking in planTripDeterministic', () => {
+  beforeEach(() => {
+    mockUpdateMemory.mockClear();
+    mockEstimateGraphPathCost.mockReturnValue({
+      buildCost: 0, pathLength: 1, estimatedTurns: 1, reachable: true, newSegments: [],
+    });
+  });
+
+  it('win-completing candidate ranks above non-completing high-velocity candidate when endGameLocked', () => {
+    // Only one demand card — payout=67. With cash=227+67=294 >= 250 → win-completing.
+    // When endGameLocked=true, win-completer always wins.
+    const demandB = makeDemand({ cardIndex: 1, loadType: 'Hops', deliveryCity: 'Paris', payout: 67 });
+
+    mockSimulateTrip.mockReturnValue({
+      feasible: true, finalCashRelative: 67, turnsToComplete: 16, totalBuildCost: 0, builtSegments: [], minCashRelative: 0,
+    });
+
+    const memory = makeMemory({ endGameLocked: true });
+    const snap = makeSnapshot({ money: 227 }); // 227+67=294 >= 250 → win-completing
+    const ctx = makeContext([demandB], {
+      unconnectedMajorCities: [],
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+    });
+
+    const result = planTripDeterministic(snap, ctx, memory);
+    expect(result.route).not.toBeNull();
+    const firstDeliver = result.route?.stops.find(s => s.action === 'deliver');
+    expect(firstDeliver?.city).toBe('Paris');
+  });
+
+  it('among win-completing candidates, fewest-turns wins (ranker test via sorted array)', () => {
+    // We test the sort logic directly on two ScoredCandidates to verify two-tier ranking.
+    // This avoids the complexity of mocking the full planTripDeterministic pipeline
+    // with multiple candidates producing different turn counts.
+    //
+    // Synthetic feasible set: A (turns=16, win-completing), B (turns=9, win-completing)
+    // Expected: B ranks first (fewest turns among completers)
+    const feasibleA = {
+      id: 'A', rows: [], stops: [{ action: 'deliver' as const, loadType: 'Coal', city: 'Berlin' }],
+      payout: 70, buildCost: 0, turns: 16, net: 70, feasible: true,
+      aggregateScore: 70 / 16, aggregateFollowup: null, aggregateEmptyLegTurns: 0,
+      builtSegments: [], endCity: 'Berlin', reasoning: 'A', minCashRelative: 0,
+    };
+    const feasibleB = {
+      id: 'B', rows: [], stops: [{ action: 'deliver' as const, loadType: 'Hops', city: 'Paris' }],
+      payout: 70, buildCost: 0, turns: 9, net: 70, feasible: true,
+      aggregateScore: 70 / 9, aggregateFollowup: null, aggregateEmptyLegTurns: 0,
+      builtSegments: [], endCity: 'Paris', reasoning: 'B', minCashRelative: 0,
+    };
+
+    // Both are win-completing (cash=200, net=70 → 270 >= 250 with no unconnected)
+    const unconnectedMajors: Array<{ cityName: string; estimatedCost: number }> = [];
+    const cmcCount = 7; // all connected → fullWinCost=250
+    const cash = 200;
+
+    // Sort using the Layer C logic manually
+    const { isWinCompleting: winCheck } = require('../../services/ai/winCompletion');
+    const completers = [feasibleA, feasibleB].filter(c => winCheck(cash, c.net, unconnectedMajors, cmcCount));
+    completers.sort((a: typeof feasibleA, b: typeof feasibleB) => a.turns !== b.turns ? a.turns - b.turns : a.id.localeCompare(b.id));
+
+    expect(completers).toHaveLength(2);
+    expect(completers[0].id).toBe('B'); // 9 turns < 16 turns
+    expect(completers[1].id).toBe('A');
+  });
+
+  it('falls back to aggregateScore when endGameLocked=true but no win-completers (single candidate)', () => {
+    // Single demand, no win-completing (cash=50, payout=10 → 60 < 250)
+    const demandA = makeDemand({ cardIndex: 0, loadType: 'Coal', deliveryCity: 'Berlin', payout: 10 });
+
+    mockSimulateTrip.mockReturnValue({
+      feasible: true, finalCashRelative: 10, turnsToComplete: 3, totalBuildCost: 0, builtSegments: [], minCashRelative: 0,
+    });
+
+    const memory = makeMemory({ endGameLocked: true });
+    const snap = makeSnapshot({ money: 50 }); // 50+10=60 << 250 — not win-completing
+    const ctx = makeContext([demandA], {
+      unconnectedMajorCities: [],
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+    });
+
+    const result = planTripDeterministic(snap, ctx, memory);
+    // Should still return a route via velocity fallback
+    expect(result.route).not.toBeNull();
+    const firstDeliver = result.route?.stops.find(s => s.action === 'deliver');
+    expect(firstDeliver?.city).toBe('Berlin');
+  });
+
+  it('uses velocity ranking when endGameLocked=false (single candidate test)', () => {
+    const demandA = makeDemand({ cardIndex: 0, loadType: 'Coal', deliveryCity: 'Berlin', payout: 10 });
+
+    mockSimulateTrip.mockReturnValue({
+      feasible: true, finalCashRelative: 10, turnsToComplete: 3, totalBuildCost: 0, builtSegments: [], minCashRelative: 0,
+    });
+
+    const memory = makeMemory({ endGameLocked: false });
+    const snap = makeSnapshot({ money: 50 });
+    const ctx = makeContext([demandA]);
+
+    const result = planTripDeterministic(snap, ctx, memory);
+    expect(result.route).not.toBeNull();
+    const firstDeliver = result.route?.stops.find(s => s.action === 'deliver');
+    expect(firstDeliver?.city).toBe('Berlin');
+  });
+});
+
+// ── JIRA-255 Layer D: diagnostic logging in reasoning strings ──────────
+
+describe('JIRA-255 Layer D: end-game diagnostic logging in reasoning strings', () => {
+  beforeEach(() => {
+    mockUpdateMemory.mockClear();
+    mockEstimateGraphPathCost.mockReturnValue({
+      buildCost: 0, pathLength: 1, estimatedTurns: 1, reachable: true, newSegments: [],
+    });
+  });
+
+  it('reasoning includes win-completer annotation when endGameLocked=true and candidate wins', () => {
+    // cash=227, payout=67, buildCost=0 → net=67 → 227+67=294 >= 250 → win-completing
+    const demand = makeDemand({ cardIndex: 0, loadType: 'Hops', deliveryCity: 'Paris', payout: 67 });
+
+    // Use correct TripSimulation shape: turnsToComplete + totalBuildCost
+    mockSimulateTrip.mockReturnValue({
+      feasible: true, turnsToComplete: 5, totalBuildCost: 0,
+      builtSegments: [], minCashRelative: 0, finalCashRelative: 67,
+    });
+
+    const memory = makeMemory({ endGameLocked: true });
+    const snap = makeSnapshot({ money: 227 });
+    const ctx = makeContext([demand], {
+      unconnectedMajorCities: [],
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+    });
+
+    const result = planTripDeterministic(snap, ctx, memory);
+    expect(result.reasoning).toContain('win-completer');
+    expect(result.reasoning).toContain('projected $294');
+    expect(result.reasoning).toContain('full win cost $250');
+  });
+
+  it('reasoning includes locked-but-no-completers annotation when endGameLocked=true but not win-completing', () => {
+    // cash=50, payout=10, buildCost=0 → net=10 → 60 < 250 → not win-completing
+    const demand = makeDemand({ cardIndex: 0, loadType: 'Coal', deliveryCity: 'Berlin', payout: 10 });
+
+    mockSimulateTrip.mockReturnValue({
+      feasible: true, turnsToComplete: 3, totalBuildCost: 0,
+      builtSegments: [], minCashRelative: 0, finalCashRelative: 10,
+    });
+
+    const memory = makeMemory({ endGameLocked: true });
+    const snap = makeSnapshot({ money: 50 });
+    const ctx = makeContext([demand], {
+      unconnectedMajorCities: [],
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+    });
+
+    const result = planTripDeterministic(snap, ctx, memory);
+    expect(result.reasoning).toContain('End-game: locked');
+    expect(result.reasoning).toContain('no win-completers in set');
+    expect(result.reasoning).toContain('velocity ranking applied');
+  });
+
+  it('reasoning does NOT contain end-game annotation when endGameLocked=false', () => {
+    const demand = makeDemand({ cardIndex: 0, loadType: 'Coal', deliveryCity: 'Berlin', payout: 10 });
+
+    mockSimulateTrip.mockReturnValue({
+      feasible: true, turnsToComplete: 3, totalBuildCost: 0,
+      builtSegments: [], minCashRelative: 0, finalCashRelative: 10,
+    });
+
+    const memory = makeMemory({ endGameLocked: false });
+    const snap = makeSnapshot({ money: 50 });
+    const ctx = makeContext([demand]);
+
+    const result = planTripDeterministic(snap, ctx, memory);
+    expect(result.reasoning).not.toContain('End-game:');
+    expect(result.reasoning).not.toContain('win-completer');
   });
 });
