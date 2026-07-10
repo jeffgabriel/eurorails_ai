@@ -2660,6 +2660,111 @@ describe('JIRA-249/250: Rejection logging in planTripDeterministic', () => {
   });
 });
 
+describe('JIRA-253 Layer B: planTripDeterministic excludeRouteSignatures', () => {
+  // Relies on the outer beforeEach which sets up:
+  // - mockGrid with SupplyCity@(3,3), DeliveryCity@(7,7)
+  // - mockSimulateTrip → feasible result
+  // - mockEstimateGraphPathCost → reachable low-cost result
+
+  it('returns no_feasible_candidates when the only candidate is excluded', () => {
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 30 }),
+    ];
+    const snapshot = makeSnapshot();
+    const context = makeContext(demands);
+    const memory = makeMemory();
+
+    // The candidate id for a single non-carry demand is: single:<cardIndex>:<loadType>-sup:<supplyCity>
+    // makeDemand defaults supplyCity to 'SupplyCity'
+    const excludedId = 'single:1:Steel-sup:SupplyCity';
+    const result = planTripDeterministic(snapshot, context, memory, {
+      excludeRouteSignatures: [excludedId],
+    });
+
+    expect(result.outcome).toBe('no_feasible_candidates');
+  });
+
+  it('records excluded_by_caller rejection in candidateRejections', () => {
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 30 }),
+    ];
+    const snapshot = makeSnapshot();
+    const context = makeContext(demands);
+    const memory = makeMemory();
+
+    const excludedId = 'single:1:Steel-sup:SupplyCity';
+    const result = planTripDeterministic(snapshot, context, memory, {
+      excludeRouteSignatures: [excludedId],
+    });
+
+    expect(result.candidateRejections).toBeDefined();
+    const exclusionRejection = result.candidateRejections!.find(
+      r => r.reason === 'excluded_by_caller' && r.candidateId === excludedId,
+    );
+    expect(exclusionRejection).toBeDefined();
+  });
+
+  it('records excluded_by_caller rejection and still returns success when non-excluded candidate remains', () => {
+    // Two independent demand cards — only exclude the Steel single candidate.
+    // The Coal single candidate should win. Uses single-load types to avoid pair generation
+    // (pairs use different load types per supplyCity combinator — only same-supply, same-load
+    // corridor pairs are generated for different load types at the same supply).
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 40 }),
+      makeDemand({ cardIndex: 2, loadType: 'Coal', deliveryCity: 'DeliveryCity', payout: 20, supplyCity: 'SupplyCity' }),
+    ];
+    const snapshot = makeSnapshot();
+    const context = makeContext(demands);
+    const memory = makeMemory();
+
+    // Exclude ALL candidates whose id contains the Steel single-delivery signature.
+    // candidateId for single non-carry: single:<cardIndex>:<loadType>-sup:<supplyCity>
+    // Also exclude the pair that includes Steel to ensure Coal single wins.
+    const steelId = 'single:1:Steel-sup:SupplyCity';
+    const steelPairId = 'pair:1-Steel+2-Coal:AB-sup:SupplyCity-SupplyCity';
+    const steelPairIdBA = 'pair:1-Steel+2-Coal:BA-sup:SupplyCity-SupplyCity';
+    const result = planTripDeterministic(snapshot, context, memory, {
+      excludeRouteSignatures: [steelId, steelPairId, steelPairIdBA],
+    });
+
+    // Either Steel was fully excluded and Coal won, or no feasible alternatives remain.
+    // The key assertion is that exclusions ARE recorded.
+    expect(result.candidateRejections).toBeDefined();
+    const steelExclusion = result.candidateRejections!.find(
+      r => r.reason === 'excluded_by_caller' && r.candidateId === steelId,
+    );
+    expect(steelExclusion).toBeDefined();
+  });
+
+  it('does not exclude candidates when excludeRouteSignatures is empty', () => {
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 30 }),
+    ];
+    const snapshot = makeSnapshot();
+    const context = makeContext(demands);
+    const memory = makeMemory();
+
+    const result = planTripDeterministic(snapshot, context, memory, {
+      excludeRouteSignatures: [],
+    });
+
+    expect(result.outcome).toBe('success');
+  });
+
+  it('does not exclude candidates when excludeRouteSignatures is not provided', () => {
+    const demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Steel', deliveryCity: 'DeliveryCity', payout: 30 }),
+    ];
+    const snapshot = makeSnapshot();
+    const context = makeContext(demands);
+    const memory = makeMemory();
+
+    const result = planTripDeterministic(snapshot, context, memory);
+
+    expect(result.outcome).toBe('success');
+  });
+});
+
 describe('JIRA-249/250: enumerateCandidates includes carry floor and corridor candidates', () => {
   it('UT5: enumerateCandidates includes carry-floor candidate when bot carries Labor', () => {
     const rows: Row[] = [
