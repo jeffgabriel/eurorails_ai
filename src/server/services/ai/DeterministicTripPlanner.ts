@@ -309,12 +309,17 @@ export function detectCarriedLoads(
     }
   }
 
-  // Signal 2: implicit carry from activeRoute stops (deliver with no preceding pickup).
-  // Only fires when cargoLoads is empty or lacks the loadType (stale snapshot defense).
+  // Signal 2: implicit carry from activeRoute REMAINING stops (deliver with no
+  // preceding pickup, considering only stops at or after currentStopIndex).
+  // Walking the entire stops array would treat already-executed deliveries as
+  // evidence of current carry — see JIRA-263, game 8e176094 s3 T44 where a
+  // delivered Bauxite stop produced a phantom-carry signal that polluted a
+  // fresh same-loadType demand drawn from the post-delivery card replacement.
   const implicitCarry = new Set<string>();
   if (activeRoute?.stops) {
+    const remaining = activeRoute.stops.slice(activeRoute.currentStopIndex);
     const pickedUp = new Set<string>();
-    for (const stop of activeRoute.stops) {
+    for (const stop of remaining) {
       if (stop.action === 'pickup') {
         pickedUp.add(stop.loadType);
       } else if (stop.action === 'deliver' && !pickedUp.has(stop.loadType)) {
