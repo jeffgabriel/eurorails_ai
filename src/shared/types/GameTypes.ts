@@ -434,10 +434,20 @@ export enum AIActionType {
     DiscardHand = 'DiscardHand',
 }
 
-/** Timeline step types for animated partial turn movements */
+/**
+ * Timeline step types for animated partial turn movements.
+ *
+ * JIRA-258: the `outcome` and `rejectionCode` fields are optional and surface
+ * when the rule layer rejected this step (e.g., active event card restriction).
+ * Steps with `outcome: 'rejected'` did NOT successfully execute — earlier
+ * steps in the same plan did execute and commit; later steps were not
+ * attempted (executeMultiAction stops on first failure).
+ */
 export interface MoveTimelineStep {
   type: 'move';
   path: { row: number; col: number }[];
+  outcome?: 'rejected';
+  rejectionCode?: string;
 }
 
 export interface DeliverTimelineStep {
@@ -446,18 +456,24 @@ export interface DeliverTimelineStep {
   city: string;
   payment: number;
   cardId: number;
+  outcome?: 'rejected';
+  rejectionCode?: string;
 }
 
 export interface PickupTimelineStep {
   type: 'pickup';
   loadType: string;
   city: string;
+  outcome?: 'rejected';
+  rejectionCode?: string;
 }
 
 export interface BuildTimelineStep {
   type: 'build';
   segmentsBuilt: number;
   cost: number;
+  outcome?: 'rejected';
+  rejectionCode?: string;
 }
 
 export interface UpgradeTimelineStep {

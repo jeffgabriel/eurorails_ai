@@ -175,4 +175,76 @@ describe('buildActionTimeline', () => {
     expect(result).toHaveLength(5);
     expect(result.map(s => s.type)).toEqual(['move', 'pickup', 'move', 'deliver', 'move']);
   });
+
+  // JIRA-258: when a step is rejected, the failed step is annotated with
+  // outcome: 'rejected' and any steps after it are dropped from the timeline.
+  describe('JIRA-258 rejection annotation', () => {
+    it('annotates the failed step with outcome: rejected and rejectionCode when failedStepIndex is provided', () => {
+      const steps: TurnPlan[] = [
+        {
+          type: AIActionType.DeliverLoad,
+          load: 'Marble',
+          city: 'London',
+          cardId: 43,
+          payout: 31,
+        },
+      ];
+      const result = AIStrategyEngine.buildActionTimeline(steps, 0, 'COASTAL_STRIKE_BLOCKED');
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        type: 'deliver',
+        loadType: 'Marble',
+        city: 'London',
+        outcome: 'rejected',
+        rejectionCode: 'COASTAL_STRIKE_BLOCKED',
+      });
+    });
+
+    it('drops steps after the failed step (those steps were never attempted)', () => {
+      const steps: TurnPlan[] = [
+        {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 1, col: 1 }, { row: 1, col: 2 }],
+          fees: new Set(),
+          totalFee: 0,
+        } as any,
+        {
+          type: AIActionType.DeliverLoad,
+          load: 'Marble',
+          city: 'London',
+          cardId: 43,
+          payout: 31,
+        } as any,
+        {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 1, col: 2 }, { row: 1, col: 3 }],
+          fees: new Set(),
+          totalFee: 0,
+        } as any,
+      ];
+      const result = AIStrategyEngine.buildActionTimeline(steps, 1, 'COASTAL_STRIKE_BLOCKED');
+      // First move (succeeded) + rejected deliver. The second move is dropped (not attempted).
+      expect(result).toHaveLength(2);
+      expect(result[0].type).toBe('move');
+      expect((result[0] as any).outcome).toBeUndefined();
+      expect(result[1]).toMatchObject({ type: 'deliver', outcome: 'rejected', rejectionCode: 'COASTAL_STRIKE_BLOCKED' });
+    });
+
+    it('regression guard: no failedStepIndex means no rejection annotation (existing callers unchanged)', () => {
+      const steps: TurnPlan[] = [
+        {
+          type: AIActionType.DeliverLoad,
+          load: 'Marble',
+          city: 'London',
+          cardId: 43,
+          payout: 31,
+        },
+      ];
+      const result = AIStrategyEngine.buildActionTimeline(steps);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ type: 'deliver' });
+      expect((result[0] as any).outcome).toBeUndefined();
+      expect((result[0] as any).rejectionCode).toBeUndefined();
+    });
+  });
 });
