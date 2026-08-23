@@ -14,6 +14,7 @@ import {
   RouteStop,
   StrategicRoute,
   GameContext,
+  GameState,
   WorldSnapshot,
   VICTORY_CITY_COUNT,
   TrackSegment,
@@ -21,20 +22,6 @@ import {
 import { loadGridPoints, hexDistance, GridCoord } from '../MapTopology';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 import { computeBuildSegments } from './computeBuildSegments';
-
-/**
- * Cash threshold (ECU M) at which the planner shifts to victory-build mode,
- * prioritising unconnected major-city connections over delivery routing.
- *
- * Set below the actual game-end threshold (VICTORY_INITIAL_THRESHOLD = 250M)
- * so the bot starts pacing toward the city goal while it still has runway to
- * accumulate the final cash via deliveries during the build phase. Observed
- * symptom before this lead: winner in game 38e92b14 sat at 220M cash with 4
- * cities for ~8 turns, never triggering victory builds because the threshold
- * was 250M. Lowering to 230M gives a 20M head-start that recovers within
- * 1-2 deliveries during the city-build sprint.
- */
-const VICTORY_BUILD_TRIGGER_M = 230;
 
 /**
  * Large build budget used by isStructurallyReachable to simulate an effectively
@@ -185,9 +172,10 @@ function hasNearbyHighValueDelivery(
  * what city the bot should extend its track toward this turn.
  *
  * Resolution order:
- * 1. Victory build override: if bot has ≥VICTORY_BUILD_TRIGGER_M (230M) and
- *    fewer than 7 connected major cities, target the cheapest unconnected
- *    major city (bypasses JIT gate).
+ * 1. Victory build override: if `gameState === End` and the bot has fewer
+ *    than 7 connected major cities, target the cheapest unconnected major
+ *    city (bypasses JIT gate). JIRA-266 replaced the prior `money >= 230M`
+ *    gate — the end-game latch (cash > 200M, sticky) is the right signal.
  * 2. Route-based target: iterate stops from currentStopIndex; return the first
  *    stop whose city is off-network (skipping the route's startingCity).
  * 3. Null: all remaining stops are on-network — no build needed.
@@ -200,16 +188,21 @@ export function resolveBuildTarget(
   route: StrategicRoute,
   context: GameContext,
 ): BuildTargetResult | null {
-  // Victory build override — bot is close to winning but needs more major cities.
+  // Victory build override — bot is in end-game but still needs more majors.
   //
-  // JIRA-243 reverts JIRA-241's End-state suppression. With End-state scoring's
-  // payoff cap at zero (cash ≥ 250M), every candidate scores negative and the
-  // planner picks zero-build same-network routes forever; the city count gets
-  // stuck. Letting the victory-build branch fire in End restores the pre-JIRA-241
-  // fallback: target the cheapest unconnected major and build toward it until
-  // 7 cities are connected.
+  // JIRA-266: gate on the persistent end-game latch (gameState === End, set
+  // by ContextBuilder when cash > 200M, sticky) instead of a cash threshold.
+  // The prior $230M cash gate (originally $250M before JIRA-243) was a tuning
+  // attempt at the same defect: when a bot entered end-game between $200M
+  // and $230M and stayed there for many turns waiting for a delivery, no
+  // connector building happened. The natural gate is the latch — same signal
+  // applyEndStateScoring uses elsewhere.
+  //
+  // JIRA-243 (preserved): victory-build was suppressed in End by JIRA-241's
+  // negative-score path; this branch firing in End restores connector
+  // building when it matters most.
   const isVictoryEligible =
-    context.money >= VICTORY_BUILD_TRIGGER_M &&
+    context.gameState === GameState.End &&
     context.connectedMajorCities.length < VICTORY_CITY_COUNT;
 
   if (isVictoryEligible) {
