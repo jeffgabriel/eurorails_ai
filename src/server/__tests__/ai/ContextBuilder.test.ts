@@ -2,7 +2,7 @@ import { ContextBuilder } from '../../services/ai/ContextBuilder';
 import {
   GridPoint, TerrainType, TrackSegment, TrackNetwork,
   WorldSnapshot, BotSkillLevel, GameStatus,
-  GameState,
+  GameState, BotMemoryState,
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 
@@ -4018,5 +4018,71 @@ describe('ContextBuilder.build — context.loads is independent of snapshot.bot.
     // snapshot.bot.loads must remain unchanged
     expect(snapshot.bot.loads).toEqual(['Steel']);
     expect(context.loads).toEqual(['Steel', 'Cheese']);
+  });
+});
+
+// ── JIRA-265 Layer 2: endGameLocked latch in ContextBuilder ─────────────────
+
+describe('ContextBuilder.build — endGameLocked latch (JIRA-265 Layer 2)', () => {
+  function makeMemoryWithLock(endGameLocked = false): BotMemoryState {
+    return {
+      currentBuildTarget: null,
+      turnsOnTarget: 0,
+      lastAction: null,
+      consecutiveDiscards: 0,
+      deliveryCount: 0,
+      totalEarnings: 0,
+      turnNumber: 0,
+      activeRoute: null,
+      turnsOnRoute: 0,
+      routeHistory: [],
+      lastReasoning: null,
+      lastPlanHorizon: null,
+      previousRouteStops: null,
+      consecutiveLlmFailures: 0,
+      endGameLocked,
+    };
+  }
+
+  it('JIRA-265 AC4: latches endGameLocked=true when cash > $200M on a route-executor turn (no replan needed)', async () => {
+    // Bot has $250M cash but no active route / no replan involved — pure
+    // ContextBuilder.build invocation, which is the path that runs every turn.
+    const snapshot = makeWorldSnapshot({
+      botMoney: 250,
+      botPosition: { row: 0, col: 0 },
+      botSegments: [],
+      resolvedDemands: [],
+    });
+    const memory = makeMemoryWithLock(false);
+    await ContextBuilder.build(snapshot, BotSkillLevel.Medium, [], memory);
+    expect(memory.endGameLocked).toBe(true);
+  });
+
+  it('JIRA-265 AC5: endGameLocked is sticky — stays true after cash dips below $200M', async () => {
+    // Memory already has endGameLocked=true (set on an earlier turn). This
+    // turn the bot has $150M cash (post-build dip). The latch must NOT reset.
+    const snapshot = makeWorldSnapshot({
+      botMoney: 150,
+      botPosition: { row: 0, col: 0 },
+      botSegments: [],
+      resolvedDemands: [],
+    });
+    const memory = makeMemoryWithLock(true);
+    await ContextBuilder.build(snapshot, BotSkillLevel.Medium, [], memory);
+    expect(memory.endGameLocked).toBe(true);
+  });
+
+  it('does NOT latch when cash ≤ $200M and not in late phase', async () => {
+    // $200M is the boundary — must be > 200 to trigger.
+    const snapshot = makeWorldSnapshot({
+      botMoney: 200,
+      botPosition: { row: 0, col: 0 },
+      botSegments: [],
+      resolvedDemands: [],
+      turnNumber: 10, // early-mid, not late
+    });
+    const memory = makeMemoryWithLock(false);
+    await ContextBuilder.build(snapshot, BotSkillLevel.Medium, [], memory);
+    expect(memory.endGameLocked).toBeFalsy();
   });
 });

@@ -16,6 +16,9 @@ import {
   cheapestNUnconnectedMajorConnectorCost,
   detectVictoryClinch,
   findFinalVictoryRoute,
+  findFinalVictoryOutcome,
+  buildEndGameTrace,
+  type FinalVictoryOutcome,
 } from '../../services/ai/victoryRules';
 import { GameState, GameContext, TrainType, WorldSnapshot } from '../../../shared/types/GameTypes';
 import type { BotMemoryState, DemandContext } from '../../../shared/types/GameTypes';
@@ -695,5 +698,208 @@ describe('findFinalVictoryRoute', () => {
     const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
     expect(result).not.toBeNull();
     expect(result!.reasoning).toMatch(/^\[final-victory\]/);
+  });
+});
+
+// ── findFinalVictoryOutcome (JIRA-265) ───────────────────────────────────────
+
+describe('findFinalVictoryOutcome', () => {
+  // JIRA-265 AC2: skip-reason exposure on the null path
+  it('returns skip:not_in_end_state when context.gameState is not End', () => {
+    const snapshot = makeSnapshot();
+    const ctx = makeEndContext({ gameState: GameState.Mid, demands: [makeDemand()] });
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+    expect(result.outcome).toBe('skip');
+    if (result.outcome === 'skip') expect(result.reason).toBe('not_in_end_state');
+  });
+
+  it('returns skip:no_demands when demand hand is empty', () => {
+    const snapshot = makeSnapshot();
+    const ctx = makeEndContext({ demands: [] });
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+    expect(result.outcome).toBe('skip');
+    if (result.outcome === 'skip') expect(result.reason).toBe('no_demands');
+  });
+
+  it('returns skip:victory_met when both gaps are zero (game should have ended)', () => {
+    const snapshot = makeSnapshot();
+    const ctx = makeEndContext({
+      money: 250,
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+      demands: [makeDemand()],
+    });
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+    expect(result.outcome).toBe('skip');
+    if (result.outcome === 'skip') expect(result.reason).toBe('victory_met');
+  });
+
+  it('returns skip:no_route_covers_gap when no candidate clears the cashGap', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    // cashGap = 250 - 200 = 50M. Only demand pays $10M with on-network supply/delivery.
+    const ctx = makeEndContext({
+      money: 200,
+      demands: [
+        makeDemand({ payout: 10, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true }),
+      ],
+    });
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+    expect(result.outcome).toBe('skip');
+    if (result.outcome === 'skip') {
+      expect(result.reason).toBe('no_route_covers_gap');
+      expect(result.cashGap).toBe(50);
+    }
+  });
+
+  it('returns fire with route + gap details when a feasible candidate exists', () => {
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
+    const ctx = makeEndContext({
+      money: 241,
+      demands: [
+        makeDemand({
+          payout: 10, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2,
+        }),
+      ],
+    });
+    const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
+    expect(result.outcome).toBe('fire');
+    if (result.outcome === 'fire') {
+      expect(result.route.reasoning).toMatch(/^\[final-victory\]/);
+      expect(result.cashGap).toBe(9);
+    }
+  });
+
+  it('legacy findFinalVictoryRoute still returns route on fire and null on skip', () => {
+    const snapshot = makeSnapshot();
+    const ctxSkip = makeEndContext({ demands: [] });
+    expect(findFinalVictoryRoute(snapshot, ctxSkip, makeEndMemory())).toBeNull();
+
+    const ctxFire = makeEndContext({
+      money: 241,
+      demands: [
+        makeDemand({ payout: 10, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
+      ],
+    });
+    expect(findFinalVictoryRoute(snapshot, ctxFire, makeEndMemory())).not.toBeNull();
+  });
+});
+
+// ── buildEndGameTrace (JIRA-265) ─────────────────────────────────────────────
+
+describe('buildEndGameTrace', () => {
+  it('JIRA-265 AC1: trace populated with cashGap/majorsGap/cheapestConnectors/fullWinCostM', () => {
+    const ctx = makeEndContext({
+      money: 210,
+      connectedMajorCities: ['Ruhr', 'Berlin', 'Madrid', 'London'],
+      unconnectedMajorCities: [
+        { cityName: 'Holland', estimatedCost: 20 },
+        { cityName: 'Paris', estimatedCost: 15 },
+        { cityName: 'Wien', estimatedCost: 25 },
+        { cityName: 'Milano', estimatedCost: 30 },
+      ],
+    });
+    const memory = makeEndMemory();
+    const skipOutcome: FinalVictoryOutcome = { outcome: 'skip', reason: 'no_route_covers_gap', cashGap: 40, majorsGap: 3, connectorCost: 60 };
+    const trace = buildEndGameTrace(ctx, memory, skipOutcome, false, null);
+
+    expect(trace.inEndGame).toBe(true);
+    expect(trace.cashGapM).toBe(40);
+    expect(trace.majorsGap).toBe(3);
+    expect(trace.cheapestConnectors).toEqual([
+      { cityName: 'Holland', costM: 20 },
+      { cityName: 'Paris', costM: 15 },
+      { cityName: 'Wien', costM: 25 },
+    ]);
+    expect(trace.fullWinCostM).toBe(100); // 40 + 20 + 15 + 25
+  });
+
+  it('JIRA-265 AC2: victoryRouteProjection carries skip reason', () => {
+    const ctx = makeEndContext({ money: 210 });
+    const skipOutcome: FinalVictoryOutcome = { outcome: 'skip', reason: 'no_feasible_demands' };
+    const trace = buildEndGameTrace(ctx, makeEndMemory(), skipOutcome, false, null);
+    expect(trace.victoryRouteProjection.outcome).toBe('skip');
+    if (trace.victoryRouteProjection.outcome === 'skip') {
+      expect(trace.victoryRouteProjection.reason).toBe('no_feasible_demands');
+    }
+  });
+
+  it('JIRA-265 AC3: victoryRouteProjection carries fire details + appliedOverride flag', () => {
+    const ctx = makeEndContext({ money: 241 });
+    const fireOutcome: FinalVictoryOutcome = {
+      outcome: 'fire',
+      cashGap: 9, majorsGap: 0, connectorCost: 0,
+      route: {
+        stops: [
+          { action: 'pickup', loadType: 'Beer', city: 'Munchen' },
+          { action: 'deliver', loadType: 'Beer', city: 'Hamburg', demandCardId: 1, payment: 9 },
+        ],
+        estimatedTurns: 3, buildCost: 0, totalPayout: 9,
+        cashAtVictory: 250, majorsAtVictory: 7,
+        majorConnectors: [],
+        reasoning: '[final-victory] Beer→Hamburg, turns=3, build=0M, payout=9M, cash@victory=250M, majors@victory=7',
+      },
+    };
+    const trace = buildEndGameTrace(ctx, makeEndMemory(), fireOutcome, true, null);
+    expect(trace.victoryRouteProjection.outcome).toBe('fire');
+    if (trace.victoryRouteProjection.outcome === 'fire') {
+      expect(trace.victoryRouteProjection.turns).toBe(3);
+      expect(trace.victoryRouteProjection.payoutM).toBe(9);
+      expect(trace.victoryRouteProjection.cashAtVictory).toBe(250);
+      expect(trace.victoryRouteProjection.appliedOverride).toBe(true);
+      expect(trace.victoryRouteProjection.stops).toEqual([
+        'pickup:Beer@Munchen',
+        'deliver:Beer@Hamburg',
+      ]);
+    }
+  });
+
+  it('JIRA-265 AC7-component: activePlanProjection.willClinch reflects route payouts + connector deliveries', () => {
+    const ctx = makeEndContext({
+      money: 228,
+      connectedMajorCities: ['Ruhr', 'Berlin', 'Madrid', 'London', 'Wien', 'Paris', 'Milano'], // 7 already
+      unconnectedMajorCities: [{ cityName: 'Holland', estimatedCost: 20 }],
+    });
+    const activeRoute = {
+      stops: [
+        { action: 'deliver' as const, loadType: 'Copper', city: 'Cardiff', demandCardId: 99, payment: 31 },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel' as const,
+      createdAtTurn: 76,
+      reasoning: 'test',
+    };
+    const skipOutcome: FinalVictoryOutcome = { outcome: 'skip', reason: 'no_route_covers_gap' };
+    const trace = buildEndGameTrace(ctx, makeEndMemory(), skipOutcome, false, activeRoute);
+    expect(trace.activePlanProjection).toBeDefined();
+    expect(trace.activePlanProjection!.projectedCash).toBe(259); // 228 + 31
+    expect(trace.activePlanProjection!.projectedMajors).toBe(7); // already 7, Cardiff not a major
+    expect(trace.activePlanProjection!.willClinch).toBe(true); // 259 >= 250 AND 7 >= 7
+    expect(trace.activePlanProjection!.remainingStops).toBe(1);
+  });
+
+  it('activePlanProjection.willClinch=false when projectedCash insufficient', () => {
+    const ctx = makeEndContext({
+      money: 200,
+      connectedMajorCities: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+    });
+    const activeRoute = {
+      stops: [
+        { action: 'deliver' as const, loadType: 'X', city: 'CityX', demandCardId: 1, payment: 10 },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel' as const,
+      createdAtTurn: 50,
+      reasoning: 'test',
+    };
+    const skipOutcome: FinalVictoryOutcome = { outcome: 'skip', reason: 'no_route_covers_gap' };
+    const trace = buildEndGameTrace(ctx, makeEndMemory(), skipOutcome, false, activeRoute);
+    expect(trace.activePlanProjection!.projectedCash).toBe(210);
+    expect(trace.activePlanProjection!.willClinch).toBe(false); // 210 < 250
+  });
+
+  it('activePlanProjection undefined when activeRoute is null', () => {
+    const ctx = makeEndContext({ money: 210 });
+    const skipOutcome: FinalVictoryOutcome = { outcome: 'skip', reason: 'no_route_covers_gap' };
+    const trace = buildEndGameTrace(ctx, makeEndMemory(), skipOutcome, false, null);
+    expect(trace.activePlanProjection).toBeUndefined();
   });
 });

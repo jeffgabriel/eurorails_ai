@@ -17,6 +17,7 @@ import {
   VICTORY_CITY_COUNT,
   VICTORY_INITIAL_THRESHOLD,
   RouteStop,
+  StrategicRoute,
   TrainType,
   TRAIN_PROPERTIES,
   WorldSnapshot,
@@ -203,6 +204,73 @@ export interface FinalVictoryRoute {
 }
 
 /**
+ * JIRA-265: Discriminated-union outcome of a victory-route search.
+ * `findFinalVictoryRoute` returns a `FinalVictoryRoute | null` for callers that
+ * only care about the route. `findFinalVictoryOutcome` exposes the same
+ * computation but with the skip reason preserved so per-turn NDJSON logging can
+ * answer "why did this turn not produce a victory route override?" without
+ * re-running the search with stdout capture.
+ */
+export type FinalVictoryOutcomeSkipReason =
+  | 'not_in_end_state'
+  | 'no_demands'
+  | 'victory_met'
+  | 'no_feasible_demands'
+  | 'no_route_covers_gap';
+
+export type FinalVictoryOutcome =
+  | { outcome: 'fire'; route: FinalVictoryRoute; cashGap: number; majorsGap: number; connectorCost: number }
+  | { outcome: 'skip'; reason: FinalVictoryOutcomeSkipReason; cashGap?: number; majorsGap?: number; connectorCost?: number };
+
+/**
+ * JIRA-265: Per-turn end-game trace for the NDJSON log. Surfaces everything a
+ * post-game reader needs to answer "what does the bot need to win, and what's
+ * its plan to get there?" without re-running the search with stdout capture.
+ *
+ * Populated by AIStrategyEngine on every turn where `gameState === 'end'`.
+ */
+export interface EndGameTrace {
+  /** Always true when this trace is emitted (the GameLogger field is absent otherwise). */
+  inEndGame: true;
+  /** Snapshot of memory.endGameLocked AFTER this turn's latch decision. */
+  endGameLocked: boolean;
+  /** max(0, 250 − cash). Zero when cash already meets the victory threshold. */
+  cashGapM: number;
+  /** max(0, 7 − connectedMajorCities.length). Zero when city condition already met. */
+  majorsGap: number;
+  /** The cheapest `majorsGap` unconnected majors, sorted ascending by estimated track-cost. */
+  cheapestConnectors: Array<{ cityName: string; costM: number }>;
+  /** cashGapM + Σ cheapestConnectors.costM. Lower bound on the spend required to win. */
+  fullWinCostM: number;
+  /** Per-turn outcome of findFinalVictoryRoute, including the skip reason when no route fires. */
+  victoryRouteProjection:
+    | {
+        outcome: 'fire';
+        /** "pickup:Beer@Munchen, deliver:Beer@Hamburg" style stop summary. */
+        stops: string[];
+        turns: number;
+        buildM: number;
+        payoutM: number;
+        cashAtVictory: number;
+        majorsAtVictory: number;
+        /** True when AIStrategyEngine replaced activeRoute with this projection; false when JIRA-261 routesMatch suppressed the override. */
+        appliedOverride: boolean;
+      }
+    | { outcome: 'skip'; reason: FinalVictoryOutcomeSkipReason };
+  /** Projection of the bot's CURRENT activeRoute outcome, if any. Absent when no activeRoute. */
+  activePlanProjection?: {
+    /** True when the route's deliveries + connector closures would meet both victory conditions. */
+    willClinch: boolean;
+    /** money + Σ deliveries.payment in the remaining route. */
+    projectedCash: number;
+    /** connectedMajorCities.length + count of route deliveries to unconnected majors. */
+    projectedMajors: number;
+    /** Best-effort estimate of remaining stops; uses route length as a proxy until a turn estimator is wired. */
+    remainingStops: number;
+  };
+}
+
+/**
  * Internal candidate structure during route search.
  */
 interface VictoryCandidate {
@@ -318,19 +386,37 @@ function demandBuildCost(
  * @param memory   - Persistent bot memory (for gameState latch).
  * @returns The fastest feasible victory route, or null.
  */
-export function findFinalVictoryRoute(
+/**
+ * JIRA-265: Outcome-returning variant of findFinalVictoryRoute. Preserves the
+ * skip reason on the null path so callers (e.g. the per-turn NDJSON endGame
+ * trace in AIStrategyEngine) can record WHY no override fired without
+ * re-running the search.
+ *
+ * Skip reasons:
+ *   not_in_end_state       — context.gameState !== End
+ *   no_demands             — context.demands empty
+ *   victory_met            — both gaps zero (game should already have ended)
+ *   no_feasible_demands    — every demand has unreachable supply/delivery
+ *   no_route_covers_gap    — at least one feasible demand exists but no
+ *                            single/pair/triple combination has
+ *                            payout − buildCost − connectorCost ≥ cashGap
+ *
+ * `findFinalVictoryRoute` is a thin wrapper that maps fire→route, skip→null
+ * for backward compatibility with existing call sites and tests.
+ */
+export function findFinalVictoryOutcome(
   snapshot: WorldSnapshot,
   context: GameContext,
   memory: BotMemoryState,
-): FinalVictoryRoute | null {
+): FinalVictoryOutcome {
   // Gate: only in End state.
   if (context.gameState !== GameState.End) {
-    return null;
+    return { outcome: 'skip', reason: 'not_in_end_state' };
   }
 
   if (!context.demands || context.demands.length === 0) {
     console.log('[final-victory] skip: no demands in hand');
-    return null;
+    return { outcome: 'skip', reason: 'no_demands' };
   }
 
   const cashGap = Math.max(0, VICTORY_INITIAL_THRESHOLD - context.money);
@@ -342,7 +428,7 @@ export function findFinalVictoryRoute(
   // should have ended — log a warning and fall through.
   if (cashGap === 0 && majorsGap === 0) {
     console.log('[final-victory] skip: victory conditions already met — game should have ended');
-    return null;
+    return { outcome: 'skip', reason: 'victory_met', cashGap, majorsGap, connectorCost };
   }
 
   // Determine train properties.
@@ -362,7 +448,7 @@ export function findFinalVictoryRoute(
 
   if (feasibleDemands.length === 0) {
     console.log('[final-victory] skip: no feasible demands (supply/delivery unreachable)');
-    return null;
+    return { outcome: 'skip', reason: 'no_feasible_demands', cashGap, majorsGap, connectorCost };
   }
 
   const candidates: VictoryCandidate[] = [];
@@ -460,7 +546,7 @@ export function findFinalVictoryRoute(
     console.log(
       `[final-victory] skip: no route covers cashGap=${cashGap}M + connectorCost=${connectorCost}M`,
     );
-    return null;
+    return { outcome: 'skip', reason: 'no_route_covers_gap', cashGap, majorsGap, connectorCost };
   }
 
   // Rank: minimum estimatedTurns ASC; tiebreak maximum cashAtVictory DESC.
@@ -479,7 +565,7 @@ export function findFinalVictoryRoute(
 
   console.log(reasoning);
 
-  return {
+  const route: FinalVictoryRoute = {
     stops: best.stops,
     estimatedTurns: best.estimatedTurns,
     buildCost: best.buildCost,
@@ -488,5 +574,92 @@ export function findFinalVictoryRoute(
     majorsAtVictory: best.majorsAtVictory,
     majorConnectors: best.majorConnectors,
     reasoning,
+  };
+  return { outcome: 'fire', route, cashGap, majorsGap, connectorCost };
+}
+
+/**
+ * Legacy wrapper for `findFinalVictoryOutcome` — returns the route on fire,
+ * null on any skip. Preserved for backward compatibility with existing call
+ * sites and tests that don't need the skip reason.
+ */
+export function findFinalVictoryRoute(
+  snapshot: WorldSnapshot,
+  context: GameContext,
+  memory: BotMemoryState,
+): FinalVictoryRoute | null {
+  const result = findFinalVictoryOutcome(snapshot, context, memory);
+  return result.outcome === 'fire' ? result.route : null;
+}
+
+/**
+ * JIRA-265: Compose the per-turn EndGameTrace from the outcome of
+ * findFinalVictoryOutcome + the current context, memory, and (optionally) the
+ * activeRoute that will execute this turn. AIStrategyEngine calls this once
+ * per turn when context.gameState === End and threads the result into the
+ * NDJSON turn-log entry's `endGame` field.
+ *
+ * `appliedOverride` is supplied by the caller because the override decision is
+ * made in AIStrategyEngine (after the JIRA-261 routesMatch check), not here.
+ */
+export function buildEndGameTrace(
+  context: GameContext,
+  memory: BotMemoryState,
+  outcome: FinalVictoryOutcome,
+  appliedOverride: boolean,
+  activeRoute: StrategicRoute | null,
+): EndGameTrace {
+  const cashGapM = Math.max(0, VICTORY_INITIAL_THRESHOLD - context.money);
+  const majorsGap = Math.max(0, VICTORY_CITY_COUNT - context.connectedMajorCities.length);
+  const cheapestConnectors = (context.unconnectedMajorCities ?? [])
+    .slice(0, majorsGap)
+    .map((e) => ({ cityName: e.cityName, costM: e.estimatedCost }));
+  const fullWinCostM = cashGapM + cheapestConnectors.reduce((s, c) => s + c.costM, 0);
+
+  let victoryRouteProjection: EndGameTrace['victoryRouteProjection'];
+  if (outcome.outcome === 'fire') {
+    const stops = outcome.route.stops.map((s) => `${s.action}:${s.loadType}@${s.city}`);
+    victoryRouteProjection = {
+      outcome: 'fire',
+      stops,
+      turns: outcome.route.estimatedTurns,
+      buildM: outcome.route.buildCost,
+      payoutM: outcome.route.totalPayout,
+      cashAtVictory: outcome.route.cashAtVictory,
+      majorsAtVictory: outcome.route.majorsAtVictory,
+      appliedOverride,
+    };
+  } else {
+    victoryRouteProjection = { outcome: 'skip', reason: outcome.reason };
+  }
+
+  let activePlanProjection: EndGameTrace['activePlanProjection'];
+  if (activeRoute && activeRoute.stops.length > activeRoute.currentStopIndex) {
+    const remaining = activeRoute.stops.slice(activeRoute.currentStopIndex);
+    const remainingStops = remaining.length;
+    const connectorCitySet = new Set(cheapestConnectors.map((c) => c.cityName));
+    let projectedPayout = 0;
+    let connectorAdds = 0;
+    for (const s of remaining) {
+      if (s.action === 'deliver') {
+        projectedPayout += s.payment ?? 0;
+        if (connectorCitySet.has(s.city)) connectorAdds += 1;
+      }
+    }
+    const projectedCash = context.money + projectedPayout;
+    const projectedMajors = context.connectedMajorCities.length + connectorAdds;
+    const willClinch = projectedCash >= VICTORY_INITIAL_THRESHOLD && projectedMajors >= VICTORY_CITY_COUNT;
+    activePlanProjection = { willClinch, projectedCash, projectedMajors, remainingStops };
+  }
+
+  return {
+    inEndGame: true,
+    endGameLocked: !!memory.endGameLocked,
+    cashGapM,
+    majorsGap,
+    cheapestConnectors,
+    fullWinCostM,
+    victoryRouteProjection,
+    activePlanProjection,
   };
 }
