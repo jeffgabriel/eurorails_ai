@@ -8,6 +8,11 @@
  * - cheapestNUnconnectedMajorConnectorCost: n=0, n>available, n=partial
  * - detectVictoryClinch: regression tests for JIRA-243
  * - findFinalVictoryRoute: JIRA-245 AC1-AC11
+ *
+ * JIRA-274: findFinalVictoryOutcome now delegates stop enumeration to
+ * planTripDeterministic. Tests that exercise the fire/skip paths mock the
+ * planner so assertions focus on the override's re-scoring and skip logic
+ * rather than the planner's internal enumeration (which has its own tests).
  */
 
 import {
@@ -23,7 +28,60 @@ import {
   type FinalVictoryOutcome,
 } from '../../services/ai/victoryRules';
 import { GameState, GameContext, TrainType, WorldSnapshot } from '../../../shared/types/GameTypes';
-import type { BotMemoryState, DemandContext } from '../../../shared/types/GameTypes';
+import type { BotMemoryState, DemandContext, RouteStop } from '../../../shared/types/GameTypes';
+
+// ── Mock planTripDeterministic ─────────────────────────────────────────────
+// JIRA-274: findFinalVictoryOutcome delegates to the deterministic planner.
+// All tests that exercise fire/skip paths must configure this mock to return
+// the desired planner response — assertions test the override's cash-gap
+// feasibility check and re-scoring, not the planner's path-finding.
+
+jest.mock('../../services/ai/DeterministicTripPlanner', () => ({
+  ...jest.requireActual('../../services/ai/DeterministicTripPlanner'),
+  planTripDeterministic: jest.fn(),
+}));
+
+import { planTripDeterministic } from '../../services/ai/DeterministicTripPlanner';
+const mockPlanTripDeterministic = planTripDeterministic as jest.MockedFunction<typeof planTripDeterministic>;
+
+/**
+ * Build a mock DeterministicTripPlanResult that returns a route with the
+ * given stops, for use in findFinalVictoryOutcome tests.
+ */
+function mockPlannerSuccess(stops: RouteStop[]) {
+  return {
+    route: {
+      stops,
+      currentStopIndex: 0,
+      phase: 'build' as const,
+      createdAtTurn: 1,
+      reasoning: 'mock-planner',
+    },
+    reasoning: 'mock',
+    outcome: 'success' as const,
+    synthesizedAttempt: {
+      attemptNumber: 1,
+      status: 'success' as const,
+      responseText: '',
+      latencyMs: 0,
+    },
+  };
+}
+
+/** Build a mock planner result for the no-feasible-candidates case. */
+function mockPlannerEmpty() {
+  return {
+    route: null,
+    reasoning: 'no_feasible_candidates',
+    outcome: 'no_feasible_candidates' as const,
+    synthesizedAttempt: {
+      attemptNumber: 1,
+      status: 'success' as const,
+      responseText: '',
+      latencyMs: 0,
+    },
+  };
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -76,6 +134,11 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     ...overrides,
   };
 }
+
+// Reset planTripDeterministic mock between tests
+beforeEach(() => {
+  mockPlanTripDeterministic.mockReset();
+});
 
 // ── computeGameState ───────────────────────────────────────────────────────
 
@@ -484,6 +547,10 @@ describe('findFinalVictoryRoute', () => {
         }),
       ],
     });
+    // JIRA-274: planner returns deliver-only stop (carry case — no pickup needed)
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'deliver', loadType: 'Beer', city: 'Bruxelles', demandCardId: 0, payment: 10 },
+    ]));
     const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
     expect(result).not.toBeNull();
     // Should be a single deliver stop (no pickup — load is on train)
@@ -515,6 +582,11 @@ describe('findFinalVictoryRoute', () => {
         }),
       ],
     });
+    // JIRA-274: planner returns pickup+deliver route
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Beer', city: 'Frankfurt' },
+      { action: 'deliver', loadType: 'Beer', city: 'Bruxelles', demandCardId: 0, payment: 10 },
+    ]));
     const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
     expect(result).not.toBeNull();
     expect(result!.stops.some((s) => s.action === 'pickup')).toBe(true);
@@ -547,6 +619,11 @@ describe('findFinalVictoryRoute', () => {
         }),
       ],
     });
+    // JIRA-274: planner returns a route but the override rejects it (gap check fails)
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Beer', city: 'Frankfurt' },
+      { action: 'deliver', loadType: 'Beer', city: 'Bruxelles', demandCardId: 0, payment: 9 },
+    ]));
     const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
     expect(result).toBeNull();
   });
@@ -573,6 +650,11 @@ describe('findFinalVictoryRoute', () => {
         }),
       ],
     });
+    // JIRA-274: planner returns the route; override checks gap and fires
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Beer', city: 'Frankfurt' },
+      { action: 'deliver', loadType: 'Beer', city: 'Bruxelles', demandCardId: 0, payment: 20 },
+    ]));
     const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
     expect(result).not.toBeNull();
     expect(result!.cashAtVictory).toBeGreaterThanOrEqual(250);
@@ -580,6 +662,8 @@ describe('findFinalVictoryRoute', () => {
   });
 
   // ── AC6: tiebreak — higher cashAtVictory wins when equal turns ─────────
+  // JIRA-274: With delegation, the override fires with the planner's route.
+  // The planner is mocked to return Coal (higher payout, higher cashAtVictory).
   it('AC6 — picks route with higher cashAtVictory when estimatedTurns are equal', () => {
     const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
     const ctx = makeEndContext({
@@ -614,6 +698,11 @@ describe('findFinalVictoryRoute', () => {
         }),
       ],
     });
+    // JIRA-274: planner returns Coal route (higher M/turn velocity due to payout)
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Coal', city: 'Ruhr' },
+      { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 2, payment: 15 },
+    ]));
     const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
     expect(result).not.toBeNull();
     // Coal pays 15M → cashAtVictory = 241+15=256 vs Beer pays 10M → 241+10=251
@@ -622,17 +711,27 @@ describe('findFinalVictoryRoute', () => {
   });
 
   // ── AC7: train capacity respected ─────────────────────────────────────
+  // JIRA-274: capacity enforcement is delegated to planTripDeterministic.
+  // The test verifies the override fires when the planner returns a valid
+  // capacity-respecting route (≤2 delivers for Freight).
   it('AC7 — 2-load train never produces a 3-delivery candidate that exceeds capacity', () => {
     // With Freight (cap=2), we should only get 1- or 2-delivery routes.
-    // A single demand of 9M won't clear 250 alone (money=241), but pair might.
+    // A single demand of 9M won't clear 250 alone (money=232), but pair covers it.
     const snapshot = makeSnapshot({ trainType: TrainType.Freight, loads: [] });
     const demands = [
-      makeDemand({ cardIndex: 0, payout: 9, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
-      makeDemand({ cardIndex: 1, payout: 9, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
-      makeDemand({ cardIndex: 2, payout: 9, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
+      makeDemand({ cardIndex: 0, loadType: 'A', supplyCity: 'CityA', deliveryCity: 'DelivA', payout: 9, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
+      makeDemand({ cardIndex: 1, loadType: 'B', supplyCity: 'CityB', deliveryCity: 'DelivB', payout: 9, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
+      makeDemand({ cardIndex: 2, loadType: 'C', supplyCity: 'CityC', deliveryCity: 'DelivC', payout: 9, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
     ];
     const ctx = makeEndContext({ money: 232, demands });
     // 232 + 9+9=18 = 250 → pair exactly covers 250, route feasible
+    // JIRA-274: planner returns a 2-delivery route (capacity-respecting)
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'A', city: 'CityA' },
+      { action: 'pickup', loadType: 'B', city: 'CityB' },
+      { action: 'deliver', loadType: 'A', city: 'DelivA', demandCardId: 0, payment: 9 },
+      { action: 'deliver', loadType: 'B', city: 'DelivB', demandCardId: 1, payment: 9 },
+    ]));
     const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
     expect(result).not.toBeNull();
     // The deliver stops count should be ≤ 2 (cap=2 for Freight)
@@ -644,11 +743,20 @@ describe('findFinalVictoryRoute', () => {
     const snapshot = makeSnapshot({ trainType: TrainType.HeavyFreight, loads: [] });
     // Need 3 deliveries to reach 250M: money=241, each demand=3M. 3*3=9 → 241+9=250 exactly
     const demands = [
-      makeDemand({ cardIndex: 0, payout: 3, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 1 }),
-      makeDemand({ cardIndex: 1, payout: 3, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 1 }),
-      makeDemand({ cardIndex: 2, payout: 3, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 1 }),
+      makeDemand({ cardIndex: 0, loadType: 'A', supplyCity: 'CityA', deliveryCity: 'DelivA', payout: 3, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 1 }),
+      makeDemand({ cardIndex: 1, loadType: 'B', supplyCity: 'CityB', deliveryCity: 'DelivB', payout: 3, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 1 }),
+      makeDemand({ cardIndex: 2, loadType: 'C', supplyCity: 'CityC', deliveryCity: 'DelivC', payout: 3, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 1 }),
     ];
     const ctx = makeEndContext({ money: 241, demands });
+    // JIRA-274: planner returns a 3-delivery route (HeavyFreight cap=3)
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'A', city: 'CityA' },
+      { action: 'pickup', loadType: 'B', city: 'CityB' },
+      { action: 'pickup', loadType: 'C', city: 'CityC' },
+      { action: 'deliver', loadType: 'A', city: 'DelivA', demandCardId: 0, payment: 3 },
+      { action: 'deliver', loadType: 'B', city: 'DelivB', demandCardId: 1, payment: 3 },
+      { action: 'deliver', loadType: 'C', city: 'DelivC', demandCardId: 2, payment: 3 },
+    ]));
     const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
     expect(result).not.toBeNull();
     const deliverCount = result!.stops.filter((s) => s.action === 'deliver').length;
@@ -669,6 +777,9 @@ describe('findFinalVictoryRoute', () => {
       money: 220,
       demands: [
         makeDemand({
+          loadType: 'Beer',
+          supplyCity: 'Frankfurt',
+          deliveryCity: 'Bruxelles',
           payout: 5,
           isLoadOnTrain: false,
           isSupplyOnNetwork: true,
@@ -679,6 +790,11 @@ describe('findFinalVictoryRoute', () => {
         }),
       ],
     });
+    // JIRA-274: planner returns a route but override rejects it (payout < cashGap)
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Beer', city: 'Frankfurt' },
+      { action: 'deliver', loadType: 'Beer', city: 'Bruxelles', demandCardId: 0, payment: 5 },
+    ]));
     expect(findFinalVictoryRoute(snapshot, ctx, makeEndMemory())).toBeNull();
   });
 
@@ -689,6 +805,9 @@ describe('findFinalVictoryRoute', () => {
       money: 241,
       demands: [
         makeDemand({
+          loadType: 'Labor',
+          supplyCity: 'Zagreb',
+          deliveryCity: 'Bordeaux',
           payout: 10,
           isLoadOnTrain: false,
           isSupplyOnNetwork: true,
@@ -697,6 +816,11 @@ describe('findFinalVictoryRoute', () => {
         }),
       ],
     });
+    // JIRA-274: planner returns a valid route
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Labor', city: 'Zagreb' },
+      { action: 'deliver', loadType: 'Labor', city: 'Bordeaux', demandCardId: 0, payment: 10 },
+    ]));
     const result = findFinalVictoryRoute(snapshot, ctx, makeEndMemory());
     expect(result).not.toBeNull();
     expect(result!.reasoning).toMatch(/^\[final-victory\]/);
@@ -741,9 +865,14 @@ describe('findFinalVictoryOutcome', () => {
     const ctx = makeEndContext({
       money: 200,
       demands: [
-        makeDemand({ payout: 10, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true }),
+        makeDemand({ loadType: 'Beer', supplyCity: 'Frankfurt', deliveryCity: 'Bruxelles', payout: 10, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true }),
       ],
     });
+    // JIRA-274: planner returns a route but override rejects it (payout < cashGap)
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Beer', city: 'Frankfurt' },
+      { action: 'deliver', loadType: 'Beer', city: 'Bruxelles', demandCardId: 0, payment: 10 },
+    ]));
     const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
     expect(result.outcome).toBe('skip');
     if (result.outcome === 'skip') {
@@ -758,10 +887,16 @@ describe('findFinalVictoryOutcome', () => {
       money: 241,
       demands: [
         makeDemand({
+          loadType: 'Labor', supplyCity: 'Zagreb', deliveryCity: 'Bordeaux',
           payout: 10, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2,
         }),
       ],
     });
+    // JIRA-274: planner returns a route that covers the gap
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Labor', city: 'Zagreb' },
+      { action: 'deliver', loadType: 'Labor', city: 'Bordeaux', demandCardId: 0, payment: 10 },
+    ]));
     const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
     expect(result.outcome).toBe('fire');
     if (result.outcome === 'fire') {
@@ -773,14 +908,20 @@ describe('findFinalVictoryOutcome', () => {
   it('legacy findFinalVictoryRoute still returns route on fire and null on skip', () => {
     const snapshot = makeSnapshot();
     const ctxSkip = makeEndContext({ demands: [] });
+    // no_demands path — planner not called
     expect(findFinalVictoryRoute(snapshot, ctxSkip, makeEndMemory())).toBeNull();
 
     const ctxFire = makeEndContext({
       money: 241,
       demands: [
-        makeDemand({ payout: 10, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
+        makeDemand({ loadType: 'Labor', supplyCity: 'Zagreb', deliveryCity: 'Bordeaux', payout: 10, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTurns: 2 }),
       ],
     });
+    // JIRA-274: planner returns a valid route
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Labor', city: 'Zagreb' },
+      { action: 'deliver', loadType: 'Labor', city: 'Bordeaux', demandCardId: 0, payment: 10 },
+    ]));
     expect(findFinalVictoryRoute(snapshot, ctxFire, makeEndMemory())).not.toBeNull();
   });
 });
@@ -1012,6 +1153,10 @@ describe('findFinalVictoryOutcome — JIRA-267 distance-aware + multiplicity-awa
       ],
     });
 
+    // JIRA-274: mock planner to return Holland route (closest delivery → fewest turns)
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'deliver', loadType: 'Fish', city: 'Holland', demandCardId: 3, payment: 23 },
+    ]));
     const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
 
     expect(result.outcome).toBe('fire');
@@ -1054,6 +1199,11 @@ describe('findFinalVictoryOutcome — JIRA-267 distance-aware + multiplicity-awa
       ],
     });
 
+    // JIRA-274: mock planner to return Holland route (lowest estimatedTurns)
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'pickup', loadType: 'Fish', city: 'Aberdeen' },
+      { action: 'deliver', loadType: 'Fish', city: 'Holland', demandCardId: 3, payment: 23 },
+    ]));
     const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
 
     expect(result.outcome).toBe('fire');
@@ -1096,6 +1246,13 @@ describe('findFinalVictoryOutcome — JIRA-267 distance-aware + multiplicity-awa
     // becomes a pickup+deliver candidate, which loses because supply/delivery
     // distance would be larger than the carry case. Whichever wins, the
     // outcome.route.stops should have at least one carry delivery.
+    //
+    // JIRA-274: mock planner to return a deliver stop for Aberdeen (closer city).
+    // The re-scoring in the override computes estimatedTurns from demand metadata,
+    // which uses hexDistance from bot position → delivery. Aberdeen is ~3 turns away.
+    mockPlanTripDeterministic.mockReturnValue(mockPlannerSuccess([
+      { action: 'deliver', loadType: 'Wine', city: 'Aberdeen', demandCardId: 2, payment: 30 },
+    ]));
     const result = findFinalVictoryOutcome(snapshot, ctx, makeEndMemory());
     expect(result.outcome).toBe('fire');
     // The key assertion: distance-aware estimate runs; the chosen route has
