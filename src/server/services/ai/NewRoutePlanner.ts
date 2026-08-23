@@ -51,7 +51,9 @@ import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
 import { appendLLMCall } from './LLMTranscriptLogger';
 import { TripPlanner, TripPlanResult } from './TripPlanner';
 import { loadGridPoints as loadGridPointsMap } from '../MapTopology';
-import type { Stage3Result } from './schemas';
+import type { Stage3Result, NewRoutePlannerResult } from './schemas';
+
+export type { NewRoutePlannerResult };
 
 /**
  * Minimum number of completed deliveries before a bot may upgrade its train.
@@ -61,40 +63,38 @@ import type { Stage3Result } from './schemas';
 const MIN_DELIVERIES_BEFORE_UPGRADE = 2;
 
 /**
- * NewRoutePlanner result — full Stage3Result plus two diagnostic fields the
- * caller's outer scope still needs for game/LLM logging.
+ * Skill levels that use deterministic (non-LLM) trip planning.
+ * Brain may be null for these skill levels.
  */
-export interface NewRoutePlannerResult extends Stage3Result {
-  autoDeliveredLoads: Array<{ loadType: string; city: string; payment: number; cardId: number }>;
-  tripPlanResult: TripPlanResult | null;
-}
+const DETERMINISTIC_SKILLS = new Set([BotSkillLevel.Medium]);
 
 export class NewRoutePlanner {
   /**
-   * Run the no-active-route LLM consultation branch for one turn.
+   * Run the no-active-route planning branch for one turn.
    *
-   * Caller must verify `brain` is non-null (no-LLM-key path stays inline in the
-   * orchestrator per ADR-2). On entry, `activeRoute` is null; on return, it may be
-   * a fresh planned route or null (heuristic-fallback or pass-turn paths).
+   * Dispatch logic (ADR-1):
+   *   - skillLevel ∈ DETERMINISTIC_SKILLS (Medium): proceeds deterministic; brain may be null.
+   *   - skillLevel ∈ {Easy, Hard} and brain != null: proceeds via LLM path.
+   *   - skillLevel ∈ {Easy, Hard} and brain === null: returns { cannotPlan: true, reason: 'no-api-key' }.
    *
    * @param snapshot     World state at decision time. May be reassigned internally
    *                     by JIRA-170 auto-delivery refresh; the final value is
    *                     returned via `result.snapshot`.
    * @param context      Decision-relevant context. May be reassigned internally
    *                     by JIRA-170; final value returned via `result.context`.
-   * @param brain        LLM brain — required (caller has already verified).
+   * @param brain        LLM brain — null is allowed for Medium (deterministic) skill.
    * @param gridPoints   Hex-grid topology for path planning.
    * @param memory       Bot memory state (deliveryCount, consecutiveLlmFailures).
    * @param tag          Log prefix for traceability.
    * @param gameId       Game UUID — needed for snapshot refresh + LLM transcript log.
    * @param botPlayerId  Bot player UUID — needed for snapshot refresh + LLM transcript log.
-   * @param skillLevel   Bot skill level — gates JIRA-92 cargo-conflict LLM call.
-   * @returns Full Stage3Result + autoDeliveredLoads + tripPlanResult.
+   * @param skillLevel   Bot skill level — governs LLM-vs-deterministic dispatch.
+   * @returns Full Stage3Result + autoDeliveredLoads + tripPlanResult, or cannotPlan sentinel.
    */
   static async run(
     snapshot: WorldSnapshot,
     context: GameContext,
-    brain: LLMStrategyBrain,
+    brain: LLMStrategyBrain | null,
     gridPoints: GridPoint[],
     memory: BotMemoryState,
     tag: string,
@@ -102,6 +102,10 @@ export class NewRoutePlanner {
     botPlayerId: string,
     skillLevel: BotSkillLevel,
   ): Promise<NewRoutePlannerResult> {
+    // ADR-1 dispatch: LLM skill levels require a brain; deterministic skill levels do not.
+    if (!DETERMINISTIC_SKILLS.has(skillLevel) && brain === null) {
+      return { cannotPlan: true, reason: 'no-api-key' };
+    }
     let decision: LLMDecisionResult;
     let activeRoute: StrategicRoute | null = null;
     let routeWasCompleted = false;
@@ -176,7 +180,7 @@ export class NewRoutePlanner {
           timestamp: new Date().toISOString(),
           caller: 'trip-planner',
           method: 'shortCircuit',
-          model: brain.modelName,
+          model: brain?.modelName ?? 'deterministic',
           systemPrompt: '',
           userPrompt: '',
           responseText: '',
@@ -286,9 +290,13 @@ export class NewRoutePlanner {
       })();
       const effectiveFreeSlots = trainCapacity - snapshot.bot.loads.length;
 
+      // ADR-4: LLM enhancements (upgrade-before-drop, cargo-conflict) only run on
+      // non-deterministic LLM skill levels. Easy and Medium both skip this block:
+      //  - Easy: existing game rule — cargo conflict not evaluated for Easy bots
+      //  - Medium: deterministic path — skips LLM enhancements regardless of brain availability
       if (
         routePickupCount > effectiveFreeSlots &&
-        skillLevel !== BotSkillLevel.Easy
+        skillLevel === BotSkillLevel.Hard
       ) {
         // ── D6a: JIRA-105b — Upgrade-before-drop check ──
         // Before asking to drop, check if upgrading gives enough capacity
@@ -313,7 +321,7 @@ export class NewRoutePlanner {
             }
           }
 
-          if (upgradeOptions.length > 0) {
+          if (upgradeOptions.length > 0 && brain) {
             // Sort by cost ascending (cheapest first)
             upgradeOptions.sort((a, b) => a.cost - b.cost);
 
@@ -322,6 +330,7 @@ export class NewRoutePlanner {
               .filter(s => s.action === 'deliver' && s.payment)
               .reduce((sum, s) => sum + (s.payment ?? 0), 0);
 
+            // ADR-4: evaluateUpgradeBeforeDrop is an LLM enhancement — only call when brain exists.
             try {
               const upgradePrompt = ContextSerializer.serializeUpgradeBeforeDropPrompt(
                 snapshot, activeRoute, upgradeOptions, totalRoutePayout, context.demands,
@@ -360,7 +369,8 @@ export class NewRoutePlanner {
           );
           const conflictingLoads = snapshot.bot.loads.filter(l => !routeDeliveryLoads.has(l));
 
-          if (conflictingLoads.length > 0) {
+          // ADR-4: evaluateCargoConflict is an LLM enhancement — skip when brain is null.
+          if (conflictingLoads.length > 0 && brain) {
             try {
               const cargoPrompt = ContextSerializer.serializeCargoConflictPrompt(snapshot, activeRoute, conflictingLoads, context.demands);
               const conflictResult = await brain.evaluateCargoConflict(cargoPrompt, snapshot, context);
