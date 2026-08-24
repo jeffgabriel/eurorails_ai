@@ -1,7 +1,18 @@
-import { FullGameState, BorrowResult } from '../../shared/types/GameTypes';
+import { FullGameState, BorrowResult, Player } from '../../shared/types/GameTypes';
 import { PlayerStateService } from './PlayerStateService';
 import { config } from '../config/apiConfig';
 import { TrainType } from '../../shared/types/GameTypes';
+import { mergeServerPlayerState } from './mergeServerPlayerState';
+
+/**
+ * Sprite reposition needed after a server patch; the scene resolves row/col
+ * to world coordinates and applies it (render concern stays scene-side).
+ */
+export interface PatchSpriteUpdate {
+    playerId: string;
+    row: number;
+    col: number;
+}
 
 /**
  * Event listener type for turn changes
@@ -63,6 +74,53 @@ export class GameStateService {
     
     public updateGameState(gameState: FullGameState): void {
         this.gameState = gameState;
+    }
+
+    /**
+     * Apply a server state:patch to the game state: merge player rows
+     * (preserving client-managed trainState fields for the local player),
+     * update currentPlayerIndex/status, and sync PlayerStateService.
+     * Returns sprite updates for non-local players whose position changed.
+     */
+    public applyServerPatch(patch: Partial<FullGameState>): { spriteUpdates: PatchSpriteUpdate[] } {
+        const spriteUpdates: PatchSpriteUpdate[] = [];
+
+        if (patch.players && patch.players.length > 0) {
+            const localPlayerId = this.getLocalPlayerId();
+
+            patch.players.forEach((updatedPlayer: Player) => {
+                const index = this.gameState.players.findIndex(p => p.id === updatedPlayer.id);
+                if (index >= 0) {
+                    const existingPlayer = this.gameState.players[index];
+                    const isLocalPlayer = localPlayerId === updatedPlayer.id;
+                    const oldPosition = existingPlayer.trainState?.position;
+
+                    this.gameState.players[index] = mergeServerPlayerState(existingPlayer, updatedPlayer, isLocalPlayer);
+
+                    if (!isLocalPlayer) {
+                        const newPosition = updatedPlayer.trainState?.position;
+                        if (newPosition &&
+                            (oldPosition?.row !== newPosition.row || oldPosition?.col !== newPosition.col)) {
+                            spriteUpdates.push({ playerId: updatedPlayer.id, row: newPosition.row, col: newPosition.col });
+                        }
+                    }
+                } else {
+                    // Add new player (shouldn't happen in normal gameplay)
+                    this.gameState.players.push(updatedPlayer);
+                }
+            });
+        }
+
+        if (patch.currentPlayerIndex !== undefined) {
+            this.gameState.currentPlayerIndex = patch.currentPlayerIndex;
+        }
+        if (patch.status !== undefined) {
+            this.gameState.status = patch.status;
+        }
+
+        this.playerStateService?.updateLocalPlayer(this.gameState.players);
+
+        return { spriteUpdates };
     }
     
     /**

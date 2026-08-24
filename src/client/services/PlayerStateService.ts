@@ -1,8 +1,21 @@
-import { Player, TrainState, BorrowResult } from '../../shared/types/GameTypes';
+import { Player, TrainState, BorrowResult, FullGameState } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { DemandCard } from '../../shared/types/DemandCard';
 import { config } from '../config/apiConfig';
 import { authenticatedFetch } from './authenticatedFetch';
+import { mergeServerPlayerState } from './mergeServerPlayerState';
+
+/**
+ * Sprite reposition needed after a server refresh; the scene applies it
+ * (render concern stays scene-side).
+ */
+export interface RefreshSpriteUpdate {
+    playerId: string;
+    x: number;
+    y: number;
+    row: number;
+    col: number;
+}
 
 /**
  * Manages per-player state and operations for the local player
@@ -120,6 +133,76 @@ export class PlayerStateService {
      */
     public isLocalPlayer(playerId: string): boolean {
         return this.localPlayerId === playerId;
+    }
+
+    /**
+     * Fetch current players from the server and merge them into gameState,
+     * preserving object identity of existing player entries (callers hold
+     * references across await points) and client-managed trainState fields
+     * for the local player.
+     * Returns sprite updates for non-local players with a server position.
+     * Errors are logged and yield an empty update list (matches prior contract).
+     */
+    public async refreshPlayersFromServer(
+        gameId: string,
+        gameState: FullGameState,
+    ): Promise<{ spriteUpdates: RefreshSpriteUpdate[] }> {
+        const spriteUpdates: RefreshSpriteUpdate[] = [];
+        if (!gameId) {
+            return { spriteUpdates };
+        }
+
+        try {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/${gameId}`);
+
+            if (!response.ok) {
+                console.error('Failed to refresh player data:', response.status);
+                return { spriteUpdates };
+            }
+
+            const players: Player[] = await response.json();
+
+            players.forEach((serverPlayer: Player) => {
+                const localPlayer = gameState.players.find(p => p.id === serverPlayer.id);
+                if (localPlayer) {
+                    const isLocalPlayer = this.localPlayerId === serverPlayer.id;
+                    const merged = mergeServerPlayerState(localPlayer, serverPlayer, isLocalPlayer);
+
+                    // Refresh-path policy: the full player GET omitting trainState for a
+                    // non-local player means it was cleared server-side — reset instead of
+                    // keeping stale local state (socket patches must NOT do this; partial
+                    // rows there legitimately omit trainState).
+                    if (!isLocalPlayer && !serverPlayer.trainState && localPlayer.trainState) {
+                        merged.trainState = {
+                            position: null,
+                            remainingMovement: 0,
+                            movementHistory: [],
+                            loads: [],
+                            lastTraversedEdge: undefined
+                        };
+                    }
+
+                    // Mutate in place to preserve object identity
+                    Object.assign(localPlayer, merged);
+
+                    if (!isLocalPlayer && serverPlayer.trainState?.position) {
+                        const { x, y, row, col } = serverPlayer.trainState.position;
+                        spriteUpdates.push({ playerId: serverPlayer.id, x, y, row, col });
+                    }
+                } else {
+                    gameState.players.push(serverPlayer);
+                    if (serverPlayer.trainState?.position) {
+                        const { x, y, row, col } = serverPlayer.trainState.position;
+                        spriteUpdates.push({ playerId: serverPlayer.id, x, y, row, col });
+                    }
+                }
+            });
+
+            return { spriteUpdates };
+        } catch (error) {
+            console.error('Error refreshing player data:', error);
+            return { spriteUpdates: [] };
+        }
     }
 
 

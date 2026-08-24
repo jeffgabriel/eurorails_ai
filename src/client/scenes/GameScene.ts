@@ -308,107 +308,28 @@ export class GameScene extends Phaser.Scene {
 
           // Listen for state patches to sync game state across clients
           socketService.onPatch((data: { patch: any; serverSeq: number }) => {
-            const { patch } = data;
+            const { spriteUpdates } = this.gameStateService.applyServerPatch(data.patch);
 
-            // Update this.gameState with the patch
-            if (patch.players && patch.players.length > 0) {
-              const localPlayerId = this.playerStateService.getLocalPlayerId();
-
-              // Merge updated players into existing players array
-              patch.players.forEach((updatedPlayer: any) => {
-                const index = this.gameState.players.findIndex(p => p.id === updatedPlayer.id);
-                if (index >= 0) {
-                  const existingPlayer = this.gameState.players[index];
-                  const isLocalPlayer = localPlayerId === updatedPlayer.id;
-
-                  if (isLocalPlayer) {
-                    // For local player: preserve local position and movementHistory
-                    // This prevents train from jumping backward when server sends outdated position
-                    const preservedPosition = existingPlayer.trainState?.position || null;
-                    const preservedHistory = existingPlayer.trainState?.movementHistory || [];
-                    const preservedRemainingMovement = existingPlayer.trainState?.remainingMovement;
-                    const preservedFerryState = existingPlayer.trainState?.ferryState;
-                    const preservedJustCrossedFerry = existingPlayer.trainState?.justCrossedFerry;
-
-                    this.gameState.players[index] = {
-                      ...existingPlayer,
-                      ...updatedPlayer,
-                      // Issue #176: Hands are now public, server is authoritative
-                      // Always use server hand data when provided
-                      hand: updatedPlayer.hand || existingPlayer.hand,
-                      // Preserve local position if it exists (server position might be outdated)
-                      trainState: updatedPlayer.trainState ? {
-                        ...updatedPlayer.trainState,
-                        position: preservedPosition || updatedPlayer.trainState.position,
-                        // Preserve movementHistory to maintain direction
-                        movementHistory: preservedHistory.length > 0
-                          ? preservedHistory
-                          : (updatedPlayer.trainState.movementHistory || []),
-                        // Server does not manage remainingMovement; preserve local (important for ferry half-rate)
-                        remainingMovement: typeof preservedRemainingMovement === 'number'
-                          ? preservedRemainingMovement
-                          : updatedPlayer.trainState.remainingMovement,
-                        // Ferry state is client-managed; preserve local if present
-                        ferryState: preservedFerryState ?? updatedPlayer.trainState.ferryState,
-                        justCrossedFerry: preservedJustCrossedFerry ?? updatedPlayer.trainState.justCrossedFerry,
-                      } : existingPlayer.trainState
-                    };
-                  } else {
-                    // For other players: use server data (authoritative)
-                    const oldPosition = existingPlayer.trainState?.position;
-                    const newPosition = updatedPlayer.trainState?.position;
-
-                    this.gameState.players[index] = { ...existingPlayer, ...updatedPlayer };
-
-                    // JIRA-36: Skip instant position update if animation is in progress
-                    if (this.botTrainAnimator?.isAnimating(updatedPlayer.id)) {
-                      return;
-                    }
-
-                    // If position changed, update visual sprite
-                    if (newPosition &&
-                        (oldPosition?.row !== newPosition.row || oldPosition?.col !== newPosition.col)) {
-                      const gridPoint = this.mapRenderer.gridPoints[newPosition.row]?.[newPosition.col];
-                      if (gridPoint) {
-                        // Use persist: false to avoid sending position back to server
-                        this.uiManager.updateTrainPosition(
-                          updatedPlayer.id,
-                          gridPoint.x,
-                          gridPoint.y,
-                          newPosition.row,
-                          newPosition.col,
-                          { persist: false }
-                        );
-                      }
-                    }
-                  }
-                } else {
-                  // Add new player (shouldn't happen in normal gameplay)
-                  this.gameState.players.push(updatedPlayer);
-                }
-              });
+            for (const update of spriteUpdates) {
+              // JIRA-36: Skip instant position update if animation is in progress
+              if (this.botTrainAnimator?.isAnimating(update.playerId)) continue;
+              const gridPoint = this.mapRenderer.gridPoints[update.row]?.[update.col];
+              if (gridPoint) {
+                // Use persist: false to avoid sending position back to server
+                this.uiManager.updateTrainPosition(
+                  update.playerId,
+                  gridPoint.x,
+                  gridPoint.y,
+                  update.row,
+                  update.col,
+                  { persist: false }
+                );
+              }
             }
 
-            // Update other patch fields
-            if (patch.currentPlayerIndex !== undefined) {
-              this.gameState.currentPlayerIndex = patch.currentPlayerIndex;
-            }
-
-            if (patch.status !== undefined) {
-              this.gameState.status = patch.status;
-            }
-
-            // Update services with new state
-            this.gameStateService.updateGameState(this.gameState);
-            this.playerStateService.updateLocalPlayer(this.gameState.players);
-
-            // Refresh UI
             this.uiManager.setupUIOverlay();
-            
             // Update LoadsReferencePanel with new game state (issue #176: hands are public)
-            if (this.loadsReferencePanel) {
-              this.loadsReferencePanel.setGameState(this.gameState);
-            }
+            this.loadsReferencePanel?.setGameState(this.gameState);
           });
 
           // Listen for victory triggered event
@@ -1534,134 +1455,31 @@ export class GameScene extends Phaser.Scene {
    * Refresh player data from server to get updated money and other state
    */
   private async refreshPlayerData(): Promise<void> {
-    if (!this.gameState || !this.gameState.id) {
-      return;
+    if (!this.gameState.id) return;
+
+    const { spriteUpdates } = await this.playerStateService.refreshPlayersFromServer(
+      this.gameState.id,
+      this.gameState
+    );
+
+    // Ensure trainSprites map exists before updating
+    if (!this.gameState.trainSprites) {
+      this.gameState.trainSprites = new Map();
     }
 
-    try {
-      const token = localStorage.getItem('eurorails.jwt');
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
+    for (const train of spriteUpdates) {
+      // JIRA-80: Skip sprite position update if bot animation is in progress —
+      // turn:change events during animation would snap the sprite back mid-animation.
+      if (this.botTrainAnimator?.isAnimating(train.playerId)) continue;
+      try {
+        await this.uiManager.updateTrainPosition(train.playerId, train.x, train.y, train.row, train.col);
+      } catch (error) {
+        console.error(`Error updating train position for player ${train.playerId}:`, error);
       }
-
-      const response = await fetch(`${config.apiBaseUrl}/api/players/${this.gameState.id}`, {
-        headers
-      });
-
-      if (!response.ok) {
-        console.error('Failed to refresh player data:', response.status);
-        return;
-      }
-
-      const players = await response.json();
-      const localPlayerId = this.playerStateService.getLocalPlayerId();
-      const trainsToUpdate: Array<{ playerId: string; x: number; y: number; row: number; col: number }> = [];
-      
-      // Update player data in gameState, preserving local references
-      players.forEach((serverPlayer: Player) => {
-        const localPlayer = this.gameState.players.find(p => p.id === serverPlayer.id);
-        if (localPlayer) {
-          // Update money and other server-managed properties
-          localPlayer.money = serverPlayer.money;
-          localPlayer.turnNumber = serverPlayer.turnNumber;
-          
-          // Handle train state based on whether this is the local player
-          const isLocalPlayer = localPlayerId === serverPlayer.id;
-          
-          if (serverPlayer.trainState) {
-            if (isLocalPlayer) {
-              // For local player: preserve local position and movementHistory if they exist
-              // This prevents losing direction information between turns
-              if (localPlayer.trainState) {
-                // Preserve local movementHistory if it exists and has entries
-                // Movement history should persist across turn boundaries to maintain direction of travel
-                // Only use server's movementHistory if local doesn't have any
-                const shouldPreserveHistory = localPlayer.trainState.movementHistory && 
-                                             localPlayer.trainState.movementHistory.length > 0;
-                
-                localPlayer.trainState = {
-                  ...serverPlayer.trainState,
-                  position: localPlayer.trainState.position || serverPlayer.trainState.position,
-                  // Preserve local movementHistory to maintain direction of travel
-                  // This is critical for direction reversal checks across turn boundaries
-                  movementHistory: shouldPreserveHistory
-                    ? localPlayer.trainState.movementHistory
-                    : (serverPlayer.trainState.movementHistory || []),
-                  // Server does not manage remainingMovement; preserve local (important for ferry half-rate)
-                  remainingMovement: typeof localPlayer.trainState.remainingMovement === 'number'
-                    ? localPlayer.trainState.remainingMovement
-                    : serverPlayer.trainState.remainingMovement,
-                  // Ferry-related flags are client-managed
-                  ferryState: localPlayer.trainState.ferryState ?? serverPlayer.trainState.ferryState,
-                  justCrossedFerry: localPlayer.trainState.justCrossedFerry ?? serverPlayer.trainState.justCrossedFerry,
-                };
-              } else {
-                localPlayer.trainState = serverPlayer.trainState;
-              }
-            } else {
-              // For other players: ALWAYS use server position (authoritative)
-              localPlayer.trainState = serverPlayer.trainState;
-
-              // JIRA-80: Skip sprite position update if bot animation is in progress
-              // (matches the guard in onPatch handler). Without this, turn:change events
-              // during animation snap the sprite back to server position mid-animation.
-              if (this.botTrainAnimator?.isAnimating(serverPlayer.id)) {
-                // State updated but sprite will be positioned by animation completion
-                return;
-              }
-
-              // Always update train sprite for other players if position exists
-              // This ensures the sprite is created/updated and visible
-              if (serverPlayer.trainState.position) {
-                const { x, y, row, col } = serverPlayer.trainState.position;
-                trainsToUpdate.push({ playerId: serverPlayer.id, x, y, row, col });
-              }
-            }
-          } else if (localPlayer.trainState && !isLocalPlayer && !serverPlayer.trainState) {
-            // If server doesn't have trainState but local does for other players, remove it
-            // Set to empty trainState instead of null to maintain type safety
-            localPlayer.trainState = {
-              position: null,
-              remainingMovement: 0,
-              movementHistory: [],
-              loads: [],
-              lastTraversedEdge: undefined
-            };
-          }
-        } else {
-          // New player - add to gameState
-          this.gameState.players.push(serverPlayer);
-          
-          // Queue train sprite update for new player if position exists
-          if (serverPlayer.trainState?.position) {
-            const { x, y, row, col } = serverPlayer.trainState.position;
-            trainsToUpdate.push({ playerId: serverPlayer.id, x, y, row, col });
-          }
-        }
-      });
-
-      // Ensure trainSprites map exists before updating
-      if (!this.gameState.trainSprites) {
-        this.gameState.trainSprites = new Map();
-      }
-
-      // Update all train sprites after state is updated
-      for (const train of trainsToUpdate) {
-        try {
-          await this.uiManager.updateTrainPosition(train.playerId, train.x, train.y, train.row, train.col);
-        } catch (error) {
-          console.error(`Error updating train position for player ${train.playerId}:`, error);
-        }
-      }
-
-      // Refresh UI to show updated money
-      this.uiManager.setupUIOverlay();
-    } catch (error) {
-      console.error('Error refreshing player data:', error);
     }
+
+    // Refresh UI to show updated money
+    this.uiManager.setupUIOverlay();
   }
 
   /**
