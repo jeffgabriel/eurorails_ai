@@ -56,8 +56,19 @@ jest.mock('../config/mapConfig', () => ({
   majorCityGroups: mockMajorCityGroups,
 }));
 
+jest.mock('../services/authenticatedFetch', () => ({
+  authenticatedFetch: jest.fn(),
+}));
+
+jest.mock('../config/apiConfig', () => ({
+  config: { apiBaseUrl: 'http://test' },
+}));
+
 // Import after mocking
 import { VictoryService } from '../services/VictoryService';
+import { authenticatedFetch } from '../services/authenticatedFetch';
+
+const mockedFetch = authenticatedFetch as jest.MockedFunction<typeof authenticatedFetch>;
 
 describe('VictoryService', () => {
   let service: VictoryService;
@@ -295,6 +306,128 @@ describe('VictoryService', () => {
       const result = service.getConnectedMajorCities(segments);
       // Should return the first component encountered with most cities (both have 2)
       expect(result).toHaveLength(2);
+    });
+  });
+
+  describe('declareVictory', () => {
+    const cities = [{ name: 'Paris', row: 20, col: 10 }];
+
+    afterEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it('returns the server victoryState on success', async () => {
+      const victoryState = {
+        triggered: true,
+        triggerPlayerIndex: 0,
+        victoryThreshold: 250,
+        finalTurnPlayerIndex: 2,
+      };
+      mockedFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ victoryState }),
+      } as any);
+
+      const result = await service.declareVictory('game-1', 'player-1', cities);
+
+      expect(result).toEqual(victoryState);
+      expect(mockedFetch).toHaveBeenCalledWith(
+        'http://test/api/game/game-1/declare-victory',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ playerId: 'player-1', connectedCities: cities }),
+        })
+      );
+    });
+
+    it('returns null when the response has no victoryState', async () => {
+      mockedFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      } as any);
+
+      expect(await service.declareVictory('game-1', 'player-1', cities)).toBeNull();
+    });
+
+    it('returns null and warns when the declaration is rejected', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      mockedFetch.mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({ details: 'not eligible' }),
+      } as any);
+
+      expect(await service.declareVictory('game-1', 'player-1', cities)).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith('Victory declaration rejected:', 'not eligible');
+      warnSpy.mockRestore();
+    });
+
+    it('returns null when the request throws', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+      mockedFetch.mockRejectedValueOnce(new Error('network down'));
+
+      expect(await service.declareVictory('game-1', 'player-1', cities)).toBeNull();
+      expect(errorSpy).toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+  });
+
+  describe('resolveVictory', () => {
+    afterEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it('maps a gameOver response', async () => {
+      mockedFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ gameOver: true }),
+      } as any);
+
+      expect(await service.resolveVictory('game-1')).toEqual({
+        gameOver: true,
+        tieExtended: false,
+      });
+      expect(mockedFetch).toHaveBeenCalledWith(
+        'http://test/api/game/game-1/resolve-victory',
+        { method: 'POST' }
+      );
+    });
+
+    it('maps a tieExtended response', async () => {
+      mockedFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ tieExtended: true }),
+      } as any);
+
+      expect(await service.resolveVictory('game-1')).toEqual({
+        gameOver: false,
+        tieExtended: true,
+      });
+    });
+
+    it('lets the game continue on a non-OK response', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      mockedFetch.mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({ details: 'bad state' }),
+      } as any);
+
+      expect(await service.resolveVictory('game-1')).toEqual({
+        gameOver: false,
+        tieExtended: false,
+      });
+      expect(warnSpy).toHaveBeenCalledWith('Victory resolution failed:', 'bad state');
+      warnSpy.mockRestore();
+    });
+
+    it('lets the game continue when the request throws', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+      mockedFetch.mockRejectedValueOnce(new Error('network down'));
+
+      expect(await service.resolveVictory('game-1')).toEqual({
+        gameOver: false,
+        tieExtended: false,
+      });
+      errorSpy.mockRestore();
     });
   });
 });

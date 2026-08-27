@@ -1,5 +1,13 @@
 import { TrackSegment } from '../../shared/types/TrackTypes';
+import { VictoryState } from '../../shared/types/GameTypes';
 import { majorCityGroups, mapConfig } from '../config/mapConfig';
+import { config } from '../config/apiConfig';
+import { authenticatedFetch } from './authenticatedFetch';
+
+export interface ResolveVictoryOutcome {
+  gameOver: boolean;
+  tieExtended: boolean;
+}
 
 export interface MajorCityConnection {
   name: string;
@@ -222,5 +230,65 @@ export class VictoryService {
       eligible: hasEnoughMoney && hasEnoughCities,
       connectedCities,
     };
+  }
+
+  /**
+   * Declare victory to the server. Returns the server's VictoryState on
+   * success, or null when the declaration is rejected or the request fails.
+   */
+  async declareVictory(
+    gameId: string,
+    playerId: string,
+    connectedCities: MajorCityConnection[]
+  ): Promise<VictoryState | null> {
+    try {
+      const response = await authenticatedFetch(
+        `${config.apiBaseUrl}/api/game/${gameId}/declare-victory`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ playerId, connectedCities }),
+        }
+      );
+
+      if (response.ok) {
+        const result = await response.json();
+        return result.victoryState ?? null;
+      }
+      const error = await response.json();
+      console.warn('Victory declaration rejected:', error.details);
+    } catch (error) {
+      console.error('Error declaring victory:', error);
+    }
+    return null;
+  }
+
+  /**
+   * Resolve victory at the end of the final round. On failure the game is
+   * allowed to continue (both flags false), matching prior scene behavior.
+   */
+  async resolveVictory(gameId: string): Promise<ResolveVictoryOutcome> {
+    try {
+      const response = await authenticatedFetch(
+        `${config.apiBaseUrl}/api/game/${gameId}/resolve-victory`,
+        { method: 'POST' }
+      );
+
+      if (response.ok) {
+        const result = await response.json();
+        // The server emits game:over or victory:tie-extended via socket;
+        // those handlers update state and show the UI.
+        if (result.gameOver) {
+          console.log('Victory resolved - game over');
+        } else if (result.tieExtended) {
+          console.log('Victory resulted in tie - threshold extended');
+        }
+        return { gameOver: !!result.gameOver, tieExtended: !!result.tieExtended };
+      }
+      const error = await response.json();
+      console.warn('Victory resolution failed:', error.details);
+    } catch (error) {
+      console.error('Error resolving victory:', error);
+    }
+    return { gameOver: false, tieExtended: false };
   }
 }

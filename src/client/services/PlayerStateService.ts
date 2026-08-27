@@ -1,4 +1,4 @@
-import { Player, TrainState, BorrowResult, FullGameState } from '../../shared/types/GameTypes';
+import { Player, TrainState, BorrowResult, FullGameState, GridPoint } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { DemandCard } from '../../shared/types/DemandCard';
 import { config } from '../config/apiConfig';
@@ -15,6 +15,15 @@ export interface RefreshSpriteUpdate {
     y: number;
     row: number;
     col: number;
+}
+
+/**
+ * UI effects produced by a ferry turn transition; the scene applies them
+ * (render concern stays scene-side).
+ */
+export interface FerryTransitionResult {
+    newPosition?: GridPoint;
+    arrivedAtCity?: GridPoint;
 }
 
 /**
@@ -768,6 +777,57 @@ export class PlayerStateService {
             ...this.localPlayer.trainState,
             ...trainState
         };
+    }
+
+    /**
+     * Apply ferry state transitions at the start of a player's turn.
+     * Mutates player.trainState only; the scene applies the returned UI
+     * effects (train sprite move, city-arrival dialog).
+     */
+    public applyFerryTurnTransition(
+        player: Player,
+        resolveGridPoint: (row: number, col: number) => GridPoint | undefined
+    ): FerryTransitionResult {
+        if (!player.trainState.ferryState) {
+            return {}; // Not at a ferry
+        }
+
+        if (player.trainState.ferryState.status === 'just_arrived') {
+            // Flip status BEFORE resolving the destination: if the lookup
+            // fails, the stale 'ready_to_cross' branch heals it next turn.
+            player.trainState.ferryState.status = 'ready_to_cross';
+
+            const otherSide = player.trainState.ferryState.otherSide;
+            const actualOtherSide = resolveGridPoint(otherSide.row, otherSide.col);
+            if (!actualOtherSide) {
+                console.error(`Could not find grid point at ${otherSide.row},${otherSide.col}`);
+                return {};
+            }
+
+            // Halve movement for this turn
+            player.trainState.justCrossedFerry = true;
+
+            // Ferry crossing resets the movement context; prior history is no
+            // longer relevant for reversal detection rules.
+            player.trainState.movementHistory = [];
+
+            // Clear ferry state after successful crossing
+            player.trainState.ferryState = undefined;
+
+            return {
+                newPosition: actualOtherSide,
+                // Dublin/Belfast are ferry-city hybrids: arriving there should
+                // show the load dialog.
+                arrivedAtCity: actualOtherSide.city ? actualOtherSide : undefined,
+            };
+        }
+
+        // Already 'ready_to_cross': the player didn't move last turn, so just
+        // clear the ferry state and continue with normal movement.
+        if (player.trainState.ferryState?.status === 'ready_to_cross') {
+            player.trainState.ferryState = undefined;
+        }
+        return {};
     }
 }
 
