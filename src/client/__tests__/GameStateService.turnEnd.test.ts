@@ -37,7 +37,7 @@ function createGameState(players: Player[]): FullGameState {
   } as unknown as FullGameState;
 }
 
-describe('GameStateService.applyTurnEndAccounting', () => {
+describe('GameStateService turn-end accounting', () => {
   let service: GameStateService;
   let localPlayer: Player;
   let otherPlayer: Player;
@@ -60,63 +60,73 @@ describe('GameStateService.applyTurnEndAccounting', () => {
     jest.clearAllMocks();
   });
 
-  it('deducts build cost via the API for the local player and persists the turn number', async () => {
-    await service.applyTurnEndAccounting(localPlayer, 5);
+  describe('applyBuildCostDeduction', () => {
+    it('deducts build cost via the API for the local player', async () => {
+      await service.applyBuildCostDeduction(localPlayer, 5);
 
-    expect(playerStateService.updatePlayerMoney).toHaveBeenCalledWith(45, 'game-1');
-    expect(localPlayer.turnNumber).toBe(4);
-    expect(playerStateService.updatePlayerTurnNumber).toHaveBeenCalledWith(4, 'game-1');
+      expect(playerStateService.updatePlayerMoney).toHaveBeenCalledWith(45, 'game-1');
+    });
+
+    it('mutates money directly for a non-local player without API calls', async () => {
+      await service.applyBuildCostDeduction(otherPlayer, 5);
+
+      expect(otherPlayer.money).toBe(35);
+      expect(playerStateService.updatePlayerMoney).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op when build cost is 0', async () => {
+      await service.applyBuildCostDeduction(localPlayer, 0);
+
+      expect(playerStateService.updatePlayerMoney).not.toHaveBeenCalled();
+      expect(localPlayer.money).toBe(50);
+    });
+
+    it('does not throw when the money update rejects', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+      playerStateService.updatePlayerMoney.mockRejectedValueOnce(new Error('api down'));
+
+      await expect(service.applyBuildCostDeduction(localPlayer, 5)).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
+    it('treats every player as non-local when no PlayerStateService is set', async () => {
+      const bareService = new GameStateService(createGameState([localPlayer]));
+
+      await bareService.applyBuildCostDeduction(localPlayer, 5);
+
+      expect(localPlayer.money).toBe(45);
+      expect(playerStateService.updatePlayerMoney).not.toHaveBeenCalled();
+    });
   });
 
-  it('mutates money directly for a non-local player without API calls', async () => {
-    await service.applyTurnEndAccounting(otherPlayer, 5);
+  describe('applyTurnNumberIncrement', () => {
+    it('increments and persists the turn number for the local player', async () => {
+      await service.applyTurnNumberIncrement(localPlayer);
 
-    expect(otherPlayer.money).toBe(35);
-    expect(playerStateService.updatePlayerMoney).not.toHaveBeenCalled();
-    expect(otherPlayer.turnNumber).toBe(3);
-    expect(playerStateService.updatePlayerTurnNumber).not.toHaveBeenCalled();
-  });
+      expect(localPlayer.turnNumber).toBe(4);
+      expect(playerStateService.updatePlayerTurnNumber).toHaveBeenCalledWith(4, 'game-1');
+    });
 
-  it('skips money handling entirely when build cost is 0 but still increments the turn number', async () => {
-    await service.applyTurnEndAccounting(localPlayer, 0);
+    it('increments a non-local player without persisting', async () => {
+      await service.applyTurnNumberIncrement(otherPlayer);
 
-    expect(playerStateService.updatePlayerMoney).not.toHaveBeenCalled();
-    expect(localPlayer.money).toBe(50);
-    expect(localPlayer.turnNumber).toBe(4);
-  });
+      expect(otherPlayer.turnNumber).toBe(3);
+      expect(playerStateService.updatePlayerTurnNumber).not.toHaveBeenCalled();
+    });
 
-  it('defaults a missing turn number to 1 before incrementing', async () => {
-    const freshPlayer = createPlayer('other-1', 40, undefined);
-    await service.applyTurnEndAccounting(freshPlayer, 0);
+    it('defaults a missing turn number to 1 before incrementing', async () => {
+      const freshPlayer = createPlayer('other-1', 40, undefined);
+      await service.applyTurnNumberIncrement(freshPlayer);
 
-    expect(freshPlayer.turnNumber).toBe(2);
-  });
+      expect(freshPlayer.turnNumber).toBe(2);
+    });
 
-  it('still increments the turn number when the money update rejects', async () => {
-    const errorSpy = jest.spyOn(console, 'error').mockImplementation();
-    playerStateService.updatePlayerMoney.mockRejectedValueOnce(new Error('api down'));
+    it('resolves without throwing when turn-number persistence rejects', async () => {
+      playerStateService.updatePlayerTurnNumber.mockRejectedValueOnce(new Error('api down'));
 
-    await service.applyTurnEndAccounting(localPlayer, 5);
-
-    expect(errorSpy).toHaveBeenCalled();
-    expect(localPlayer.turnNumber).toBe(4);
-    expect(playerStateService.updatePlayerTurnNumber).toHaveBeenCalledWith(4, 'game-1');
-    errorSpy.mockRestore();
-  });
-
-  it('resolves without throwing when turn-number persistence rejects', async () => {
-    playerStateService.updatePlayerTurnNumber.mockRejectedValueOnce(new Error('api down'));
-
-    await expect(service.applyTurnEndAccounting(localPlayer, 0)).resolves.toBeUndefined();
-    expect(localPlayer.turnNumber).toBe(4);
-  });
-
-  it('treats every player as non-local when no PlayerStateService is set', async () => {
-    const bareService = new GameStateService(createGameState([localPlayer]));
-
-    await bareService.applyTurnEndAccounting(localPlayer, 5);
-
-    expect(localPlayer.money).toBe(45);
-    expect(playerStateService.updatePlayerMoney).not.toHaveBeenCalled();
+      await expect(service.applyTurnNumberIncrement(localPlayer)).resolves.toBeUndefined();
+      expect(localPlayer.turnNumber).toBe(4);
+    });
   });
 });

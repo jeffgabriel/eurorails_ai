@@ -124,30 +124,37 @@ export class GameStateService {
     }
     
     /**
-     * End-of-turn accounting for the player whose turn is ending: deduct the
-     * turn's build cost and increment their turn number. Must run BEFORE the
-     * victory eligibility check — eligibility reads post-deduction money.
+     * Deduct the turn's build cost from the player whose turn is ending. Must
+     * run BEFORE the victory eligibility check — eligibility reads
+     * post-deduction money.
      */
-    public async applyTurnEndAccounting(player: Player, buildCost: number): Promise<void> {
-        const isLocalPlayer = this.playerStateService?.getLocalPlayerId() === player.id;
-
-        if (buildCost > 0) {
-            const newMoney = player.money - buildCost;
-            try {
-                if (isLocalPlayer && this.playerStateService) {
-                    await this.playerStateService.updatePlayerMoney(newMoney, this.gameState.id);
-                } else {
-                    // Non-local player - update in shared state for display purposes
-                    player.money = newMoney;
-                }
-            } catch (error) {
-                console.error('Error updating player money:', error);
-            }
+    public async applyBuildCostDeduction(player: Player, buildCost: number): Promise<void> {
+        if (buildCost <= 0) {
+            return;
         }
 
-        // Increment per-player turn count at END of the active player's turn.
-        // Do NOT increment the next active player; that incorrectly advances
-        // players on their first activation.
+        const isLocalPlayer = this.playerStateService?.getLocalPlayerId() === player.id;
+        const newMoney = player.money - buildCost;
+        try {
+            if (isLocalPlayer && this.playerStateService) {
+                await this.playerStateService.updatePlayerMoney(newMoney, this.gameState.id);
+            } else {
+                // Non-local player - update in shared state for display purposes
+                player.money = newMoney;
+            }
+        } catch (error) {
+            console.error('Error updating player money:', error);
+        }
+    }
+
+    /**
+     * Increment the per-player turn count at END of the active player's turn.
+     * Do NOT increment the next active player; that incorrectly advances
+     * players on their first activation. Must run only AFTER end-of-turn
+     * cleanup succeeds — otherwise a failed/retried End Turn skips turn numbers.
+     */
+    public async applyTurnNumberIncrement(player: Player): Promise<void> {
+        const isLocalPlayer = this.playerStateService?.getLocalPlayerId() === player.id;
         try {
             player.turnNumber = (player.turnNumber ?? 1) + 1;
             if (isLocalPlayer && this.playerStateService) {
