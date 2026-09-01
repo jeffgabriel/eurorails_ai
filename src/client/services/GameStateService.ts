@@ -124,6 +124,57 @@ export class GameStateService {
     }
     
     /**
+     * Deduct the turn's build cost from the player whose turn is ending. Must
+     * run BEFORE the victory eligibility check — eligibility reads
+     * post-deduction money.
+     */
+    public async applyBuildCostDeduction(player: Player, buildCost: number): Promise<void> {
+        if (buildCost <= 0) {
+            return;
+        }
+
+        const isLocalPlayer = this.playerStateService?.getLocalPlayerId() === player.id;
+        const newMoney = player.money - buildCost;
+        try {
+            if (isLocalPlayer && this.playerStateService) {
+                await this.playerStateService.updatePlayerMoney(newMoney, this.gameState.id);
+            } else {
+                // Non-local player - update in shared state for display purposes
+                player.money = newMoney;
+            }
+        } catch (error) {
+            console.error('Error updating player money:', error);
+        }
+    }
+
+    /**
+     * Increment the per-player turn count at END of the active player's turn.
+     * Do NOT increment the next active player; that incorrectly advances
+     * players on their first activation. Must run only AFTER end-of-turn
+     * cleanup succeeds — otherwise a failed/retried End Turn skips turn numbers.
+     */
+    public async applyTurnNumberIncrement(player: Player): Promise<void> {
+        const isLocalPlayer = this.playerStateService?.getLocalPlayerId() === player.id;
+        const newTurnNumber = (player.turnNumber ?? 1) + 1;
+        try {
+            if (isLocalPlayer && this.playerStateService) {
+                // Server-authoritative: updatePlayerTurnNumber updates local state
+                // only after the API succeeds, so on failure local stays in sync
+                // with the server (no premature increment).
+                await this.playerStateService.updatePlayerTurnNumber(
+                    newTurnNumber,
+                    this.gameState.id
+                );
+            } else {
+                // Non-local player - update shared state for display purposes.
+                player.turnNumber = newTurnNumber;
+            }
+        } catch (error) {
+            console.error('Error updating player turn number:', error);
+        }
+    }
+
+    /**
      * Move to the next player's turn
      * Server-authoritative: API call first, update local state only after success
      * Note: getCurrentPlayer() is about turn management (shared state), so it belongs in GameStateService.

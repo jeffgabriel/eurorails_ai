@@ -730,43 +730,19 @@ export class GameScene extends Phaser.Scene {
       buildCost = this.trackManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
     }
 
-    // Deduct track building cost from player's money if there was any building
-    if (buildCost > 0) {
-      const newMoney = currentPlayer.money - buildCost;
-
-      try {
-        // Update player money in local state and database
-        if (this.playerStateService.getLocalPlayerId() === currentPlayer.id) {
-          await this.playerStateService.updatePlayerMoney(newMoney, this.gameState.id);
-        } else {
-          // Non-local player - update in shared state for display purposes
-          currentPlayer.money = newMoney;
-        }
-      } catch (error) {
-        console.error("Error updating player money:", error);
-      }
-
-      // Clear the build cost after processing it to avoid double-counting
-    }
+    // Deduct build cost before the victory check below (eligibility reads
+    // post-deduction money).
+    await this.gameStateService.applyBuildCostDeduction(currentPlayer, buildCost);
 
     // Always end-turn cleanup (even if buildCost was 0) so per-turn UI state resets
     // and undo state doesn't leak across turns (e.g., 0-cost ferry builds).
+    // This can throw and abort the turn; the turn-number increment below must
+    // stay after it so a failed/retried End Turn does not skip turn numbers.
     await this.trackManager.endTurnCleanup(currentPlayer.id);
     this.uiManager.clearTurnUndoStack();
 
-    // Increment per-player turn count at END of the active player's turn.
-    // Do NOT increment the next active player; that incorrectly advances players on their first activation.
-    try {
-      currentPlayer.turnNumber = (currentPlayer.turnNumber ?? 1) + 1;
-      if (this.playerStateService.getLocalPlayerId() === currentPlayer.id) {
-        await this.playerStateService.updatePlayerTurnNumber(
-          currentPlayer.turnNumber,
-          this.gameState.id
-        );
-      }
-    } catch (e) {
-      // Non-fatal: if persistence fails, the server will retain the old value.
-    }
+    // Increment the ending player's turn number only after cleanup succeeded.
+    await this.gameStateService.applyTurnNumberIncrement(currentPlayer);
 
     // Check victory conditions for local player ending their turn
     // Only check if victory hasn't been triggered yet
@@ -805,60 +781,27 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Handle ferry state transitions at the start of a player's turn
+   * Apply ferry turn-transition rules (PlayerStateService) and render the
+   * resulting UI effects.
    */
   private async handleFerryTurnTransition(player: Player): Promise<void> {
-    if (!player.trainState.ferryState) {
-      return; // Not at a ferry
-    }
+    const result = this.playerStateService.applyFerryTurnTransition(
+      player,
+      (row, col) => this.mapRenderer.gridPoints[row]?.[col]
+    );
 
-    if (player.trainState.ferryState.status === 'just_arrived') {
-      // Transition from 'just_arrived' to 'ready_to_cross'
-      player.trainState.ferryState.status = 'ready_to_cross';
-      
-      // Get the other side coordinates from ferry state
-      const otherSideFromFerry = player.trainState.ferryState.otherSide;
-      
-      // Get the actual GridPoint with correct world coordinates from MapRenderer
-      const actualOtherSide = this.mapRenderer.gridPoints[otherSideFromFerry.row][otherSideFromFerry.col];
-      
-      if (!actualOtherSide) {
-        console.error(`Could not find grid point at ${otherSideFromFerry.row},${otherSideFromFerry.col}`);
-        return;
-      }
-      
-      // Update train position to other side using correct world coordinates
+    if (result.newPosition) {
       await this.uiManager.updateTrainPosition(
         player.id,
-        actualOtherSide.x,
-        actualOtherSide.y,
-        actualOtherSide.row,
-        actualOtherSide.col
+        result.newPosition.x,
+        result.newPosition.y,
+        result.newPosition.row,
+        result.newPosition.col
       );
-
-      // Set flag to halve movement for this turn
-      player.trainState.justCrossedFerry = true;
-
-      // Clear movement history after ferry crossing.
-      // The ferry crossing is a "reset" of the movement context - the train is now
-      // on a different side of the water, and previous movement history is no longer
-      // relevant for reversal detection rules.
-      player.trainState.movementHistory = [];
-
-      // Clear ferry state after successful crossing
-      player.trainState.ferryState = undefined;
-
-      // Check if the ferry destination is a city (Dublin/Belfast are ferry-city hybrids)
-      // If so, trigger city arrival to show the load dialog
-      if (actualOtherSide.city) {
-        await this.uiManager.triggerCityArrival(player, actualOtherSide);
-      }
     }
-    
-    // If status was already 'ready_to_cross', it means the player didn't move last turn
-    // so we just clear the ferry state and continue with normal movement
-    if (player.trainState.ferryState?.status === 'ready_to_cross') {
-      player.trainState.ferryState = undefined;
+
+    if (result.arrivedAtCity) {
+      await this.uiManager.triggerCityArrival(player, result.arrivedAtCity);
     }
   }
 
@@ -1127,32 +1070,14 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Declare victory to the server
-    try {
-      const { authenticatedFetch } = await import('../services/authenticatedFetch');
-      const response = await authenticatedFetch(
-        `${config.apiBaseUrl}/api/game/${this.gameState.id}/declare-victory`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            playerId: player.id,
-            connectedCities,
-          }),
-        }
-      );
-
-      if (response.ok) {
-        const result = await response.json();
-        if (result.victoryState) {
-          // Update local game state with victory state
-          this.gameState.victoryState = result.victoryState;
-          // Note: Socket event handler (onVictoryTriggered) will show the notification to all players
-        }
-      } else {
-        const error = await response.json();
-        console.warn('Victory declaration rejected:', error.details);
-      }
-    } catch (error) {
-      console.error('Error declaring victory:', error);
+    const victoryState = await victoryService.declareVictory(
+      this.gameState.id,
+      player.id,
+      connectedCities
+    );
+    if (victoryState) {
+      this.gameState.victoryState = victoryState;
+      // Note: Socket event handler (onVictoryTriggered) will show the notification to all players
     }
   }
 
@@ -1162,34 +1087,10 @@ export class GameScene extends Phaser.Scene {
    * Returns true if the game is over, false if it continues (e.g., tie extension).
    */
   private async resolveVictory(): Promise<boolean> {
-    try {
-      const { authenticatedFetch } = await import('../services/authenticatedFetch');
-      const response = await authenticatedFetch(
-        `${config.apiBaseUrl}/api/game/${this.gameState.id}/resolve-victory`,
-        {
-          method: 'POST',
-        }
-      );
-
-      if (response.ok) {
-        const result = await response.json();
-        // The server will emit game:over or victory:tie-extended via socket
-        // Those handlers will update state and show appropriate UI
-        if (result.gameOver) {
-          console.log('Victory resolved - game over');
-          return true;
-        } else if (result.tieExtended) {
-          console.log('Victory resulted in tie - threshold extended');
-          return false; // Game continues with higher threshold
-        }
-      } else {
-        const error = await response.json();
-        console.warn('Victory resolution failed:', error.details);
-      }
-    } catch (error) {
-      console.error('Error resolving victory:', error);
-    }
-    return false; // On error, allow game to continue
+    const { gameOver } = await VictoryService.getInstance().resolveVictory(
+      this.gameState.id
+    );
+    return gameOver;
   }
 
   private async openSettings() {
