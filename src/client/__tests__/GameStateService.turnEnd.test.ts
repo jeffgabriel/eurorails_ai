@@ -101,14 +101,15 @@ describe('GameStateService turn-end accounting', () => {
   });
 
   describe('applyTurnNumberIncrement', () => {
-    it('increments and persists the turn number for the local player', async () => {
+    it('persists the incremented turn number for the local player via the API', async () => {
+      // Server-authoritative: the local turnNumber is advanced inside
+      // updatePlayerTurnNumber on success, not before the await.
       await service.applyTurnNumberIncrement(localPlayer);
 
-      expect(localPlayer.turnNumber).toBe(4);
       expect(playerStateService.updatePlayerTurnNumber).toHaveBeenCalledWith(4, 'game-1');
     });
 
-    it('increments a non-local player without persisting', async () => {
+    it('increments a non-local player directly without persisting', async () => {
       await service.applyTurnNumberIncrement(otherPlayer);
 
       expect(otherPlayer.turnNumber).toBe(3);
@@ -122,11 +123,23 @@ describe('GameStateService turn-end accounting', () => {
       expect(freshPlayer.turnNumber).toBe(2);
     });
 
-    it('resolves without throwing when turn-number persistence rejects', async () => {
+    it('does not advance the local turn number when persistence fails', async () => {
+      playerStateService.updatePlayerTurnNumber.mockResolvedValueOnce(false);
+
+      await service.applyTurnNumberIncrement(localPlayer);
+
+      // Local state stays in sync with the server (no premature increment).
+      expect(localPlayer.turnNumber).toBe(3);
+    });
+
+    it('does not throw when the update rejects', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation();
       playerStateService.updatePlayerTurnNumber.mockRejectedValueOnce(new Error('api down'));
 
       await expect(service.applyTurnNumberIncrement(localPlayer)).resolves.toBeUndefined();
-      expect(localPlayer.turnNumber).toBe(4);
+      expect(localPlayer.turnNumber).toBe(3);
+      expect(errorSpy).toHaveBeenCalled();
+      errorSpy.mockRestore();
     });
   });
 });

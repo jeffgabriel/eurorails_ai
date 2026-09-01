@@ -155,16 +155,22 @@ export class GameStateService {
      */
     public async applyTurnNumberIncrement(player: Player): Promise<void> {
         const isLocalPlayer = this.playerStateService?.getLocalPlayerId() === player.id;
+        const newTurnNumber = (player.turnNumber ?? 1) + 1;
         try {
-            player.turnNumber = (player.turnNumber ?? 1) + 1;
             if (isLocalPlayer && this.playerStateService) {
+                // Server-authoritative: updatePlayerTurnNumber updates local state
+                // only after the API succeeds, so on failure local stays in sync
+                // with the server (no premature increment).
                 await this.playerStateService.updatePlayerTurnNumber(
-                    player.turnNumber,
+                    newTurnNumber,
                     this.gameState.id
                 );
+            } else {
+                // Non-local player - update shared state for display purposes.
+                player.turnNumber = newTurnNumber;
             }
-        } catch (e) {
-            // Non-fatal: if persistence fails, the server will retain the old value.
+        } catch (error) {
+            console.error('Error updating player turn number:', error);
         }
     }
 
