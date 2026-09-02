@@ -60,7 +60,11 @@ export class GameScene extends Phaser.Scene {
   private socketUnsubDebugAny?: () => void;
   private autoRunBadge?: AutoRunBadge;
   private llmTranscriptOverlay?: LLMTranscriptOverlay;
-  private botTurnPresenter!: BotTurnPresenter;
+  private botTurnPresenter?: BotTurnPresenter;
+  // bot:turn-complete payloads that arrive before create() has constructed the
+  // presenter (the socket coordinator starts — and joining the room can resume
+  // a queued bot turn — well before the presenter's dependencies exist).
+  private pendingBotTurns: BotTurnCompletePayload[] = [];
 
   // Event card UI components
   private mapHighlighter?: MapHighlighter;
@@ -233,6 +237,10 @@ export class GameScene extends Phaser.Scene {
   async create() {
     // Clear any existing containers
     this.children.removeAll(true);
+    // Drop any presenter/queue state from a prior lifecycle — a stale presenter
+    // references destroyed game objects and must not receive early events.
+    this.botTurnPresenter = undefined;
+    this.pendingBotTurns = [];
     // Initialize services and load initial state
     this.gameStateService = new GameStateService(this.gameState);
     this.playerStateService = new PlayerStateService();
@@ -279,7 +287,7 @@ export class GameScene extends Phaser.Scene {
         );
       },
       onAutoRunStatus: (enabled) => this.autoRunBadge?.setVisible(enabled),
-      onBotTurnComplete: (data) => this.botTurnPresenter.present(data as BotTurnCompletePayload),
+      onBotTurnComplete: (data) => this.presentOrQueueBotTurn(data as BotTurnCompletePayload),
     });
 
     if (!connected) {
@@ -462,6 +470,11 @@ export class GameScene extends Phaser.Scene {
         void this.uiManager.updateTrainPosition(playerId, x, y, row, col, opts),
       resolveBotDisplay: (botPlayerId) => this.resolveBotDisplay(botPlayerId),
     });
+
+    // Present any bot turns that completed while create() was still
+    // constructing the presenter's dependencies, in arrival order.
+    const queuedBotTurns = this.pendingBotTurns.splice(0);
+    queuedBotTurns.forEach((payload) => this.botTurnPresenter!.present(payload));
 
     // Auto-run badge (hidden by default)
     this.autoRunBadge = new AutoRunBadge(this);
@@ -699,6 +712,20 @@ export class GameScene extends Phaser.Scene {
 
     if (result.arrivedAtCity) {
       await this.uiManager.triggerCityArrival(player, result.arrivedAtCity);
+    }
+  }
+
+  /**
+   * Dispatch a bot:turn-complete payload to the presenter, or queue it if the
+   * presenter has not been constructed yet (the socket coordinator registers
+   * this callback early in create(); joining the room can immediately resume a
+   * queued bot turn). Queued payloads are flushed right after construction.
+   */
+  private presentOrQueueBotTurn(payload: BotTurnCompletePayload): void {
+    if (this.botTurnPresenter) {
+      this.botTurnPresenter.present(payload);
+    } else {
+      this.pendingBotTurns.push(payload);
     }
   }
 

@@ -86,6 +86,25 @@ describe('ChatScene.whenReady', () => {
     expect(secondResolved).toBe(true);
   });
 
+  it('resolves waiters that called whenReady() before the first init()', async () => {
+    const scene = createTestableChatScene();
+
+    // e.g. GameScene.openChatDM() awaiting readiness before ChatScene launches.
+    let earlyResolved = false;
+    scene.whenReady().then(() => {
+      earlyResolved = true;
+    });
+
+    scene.init({ gameId: 'game-1', userId: 'user-1' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(earlyResolved).toBe(false);
+
+    await scene.create();
+    await Promise.resolve();
+    expect(earlyResolved).toBe(true);
+  });
+
   it('keeps isReady set to true after create(), for backward-compatible callers', async () => {
     const scene = createTestableChatScene();
     scene.init({ gameId: 'game-1', userId: 'user-1' });

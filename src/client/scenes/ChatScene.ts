@@ -66,13 +66,18 @@ export class ChatScene extends Phaser.Scene {
     this.userId = data.userId;
     this.isMobile = this.scale.width < 768;
 
-    // Re-created on every init (scene start/re-entry, including hot-reload) so
-    // whenReady() always reflects THIS lifecycle's create() rather than a
-    // stale promise resolved by a previous one.
-    this.isReady = false;
-    this._whenReadyPromise = new Promise<void>((resolve) => {
-      this._resolveWhenReady = resolve;
-    });
+    // Re-create the promise only after a completed lifecycle, so whenReady()
+    // reflects THIS lifecycle's create() rather than a stale promise resolved
+    // by a previous one. When the pending promise was never resolved (first
+    // launch — where whenReady() is callable before init — or a restart that
+    // interrupted create()), keep it: replacing it would orphan existing
+    // waiters, which would then never resolve.
+    if (this.isReady) {
+      this.isReady = false;
+      this._whenReadyPromise = new Promise<void>((resolve) => {
+        this._resolveWhenReady = resolve;
+      });
+    }
   }
 
   /**
