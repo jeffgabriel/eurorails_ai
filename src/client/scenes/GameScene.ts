@@ -17,7 +17,7 @@ import { RiverDebugOverlay } from "../components/RiverDebugOverlay";
 import { LLMTranscriptOverlay } from "../components/LLMTranscriptOverlay";
 import { BotTrainAnimator } from "../components/BotTrainAnimator";
 import { GameToastManager } from "../components/GameToastManager";
-import { WhisperPanel, WhisperTurnEntry } from "../components/WhisperPanel";
+import { WhisperPanel } from "../components/WhisperPanel";
 import { AutoRunBadge } from "../components/AutoRunBadge";
 import { MapHighlighter } from "../components/MapHighlighter";
 import { EventCardOverlay } from "../components/EventCardOverlay";
@@ -26,6 +26,9 @@ import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/map
 import { useGameStore } from "../lobby/store/game.store";
 import { EventCardDrawnPayload, EventCardType } from "../../shared/types/EventCard";
 import { socketService } from "../lobby/shared/socket";
+import { GameSocketCoordinator } from "../services/GameSocketCoordinator";
+import type { RefreshSpriteUpdate } from "../services/PlayerStateService";
+import { BotTurnPresenter, BotTurnCompletePayload, BotDisplay } from "../components/BotTurnPresenter";
 
 export class GameScene extends Phaser.Scene {
   // Main containers
@@ -43,6 +46,7 @@ export class GameScene extends Phaser.Scene {
   private gameStateService!: GameStateService;
   private playerStateService!: PlayerStateService;
   private loadService: LoadService;
+  private socketCoordinator!: GameSocketCoordinator;
   private turnChangeListener?: (currentPlayerIndex: number) => void;
   private stateChangeListener?: () => void;
   private previousActivePlayerId: string | null = null;
@@ -53,15 +57,10 @@ export class GameScene extends Phaser.Scene {
   private botTrainAnimator?: BotTrainAnimator;
   private gameToastManager?: GameToastManager;
   private whisperPanel?: WhisperPanel;
-  private socketUnsubBotTurnComplete?: () => void;
   private socketUnsubDebugAny?: () => void;
   private autoRunBadge?: AutoRunBadge;
-  private socketUnsubAutoRunStatus?: () => void;
   private llmTranscriptOverlay?: LLMTranscriptOverlay;
-  private socketResyncTimer?: number;
-  private socketResyncInFlight = false;
-  private socketUnsubReconnected?: () => void;
-  private socketUnsubSeqGap?: () => void;
+  private botTurnPresenter!: BotTurnPresenter;
 
   // Event card UI components
   private mapHighlighter?: MapHighlighter;
@@ -257,129 +256,35 @@ export class GameScene extends Phaser.Scene {
     await this.loadService.loadInitialState();
 
     // Socket.IO is the primary transport for real-time updates; polling is the fallback.
-    let shouldPoll = true;
-    if (socketService.isConnected()) {
-      shouldPoll = false;
-    } else {
-      // If the socket was already created elsewhere (e.g., lobby), it may simply still be handshaking.
-      const token = localStorage.getItem('eurorails.jwt');
-      try {
-        if (!socketService.hasSocket() && !token) {
-          console.warn('⚠️ Socket.IO not connected and no auth token available; using polling fallback.');
-        } else {
-          if (!socketService.hasSocket() && token) {
-            socketService.connect(token);
-          }
-          const connected = await socketService.waitForConnection(2500);
-          shouldPoll = !(connected && socketService.isConnected());
-          if (shouldPoll) {
-            console.warn('⚠️ Socket.IO not connected after waiting; using polling fallback.');
-          }
-        }
-      } catch (connectError) {
-        console.error('❌ Error connecting Socket.IO:', connectError);
-      }
-    }
+    // GameSocketCoordinator owns the connect-or-poll decision, every game socket
+    // subscription, and the debounced HTTP resync — GameScene only supplies the
+    // seams it needs (accessors for components created later in this method, and
+    // callbacks for the UI effects those events should have).
+    this.socketCoordinator = new GameSocketCoordinator();
+    const connected = await this.socketCoordinator.start({
+      gameId: this.gameState.id,
+      gameStateService: this.gameStateService,
+      playerStateService: this.playerStateService,
+      loadService: this.loadService,
+      getTrackManager: () => this.trackManager,
+      getMapGridPoint: (row, col) => this.mapRenderer?.gridPoints[row]?.[col],
+      isBotAnimating: (playerId) => this.botTrainAnimator?.isAnimating(playerId) ?? false,
+      onApplySpriteUpdates: (updates) => this.applySpriteUpdates(updates),
+      onUIRefresh: () => this.refreshGameUI(),
+      onLaunchWinner: (winnerId, winnerName) => this.launchWinnerScene(winnerId, winnerName),
+      onTieExtended: (newThreshold) => {
+        this.turnNotification.show(
+          `Tie! Victory threshold increased to ${newThreshold}M ECU. Game continues.`,
+          5000
+        );
+      },
+      onAutoRunStatus: (enabled) => this.autoRunBadge?.setVisible(enabled),
+      onBotTurnComplete: (data) => this.botTurnPresenter.present(data as BotTurnCompletePayload),
+    });
 
-    if (shouldPoll) {
+    if (!connected) {
       console.warn('🔄 Starting polling fallback for turn changes (5 second interval)');
       this.gameStateService.startPollingForTurnChanges(5000);
-    } else {
-      // Join the game room so we receive events
-      socketService.join(this.gameState.id);
-
-          this.socketUnsubReconnected?.();
-          this.socketUnsubSeqGap?.();
-          this.socketUnsubReconnected = socketService.onReconnected(() => {
-            this.scheduleSocketResync('reconnect');
-          });
-          this.socketUnsubSeqGap = socketService.onSeqGap(({ expected, received }) => {
-            this.scheduleSocketResync(`seq-gap ${expected}->${received}`);
-          });
-          
-          socketService.onTurnChange((data: any) => {
-            // Server sends: { currentPlayerIndex, currentPlayerId, gameId, timestamp }
-            // Handle the actual server payload
-            const playerIndex = data.currentPlayerIndex;
-            if (playerIndex !== undefined && playerIndex !== this.gameState.currentPlayerIndex) {
-              this.gameStateService.updateCurrentPlayerIndex(playerIndex);
-            }
-          });
-
-          // Listen for state patches to sync game state across clients
-          socketService.onPatch((data: { patch: any; serverSeq: number }) => {
-            const { spriteUpdates } = this.gameStateService.applyServerPatch(data.patch);
-
-            for (const update of spriteUpdates) {
-              // JIRA-36: Skip instant position update if animation is in progress
-              if (this.botTrainAnimator?.isAnimating(update.playerId)) continue;
-              const gridPoint = this.mapRenderer.gridPoints[update.row]?.[update.col];
-              if (gridPoint) {
-                // Use persist: false to avoid sending position back to server
-                this.uiManager.updateTrainPosition(
-                  update.playerId,
-                  gridPoint.x,
-                  gridPoint.y,
-                  update.row,
-                  update.col,
-                  { persist: false }
-                );
-              }
-            }
-
-            this.uiManager.setupUIOverlay();
-            // Update LoadsReferencePanel with new game state (issue #176: hands are public)
-            this.loadsReferencePanel?.setGameState(this.gameState);
-          });
-
-          // Listen for victory triggered event
-          socketService.onVictoryTriggered((data) => {
-            if (data.gameId !== this.gameState.id) return;
-
-            // Update local victory state
-            this.gameState.victoryState = {
-              triggered: true,
-              triggerPlayerIndex: data.triggerPlayerIndex,
-              victoryThreshold: data.victoryThreshold,
-              finalTurnPlayerIndex: data.finalTurnPlayerIndex,
-            };
-
-            // Refresh UI to show final round indicator
-            this.uiManager.setupUIOverlay();
-          });
-
-          // Listen for game over event
-          socketService.onGameOver((data) => {
-            if (data.gameId !== this.gameState.id) return;
-
-            // Update game status
-            this.gameState.status = 'completed';
-
-            // Launch winner scene
-            this.launchWinnerScene(data.winnerId, data.winnerName);
-          });
-
-          // Listen for tie extended event
-          socketService.onTieExtended((data) => {
-            if (data.gameId !== this.gameState.id) return;
-
-            // Reset victory state with new threshold
-            this.gameState.victoryState = {
-              triggered: false,
-              triggerPlayerIndex: -1,
-              victoryThreshold: data.newThreshold,
-              finalTurnPlayerIndex: -1,
-            };
-
-            // Show notification
-            this.turnNotification.show(
-              `Tie! Victory threshold increased to ${data.newThreshold}M ECU. Game continues.`,
-              5000
-            );
-
-            // Refresh UI
-            this.uiManager.setupUIOverlay();
-          });
     }
 
     // Create containers in the right order
@@ -458,8 +363,8 @@ export class GameScene extends Phaser.Scene {
     // Load existing tracks before creating UI
     await this.trackManager.loadExistingTracks();
 
-    // Setup track update listener on existing socket connection
-    this.setupTrackUpdateListener();
+    // Track update events (join + onTrackUpdated) are registered by
+    // GameSocketCoordinator.start() above.
 
     // Create UI manager with callbacks after tracks are loaded
     this.uiManager = new UIManager(
@@ -543,6 +448,21 @@ export class GameScene extends Phaser.Scene {
       this.whisperPanel = new WhisperPanel(this, this.gameState.id, this.gameToastManager);
     }
 
+    // Single dispatch point for bot:turn-complete payloads (toasts, animation,
+    // whisper entries, transcript ingest) — depends only on the components
+    // just constructed above, injected explicitly rather than reached into.
+    this.botTurnPresenter = new BotTurnPresenter({
+      gameToastManager: this.gameToastManager,
+      botTrainAnimator: this.botTrainAnimator,
+      whisperPanel: this.whisperPanel,
+      llmTranscriptOverlay: this.llmTranscriptOverlay,
+      getMapGridPoints: () => this.mapRenderer.gridPoints,
+      getTrainSprite: (playerId) => this.uiManager.getTrainSprite(playerId),
+      updateTrainPosition: (playerId, x, y, row, col, opts) =>
+        void this.uiManager.updateTrainPosition(playerId, x, y, row, col, opts),
+      resolveBotDisplay: (botPlayerId) => this.resolveBotDisplay(botPlayerId),
+    });
+
     // Auto-run badge (hidden by default)
     this.autoRunBadge = new AutoRunBadge(this);
 
@@ -551,45 +471,22 @@ export class GameScene extends Phaser.Scene {
     this.setupEventOverlaySubscription();
     this.setupActiveEffectsSubscription();
 
-    // Guard: clean up any stale listeners from a prior create() call
-    // that wasn't paired with a full shutdown() (e.g. scene re-entry)
+    // Guard: clean up any stale listener from a prior create() call
+    // that wasn't paired with a full shutdown() (e.g. scene re-entry).
+    // Event-card, auto-run status, and bot:turn-complete subscriptions are
+    // owned by GameSocketCoordinator (started above); only the debug-all-events
+    // listener remains scene-local, so it is the only one guarded here.
     this.socketUnsubDebugAny?.();
-    this.socketUnsubBotTurnComplete?.();
-    this.socketUnsubAutoRunStatus?.();
 
-    // Wire event card socket listeners → Zustand store
-    // (The store's own connect() is not called from GameScene, so we must
-    // register these here so the overlay/highlight subscriptions fire.)
-    socketService.onEventCardDrawn((payload) => {
-      useGameStore.getState().showEventOverlay(payload);
-    });
-    socketService.onEventEffectExpired((payload) => {
-      useGameStore.getState().removeActiveEffect(payload.cardId);
-    });
-    socketService.onActiveEffects((effects) => {
-      useGameStore.getState().setActiveEffects(effects);
-    });
-
-    // F9 key listener — toggle auto-run
+    // F9 key listener — toggle auto-run (a one-shot emit, not a subscription,
+    // so it stays here rather than in the coordinator)
     this.input.keyboard?.on('keydown-F9', () => {
       socketService.emitAutoRunToggle(this.gameState.id);
-    });
-
-    const badge = this.autoRunBadge;
-    this.socketUnsubAutoRunStatus = socketService.onAutoRunStatus((data) => {
-      badge.setVisible(data.enabled);
     });
 
     const overlay = this.debugOverlay;
     this.socketUnsubDebugAny = socketService.onAnyEvent((eventName: string, ...args: any[]) => {
       overlay.logSocketEvent(eventName, args.length === 1 ? args[0] : args);
-    });
-
-    // Single subscription fanning out to all bot:turn-complete consumers
-    // (transcript overlay, toasts, train animation, whisper history)
-    this.socketUnsubBotTurnComplete = socketService.onAnyEvent((eventName: string, ...args: any[]) => {
-      if (eventName !== 'bot:turn-complete') return;
-      this.handleBotTurnComplete(args[0]);
     });
 
     // Main camera ignores UI elements
@@ -805,184 +702,13 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Single dispatch point for bot:turn-complete socket payloads. */
-  private handleBotTurnComplete(data: any): void {
-    this.llmTranscriptOverlay?.ingestBotTurnComplete(data);
-    if (!data?.botPlayerId) return;
-
-    const botPlayer = this.gameState.players.find(p => p.id === data.botPlayerId);
-    const botName = botPlayer?.name ?? 'Unknown Player';
-    const botColor = botPlayer ? parseInt(botPlayer.color.replace('#', '0x')) : 0x1a1a2e;
-
-    this.showBotTurnToasts(data, botName, botColor);
-    this.animateBotTurn(data, botName, botColor);
-
-    if (this.whisperPanel) {
-      const entry: WhisperTurnEntry = {
-        turnNumber: data.turnNumber ?? 0,
-        botPlayerId: data.botPlayerId,
-        botName: botPlayer?.name ?? 'Unknown Bot',
-        action: data.action ?? 'Unknown',
-        reasoning: data.reasoning ?? '',
-        cost: data.cost ?? 0,
-        segmentsBuilt: data.segmentsBuilt ?? 0,
-        loadsPickedUp: data.loadsPickedUp,
-        loadsDelivered: data.loadsDelivered,
-        milepostsMoved: data.movementData?.mileposts,
-        compositionTrace: data.compositionTrace,
-        demandRanking: data.demandRanking,
-      };
-      this.whisperPanel.addBotTurn(entry);
-    }
-  }
-
-  private showBotTurnToasts(data: any, botName: string, botColor: number): void {
-    const toast = this.gameToastManager;
-    if (!toast) return;
-
-    // LLM strategy announcement — always fires (not timeline-driven)
-    if (data.reasoning) {
-      const isLlmFailure = /^\[(heuristic[ -]fallback|llm-failed|no-api-key)\]/i.test(data.reasoning);
-      const cleanReasoning = data.reasoning.replace(/\[[\w\s=\/\-]+\]\s*/g, '');
-      if (isLlmFailure) {
-        toast.show(`😵 ${botName} LLM failed — ${cleanReasoning}`, { color: 0x8b0000, shake: true });
-      } else {
-        toast.show(`${botName}: ${cleanReasoning}`, { color: botColor, duration: 10000 });
-      }
-    }
-
-    // When actionTimeline is present, action toasts are fired mid-animation
-    // by the animateTimeline onAction callback — skip them here
-    if (data.actionTimeline?.length > 0) return;
-
-    // Deduplicate by {loadType, city} to prevent toast spam from duplicate delivery entries
-    if (data.loadsDelivered?.length > 0) {
-      const seenDeliveries = new Set<string>();
-      for (const d of data.loadsDelivered) {
-        const key = `${d.loadType}:${d.city}`;
-        if (seenDeliveries.has(key)) continue;
-        seenDeliveries.add(key);
-        toast.show(
-          `💰 ${botName} delivered ${d.loadType} to ${d.city} — earned ${d.payment}M ECU!`,
-          { color: botColor, flourish: true },
-        );
-      }
-    }
-
-    if (data.segmentsBuilt > 0 && data.buildTargetCity) {
-      toast.show(
-        `${botName} built ${data.segmentsBuilt} track segment${data.segmentsBuilt > 1 ? 's' : ''} toward ${data.buildTargetCity} (${data.cost}M)`,
-        { color: botColor },
-      );
-    }
-
-    if (data.action === 'UpgradeTrain') {
-      toast.show(`${botName} upgraded their train`, { color: botColor });
-    }
-
-    if (data.action === 'DiscardHand') {
-      toast.show(`😢 ${botName} discarded their hand`, { color: botColor, shake: true });
-    }
-
-    if (data.loadsPickedUp?.length > 0) {
-      const loads = data.loadsPickedUp.map((p: any) => `${p.loadType} at ${p.city}`).join(', ');
-      toast.show(`${botName} picked up ${loads}`, { color: botColor });
-    }
-  }
-
-  /** JIRA-36: animate a bot's movement from its turn-complete payload. */
-  private animateBotTurn(data: any, botName: string, botColor: number): void {
-    const animator = this.botTrainAnimator;
-    if (!animator) return;
-
-    // Cancel any existing animation for this bot (rapid turns)
-    if (animator.isAnimating(data.botPlayerId)) {
-      animator.cancelAnimation(data.botPlayerId);
-    }
-
-    const toast = this.gameToastManager;
-
-    // Prefer structured timeline over flat path
-    if (data.actionTimeline?.length > 0) {
-      // Snap sprite to start of first move segment
-      const firstMove = data.actionTimeline.find((s: any) => s.type === 'move');
-      if (firstMove?.path?.[0]) {
-        const startGrid = this.mapRenderer.gridPoints[firstMove.path[0].row]?.[firstMove.path[0].col];
-        if (startGrid) {
-          const sprite = this.uiManager.getTrainSprite(data.botPlayerId);
-          if (sprite) sprite.setPosition(startGrid.x, startGrid.y);
-        }
-      }
-
-      animator.animateTimeline(
-        data.botPlayerId,
-        data.actionTimeline,
-        this.mapRenderer.gridPoints,
-        () => this.uiManager.getTrainSprite(data.botPlayerId),
-        (step) => {
-          if (!toast) return;
-          switch (step.type) {
-            case 'deliver':
-              toast.show(
-                `💰 ${botName} delivered ${step.loadType} to ${step.city} — earned ${step.payment}M ECU!`,
-                { color: botColor, flourish: true },
-              );
-              break;
-            case 'pickup':
-              toast.show(`${botName} picked up ${step.loadType} at ${step.city}`, { color: botColor });
-              break;
-            case 'build':
-              toast.show(
-                `${botName} built ${step.segmentsBuilt} track segment${step.segmentsBuilt > 1 ? 's' : ''} (${step.cost}M)`,
-                { color: botColor },
-              );
-              break;
-            case 'upgrade':
-              toast.show(`${botName} upgraded their train`, { color: botColor });
-              break;
-            case 'discard':
-              toast.show(`😢 ${botName} discarded their hand`, { color: botColor, shake: true });
-              break;
-          }
-        },
-      ).then((finalPos) => {
-        if (finalPos) {
-          this.uiManager.updateTrainPosition(
-            data.botPlayerId,
-            finalPos.x, finalPos.y, finalPos.row, finalPos.col,
-            { persist: false },
-          );
-        }
-      }).catch(() => {});
-      return;
-    }
-
-    // Fallback: flat movementPath animation (backward compat)
-    if (!data.movementPath || data.movementPath.length < 2) return;
-
-    const startPos = data.movementPath[0];
-    const startGrid = this.mapRenderer.gridPoints[startPos.row]?.[startPos.col];
-    if (startGrid) {
-      const sprite = this.uiManager.getTrainSprite(data.botPlayerId);
-      if (sprite) {
-        sprite.setPosition(startGrid.x, startGrid.y);
-      }
-    }
-
-    animator.animateAlongPath(
-      data.botPlayerId,
-      data.movementPath,
-      this.mapRenderer.gridPoints,
-      () => this.uiManager.getTrainSprite(data.botPlayerId),
-    ).then((finalPos) => {
-      if (finalPos) {
-        this.uiManager.updateTrainPosition(
-          data.botPlayerId,
-          finalPos.x, finalPos.y, finalPos.row, finalPos.col,
-          { persist: false },
-        );
-      }
-    }).catch(() => {});
+  /** Resolve display info (name/color) for a bot player — used by BotTurnPresenter. */
+  private resolveBotDisplay(botPlayerId: string): BotDisplay {
+    const botPlayer = this.gameState.players.find(p => p.id === botPlayerId);
+    return {
+      name: botPlayer?.name ?? 'Unknown Player',
+      color: botPlayer ? parseInt(botPlayer.color.replace('#', '0x')) : 0x1a1a2e,
+    };
   }
 
   /** Reset a player's movement allowance for a new turn, halving it after a ferry crossing. */
@@ -1256,15 +982,9 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    if (this.socketResyncTimer !== undefined) {
-      window.clearTimeout(this.socketResyncTimer);
-      this.socketResyncTimer = undefined;
-    }
-    this.socketUnsubReconnected?.();
-    this.socketUnsubReconnected = undefined;
-    this.socketUnsubSeqGap?.();
-    this.socketUnsubSeqGap = undefined;
-    
+    // Stop the resync timer and all game socket subscriptions.
+    this.socketCoordinator?.stop();
+
     // Clean up TurnNotification
     if (this.turnNotification) {
       this.turnNotification.destroy();
@@ -1277,8 +997,6 @@ export class GameScene extends Phaser.Scene {
 
     // Clean up static overlays
     this.loadsReferencePanel?.destroy();
-    this.socketUnsubBotTurnComplete?.();
-    this.socketUnsubBotTurnComplete = undefined;
     this.botTrainAnimator?.destroy();
     this.gameToastManager?.destroy();
     this.socketUnsubDebugAny?.();
@@ -1287,8 +1005,6 @@ export class GameScene extends Phaser.Scene {
     this.riverDebugOverlay?.destroy();
     this.llmTranscriptOverlay?.destroy();
     this.whisperPanel?.destroy();
-    this.socketUnsubAutoRunStatus?.();
-    this.socketUnsubAutoRunStatus = undefined;
     this.autoRunBadge?.destroy();
 
     // Clean up event card UI subscriptions and components
@@ -1302,54 +1018,33 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Setup track update listener on existing socket connection
+   * Apply resolved sprite position updates from GameSocketCoordinator (onPatch
+   * and HTTP resync both funnel through this single apply path — see
+   * GameSocketCoordinatorDeps.onApplySpriteUpdates).
    */
-  private setupTrackUpdateListener(): void {
-    if (!this.gameState.id) {
-      console.warn('Cannot setup track update listener: gameState.id is missing');
-      return;
+  private applySpriteUpdates(updates: RefreshSpriteUpdate[]): void {
+    if (!this.gameState.trainSprites) {
+      this.gameState.trainSprites = new Map();
     }
-    if (!socketService.isConnected()) return;
-
-    // Join the game room so we receive track update events
-    socketService.join(this.gameState.id);
-
-    socketService.onTrackUpdated(async (data: { gameId: string; playerId: string; timestamp: number }) => {
-      if (data.gameId === this.gameState.id && this.trackManager) {
-        try {
-          await this.trackManager.loadExistingTracks();
-          this.trackManager.drawAllTracks();
-        } catch (error) {
-          console.error('Error reloading tracks after update:', error);
-        }
-      }
-    });
+    for (const update of updates) {
+      // persist: false — this position just came from the server, so writing
+      // it back would be a redundant round-trip.
+      this.uiManager.updateTrainPosition(
+        update.playerId,
+        update.x,
+        update.y,
+        update.row,
+        update.col,
+        { persist: false }
+      );
+    }
   }
 
-  private scheduleSocketResync(reason: string): void {
-    if (!this.gameState || !this.gameState.id) return;
-    if (this.socketResyncTimer !== undefined) {
-      window.clearTimeout(this.socketResyncTimer);
-    }
-    this.socketResyncTimer = window.setTimeout(async () => {
-      if (this.socketResyncInFlight) return;
-      this.socketResyncInFlight = true;
-      try {
-        console.warn(`[socket] resyncing via HTTP (${reason})`);
-        await this.refreshPlayerData();
-        if (this.trackManager) {
-          await this.trackManager.loadExistingTracks();
-          this.trackManager.drawAllTracks();
-        }
-        if (this.loadService) {
-          await this.loadService.loadInitialState();
-        }
-      } catch (error) {
-        console.error('Socket resync failed:', error);
-      } finally {
-        this.socketResyncInFlight = false;
-      }
-    }, 250);
+  /** Refresh the UI overlay and loads reference panel after a server-driven state change. */
+  private refreshGameUI(): void {
+    this.uiManager.setupUIOverlay();
+    // issue #176: hands are public — keep the reference panel in sync too.
+    this.loadsReferencePanel?.setGameState(this.gameState);
   }
 
   /**
@@ -1421,27 +1116,18 @@ export class GameScene extends Phaser.Scene {
    */
   public openChatDM(recipientUserId: string, recipientName: string): void {
     const chatScene = this.scene.get('ChatScene') as any;
-    
+
     if (!chatScene) {
       console.warn('[GameScene] ChatScene not available for DM');
       return;
     }
 
-    // Check if the scene is ready
-    if (chatScene.isReady && chatScene.openDM) {
-      // Scene is ready, call openDM directly
-      chatScene.openDM(recipientUserId, recipientName);
-    } else {
-      // Scene is still initializing, wait for it to be ready
-      const checkReady = () => {
-        if (chatScene.isReady && chatScene.openDM) {
-          chatScene.openDM(recipientUserId, recipientName);
-        } else {
-          // Check again in 100ms
-          setTimeout(checkReady, 100);
-        }
-      };
-      checkReady();
-    }
+    // ChatScene.whenReady() resolves once its create() has finished, whether
+    // that already happened or is still in flight — no polling required.
+    chatScene.whenReady().then(() => {
+      if (chatScene.openDM) {
+        chatScene.openDM(recipientUserId, recipientName);
+      }
+    });
   }
 }

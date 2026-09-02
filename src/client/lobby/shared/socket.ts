@@ -169,6 +169,26 @@ class SocketService {
     });
   }
 
+  /**
+   * Ensure a live socket connection exists, connecting with `token` if needed.
+   * Fails closed: with no existing socket and no token, resolves false rather
+   * than guessing at a connection. Pure transport concern — no game logic.
+   */
+  async ensureConnected(token: string): Promise<boolean> {
+    if (this.hasSocket() && this.isConnected()) {
+      return true;
+    }
+
+    if (!this.hasSocket()) {
+      if (!token) {
+        return false;
+      }
+      this.connect(token);
+    }
+
+    return this.waitForConnection(2500);
+  }
+
   join(gameId: ID): void {
     if (!this.socket) {
       throw new Error('Socket not connected');

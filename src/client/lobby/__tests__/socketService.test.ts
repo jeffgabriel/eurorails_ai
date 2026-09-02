@@ -135,6 +135,54 @@ describe('SocketService', () => {
     });
   });
 
+  describe('ensureConnected', () => {
+    it('returns true immediately when already connected, without reconnecting', async () => {
+      socketService.connect('test-token');
+      mockSocket.connected = true;
+      jest.clearAllMocks();
+
+      const result = await socketService.ensureConnected('test-token');
+
+      expect(result).toBe(true);
+      const { io } = jest.requireMock('socket.io-client');
+      expect(io).not.toHaveBeenCalled();
+    });
+
+    it('connects with token and waits for connection when no socket exists', async () => {
+      const token = 'fresh-token';
+
+      const pending = socketService.ensureConnected(token);
+
+      const { io } = jest.requireMock('socket.io-client');
+      expect(io).toHaveBeenCalledTimes(1);
+
+      // Simulate the socket establishing a connection.
+      mockSocket.connected = true;
+      getLastHandler(socketHandlers, 'connect')();
+
+      expect(await pending).toBe(true);
+    });
+
+    it('returns false when no socket exists and no token is provided', async () => {
+      const result = await socketService.ensureConnected('');
+
+      expect(result).toBe(false);
+      const { io } = jest.requireMock('socket.io-client');
+      expect(io).not.toHaveBeenCalled();
+    });
+
+    it('propagates a false result from waitForConnection on timeout', async () => {
+      jest.useFakeTimers();
+      try {
+        const pending = socketService.ensureConnected('test-token');
+        jest.advanceTimersByTime(2500);
+        expect(await pending).toBe(false);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
   describe('lobby methods', () => {
     it('should join lobby room', () => {
       const token = 'test-token';
