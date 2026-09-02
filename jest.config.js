@@ -36,7 +36,10 @@ module.exports = {
     {
       displayName: 'client',
       testEnvironment: 'jsdom',
-      testMatch: ['<rootDir>/src/client/__tests__/**/*.test.ts'],
+      testMatch: [
+        '<rootDir>/src/client/__tests__/**/*.test.ts',
+        '<rootDir>/src/client/lobby/__tests__/**/*.test.ts',
+      ],
       testPathIgnorePatterns: [
         '<rootDir>/src/client/__tests__/lobby/lobby.integration.test.ts',
         '<rootDir>/src/client/__tests__/lobby/lobby.e2e.database.test.ts'

@@ -20,7 +20,13 @@ export class ChatScene extends Phaser.Scene {
   private userId: string = '';
   private isOpen: boolean = false;
   private isMobile: boolean = false;
-  private isReady: boolean = false; // Flag to track when create() has completed
+  private isReady: boolean = false; // Flag to track when create() has completed; kept for backward compatibility
+  // Initialized eagerly (not just in init()) so whenReady() is always safe to
+  // call, even before this scene's Phaser lifecycle has started.
+  private _resolveWhenReady!: () => void;
+  private _whenReadyPromise: Promise<void> = new Promise<void>((resolve) => {
+    this._resolveWhenReady = resolve;
+  });
 
   /** DM mode: when set, we show DM with this player instead of game chat */
   private dmRecipientId: string | null = null;
@@ -59,6 +65,28 @@ export class ChatScene extends Phaser.Scene {
     this.gameId = data.gameId;
     this.userId = data.userId;
     this.isMobile = this.scale.width < 768;
+
+    // Re-create the promise only after a completed lifecycle, so whenReady()
+    // reflects THIS lifecycle's create() rather than a stale promise resolved
+    // by a previous one. When the pending promise was never resolved (first
+    // launch — where whenReady() is callable before init — or a restart that
+    // interrupted create()), keep it: replacing it would orphan existing
+    // waiters, which would then never resolve.
+    if (this.isReady) {
+      this.isReady = false;
+      this._whenReadyPromise = new Promise<void>((resolve) => {
+        this._resolveWhenReady = resolve;
+      });
+    }
+  }
+
+  /**
+   * Resolves once this create() has finished. Replaces the recursive
+   * setTimeout poll GameScene used to do on the `isReady` flag — callers can
+   * simply `await chatScene.whenReady()` instead of hand-rolling a retry loop.
+   */
+  whenReady(): Promise<void> {
+    return this._whenReadyPromise;
   }
 
   async create() {
@@ -90,9 +118,10 @@ export class ChatScene extends Phaser.Scene {
 
     // Start closed
     this.isOpen = false;
-    
+
     // Mark scene as ready
     this.isReady = true;
+    this._resolveWhenReady();
   }
 
   /**

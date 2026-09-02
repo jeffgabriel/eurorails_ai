@@ -232,27 +232,25 @@ export class GameStateService {
                 if (!this.gameState || !this.gameState.id) {
                     return;
                 }
-                
-                // Include auth headers in polling requests
-                const token = localStorage.getItem('eurorails.jwt');
-                const headers: Record<string, string> = {
-                    'Content-Type': 'application/json',
-                };
-                if (token) {
-                    headers.Authorization = `Bearer ${token}`;
-                }
-                
-                const response = await fetch(`${config.apiBaseUrl}/api/game/${this.gameState.id}`, {
-                    headers
-                });
+
+                // Use authenticatedFetch for automatic token refresh
+                const { authenticatedFetch } = await import('./authenticatedFetch');
+                const response = await authenticatedFetch(`${config.apiBaseUrl}/api/game/${this.gameState.id}`);
+
                 if (!response.ok) {
-                    // Stop polling on authentication errors
+                    // authenticatedFetch already attempted a token refresh before
+                    // returning this response, so a 401/403 here means the refresh
+                    // also failed. Do NOT stop polling — this fallback path exists
+                    // precisely because the socket isn't available, so silently
+                    // going deaf on auth expiry would leave the client permanently
+                    // stuck. Log and keep the interval alive as a watchdog; a later
+                    // tick can succeed once the refresh token (or session) recovers.
                     if (response.status === 401 || response.status === 403) {
-                        this.stopPollingForTurnChanges();
+                        console.warn(`[GameStateService] Polling auth failure (status ${response.status}); will keep retrying.`);
                     }
                     return;
                 }
-                
+
                 const gameState = await response.json();
                 if (gameState.currentPlayerIndex !== undefined && 
                     gameState.currentPlayerIndex !== this.gameState.currentPlayerIndex) {
