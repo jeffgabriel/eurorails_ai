@@ -5,7 +5,10 @@ import { authenticatedFetch } from './authenticatedFetch';
 import { config } from '../config/apiConfig';
 import { socketService } from '../lobby/shared/socket';
 import { useGameStore } from '../lobby/store/game.store';
+import { isAccessTokenExpired } from '../lobby/shared/tokenUtils';
 import type { TrackDrawingManager } from '../components/TrackDrawingManager';
+
+const JWT_STORAGE_KEY = 'eurorails.jwt';
 
 /**
  * Dependencies injected by GameScene when starting the coordinator. A single
@@ -51,6 +54,14 @@ export class GameSocketCoordinator {
   private resyncTimer?: number;
   private resyncInFlight = false;
 
+  // Wake-up listeners: a backgrounded/idle tab can suspend timers and drop
+  // the socket entirely, and the browser event loop pausing means Socket.IO's
+  // own retry loop may not run again until the tab is foregrounded. These
+  // recover the session (fresh token, fresh connection, resync) the moment
+  // the tab becomes visible or the network returns.
+  private wakeVisibilityListener?: () => void;
+  private wakeOnlineListener?: () => void;
+
   /**
    * Ensure a socket connection, join the game room, and register every
    * game-specific socket handler. Returns `false` (fail closed) when no
@@ -64,7 +75,13 @@ export class GameSocketCoordinator {
 
     this.gameId = deps.gameId;
 
-    const token = localStorage.getItem('eurorails.jwt') ?? '';
+    // Registered up front (not gated on the initial connect below) so that
+    // a client which fails to connect now -- and falls back to polling --
+    // can still self-heal via handleWake() once the tab wakes or the
+    // network returns, without waiting for a page reload.
+    this.registerWakeListeners(deps);
+
+    const token = localStorage.getItem(JWT_STORAGE_KEY) ?? '';
     const connected = await socketService.ensureConnected(token);
     if (!connected) {
       console.warn('[GameSocketCoordinator] Socket not connected; caller should fall back to polling.');
@@ -76,13 +93,15 @@ export class GameSocketCoordinator {
     return true;
   }
 
-  /** Clear the resync timer and all stored subscriptions. Safe to call more than once. */
+  /** Clear the resync timer, wake listeners, and all stored subscriptions. Safe to call more than once. */
   stop(): void {
     if (this.resyncTimer !== undefined) {
       window.clearTimeout(this.resyncTimer);
       this.resyncTimer = undefined;
     }
     this.resyncInFlight = false;
+
+    this.unregisterWakeListeners();
 
     for (const unsub of this.unsubs) {
       try {
@@ -92,6 +111,63 @@ export class GameSocketCoordinator {
       }
     }
     this.unsubs = [];
+  }
+
+  private registerWakeListeners(deps: GameSocketCoordinatorDeps): void {
+    this.wakeVisibilityListener = () => {
+      if (document.visibilityState === 'visible') {
+        void this.handleWake(deps);
+      }
+    };
+    this.wakeOnlineListener = () => {
+      void this.handleWake(deps);
+    };
+    document.addEventListener('visibilitychange', this.wakeVisibilityListener);
+    window.addEventListener('online', this.wakeOnlineListener);
+  }
+
+  private unregisterWakeListeners(): void {
+    if (this.wakeVisibilityListener) {
+      document.removeEventListener('visibilitychange', this.wakeVisibilityListener);
+      this.wakeVisibilityListener = undefined;
+    }
+    if (this.wakeOnlineListener) {
+      window.removeEventListener('online', this.wakeOnlineListener);
+      this.wakeOnlineListener = undefined;
+    }
+  }
+
+  /**
+   * Recover from a long-idle tab or a network blip: read the CURRENT token
+   * from localStorage (never a value captured at start() time -- by wake
+   * time that could be long expired), refresh it if stale via the shared
+   * single-flight refresh, then ensure the socket is connected and heal
+   * state via the existing debounced resync.
+   *
+   * ensureConnected() only takes its own proactive-refresh path when it is
+   * opening a brand-new socket (see socket.ts) -- when a socket already
+   * exists but is disconnected (the common wake case: Socket.IO's retry
+   * loop was simply paused while backgrounded), it just waits for
+   * reconnection, which uses whatever token `reconnect_attempt` reads from
+   * localStorage. Refreshing here, before that wait, is what makes the
+   * very next reconnect attempt succeed instead of bouncing through one or
+   * more connect_error cycles first.
+   */
+  private async handleWake(deps: GameSocketCoordinatorDeps): Promise<void> {
+    let token = localStorage.getItem(JWT_STORAGE_KEY) ?? '';
+
+    if (isAccessTokenExpired(token)) {
+      const { useAuthStore } = await import('../lobby/store/auth.store');
+      const refreshed = await useAuthStore.getState().refreshAccessToken();
+      if (refreshed) {
+        token = localStorage.getItem(JWT_STORAGE_KEY) ?? token;
+      } else {
+        console.warn('[GameSocketCoordinator] Token refresh failed on wake; retrying connection with existing token');
+      }
+    }
+
+    await socketService.ensureConnected(token);
+    this.scheduleSocketResync('wake', deps);
   }
 
   private registerHandlers(deps: GameSocketCoordinatorDeps): void {

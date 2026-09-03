@@ -4,6 +4,8 @@ import { PlayerStateService } from '../services/PlayerStateService';
 import { socketService } from '../lobby/shared/socket';
 import { authenticatedFetch } from '../services/authenticatedFetch';
 import { useGameStore } from '../lobby/store/game.store';
+import { useAuthStore } from '../lobby/store/auth.store';
+import { isAccessTokenExpired } from '../lobby/shared/tokenUtils';
 import { FullGameState, Player } from '../../shared/types/GameTypes';
 import type { TrackDrawingManager } from '../components/TrackDrawingManager';
 import type { LoadService } from '../services/LoadService';
@@ -47,6 +49,18 @@ jest.mock('../lobby/shared/socket', () => ({
   },
 }));
 
+// FE-001's shared refresh store and expiry helper -- reached via a dynamic
+// import in handleWake() to avoid a static circular import, mirroring the
+// same pattern api.ts/socket.ts already use.
+jest.mock('../lobby/store/auth.store', () => ({
+  useAuthStore: {
+    getState: jest.fn(),
+  },
+}));
+jest.mock('../lobby/shared/tokenUtils', () => ({
+  isAccessTokenExpired: jest.fn(),
+}));
+
 function createPlayer(id: string): Player {
   return {
     id,
@@ -81,6 +95,18 @@ function getLastCall(mockFn: jest.Mock): any[] {
   return calls[calls.length - 1];
 }
 
+const mockGetState = useAuthStore.getState as jest.Mock;
+const mockIsAccessTokenExpired = isAccessTokenExpired as jest.Mock;
+
+/** Find the handler function registered on an addEventListener spy for the given event name. */
+function getListenerFor(spy: jest.SpyInstance, eventName: string): (...args: any[]) => void {
+  const call = spy.mock.calls.find(([name]: [string, unknown]) => name === eventName);
+  if (!call) {
+    throw new Error(`No listener registered for event: ${eventName}`);
+  }
+  return call[1] as (...args: any[]) => void;
+}
+
 describe('GameSocketCoordinator', () => {
   let coordinator: GameSocketCoordinator;
   let gameStateService: GameStateService;
@@ -93,6 +119,8 @@ describe('GameSocketCoordinator', () => {
     jest.clearAllMocks();
     (socketService.ensureConnected as jest.Mock).mockResolvedValue(true);
     (localStorage as any).getItem = jest.fn(() => 'test-token');
+    mockIsAccessTokenExpired.mockReturnValue(false);
+    mockGetState.mockReturnValue({ refreshAccessToken: jest.fn().mockResolvedValue(true) });
 
     coordinator = new GameSocketCoordinator();
     gameStateService = new GameStateService(createGameState());
@@ -115,6 +143,16 @@ describe('GameSocketCoordinator', () => {
       onAutoRunStatus: jest.fn(),
       onBotTurnComplete: jest.fn(),
     };
+  });
+
+  afterEach(() => {
+    // start() registers visibilitychange/online listeners on the real,
+    // test-file-shared document/window objects (jsdom does not reset these
+    // between `it()` blocks). Most tests above never call stop(), which was
+    // harmless before wake listeners existed; now it must run unconditionally
+    // so a real event dispatched in one test can't also fire handlers left
+    // registered by an earlier test.
+    coordinator.stop();
   });
 
   describe('start', () => {
@@ -648,6 +686,171 @@ describe('GameSocketCoordinator', () => {
       expect(anyEventUnsub).toHaveBeenCalled();
 
       errorSpy.mockRestore();
+    });
+  });
+
+  describe('handleWake (visibilitychange/online wake-up resync)', () => {
+    let currentToken: string;
+    let documentAddSpy: jest.SpyInstance;
+    let documentRemoveSpy: jest.SpyInstance;
+    let windowAddSpy: jest.SpyInstance;
+    let windowRemoveSpy: jest.SpyInstance;
+    let refreshAccessToken: jest.Mock;
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+
+      currentToken = 'stale-token';
+      // Overrides the outer beforeEach's blanket 'test-token' stub so tests
+      // here can change what localStorage returns between start() and a
+      // later wake event.
+      (localStorage as any).getItem = jest.fn(() => currentToken);
+
+      documentAddSpy = jest.spyOn(document, 'addEventListener');
+      documentRemoveSpy = jest.spyOn(document, 'removeEventListener');
+      windowAddSpy = jest.spyOn(window, 'addEventListener');
+      windowRemoveSpy = jest.spyOn(window, 'removeEventListener');
+
+      refreshAccessToken = jest.fn().mockImplementation(async () => {
+        currentToken = 'refreshed-token';
+        return true;
+      });
+      mockGetState.mockReturnValue({ refreshAccessToken });
+      mockIsAccessTokenExpired.mockReturnValue(true);
+
+      (authenticatedFetch as jest.Mock).mockImplementation((url: string) => {
+        if (url.includes('/api/game/')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ currentPlayerIndex: 0 }) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      });
+    });
+
+    afterEach(() => {
+      documentAddSpy.mockRestore();
+      documentRemoveSpy.mockRestore();
+      windowAddSpy.mockRestore();
+      windowRemoveSpy.mockRestore();
+      jest.useRealTimers();
+    });
+
+    it('registers visibilitychange and online listeners in start()', async () => {
+      await coordinator.start(deps);
+
+      expect(documentAddSpy).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+      expect(windowAddSpy).toHaveBeenCalledWith('online', expect.any(Function));
+    });
+
+    it('on visibilitychange to visible: refreshes a stale token, reconnects with it, and invokes a debounced resync once', async () => {
+      await coordinator.start(deps);
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      const listener = getListenerFor(documentAddSpy, 'visibilitychange');
+
+      // Two rapid wake signals -- only one resync should fire (debounced).
+      listener();
+      await jest.advanceTimersByTimeAsync(0);
+      listener();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(refreshAccessToken).toHaveBeenCalledTimes(2); // handleWake runs fully each time...
+      expect(socketService.ensureConnected).toHaveBeenLastCalledWith('refreshed-token');
+
+      await jest.advanceTimersByTimeAsync(250);
+
+      // ...but the debounced resync timer itself only fires once for the pair.
+      const healCalls = (authenticatedFetch as jest.Mock).mock.calls.filter(([url]) =>
+        String(url).includes('/api/game/'),
+      );
+      expect(healCalls.length).toBe(1);
+    });
+
+    it('ignores visibilitychange while the tab is not visible', async () => {
+      await coordinator.start(deps);
+      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+      const listener = getListenerFor(documentAddSpy, 'visibilitychange');
+      (socketService.ensureConnected as jest.Mock).mockClear();
+
+      listener();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(refreshAccessToken).not.toHaveBeenCalled();
+      expect(socketService.ensureConnected).not.toHaveBeenCalled();
+    });
+
+    it('on window online: refreshes a stale token, reconnects with it, and invokes a debounced resync', async () => {
+      await coordinator.start(deps);
+      const listener = getListenerFor(windowAddSpy, 'online');
+
+      listener();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+      expect(socketService.ensureConnected).toHaveBeenLastCalledWith('refreshed-token');
+
+      await jest.advanceTimersByTimeAsync(250);
+      expect(authenticatedFetch).toHaveBeenCalledWith(expect.stringContaining('/api/game/game-1'));
+    });
+
+    it('reads the current token from localStorage at wake time, not a value captured at start()', async () => {
+      mockIsAccessTokenExpired.mockReturnValue(false); // isolate: prove which token is passed through, not the refresh path
+      await coordinator.start(deps);
+      expect(socketService.ensureConnected).toHaveBeenLastCalledWith('stale-token');
+
+      currentToken = 'changed-after-start';
+      const listener = getListenerFor(windowAddSpy, 'online');
+
+      listener();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(socketService.ensureConnected).toHaveBeenLastCalledWith('changed-after-start');
+    });
+
+    it('falls back to the original (stale) token and still schedules a resync when the refresh fails', async () => {
+      refreshAccessToken.mockResolvedValue(false); // overrides the beforeEach implementation; currentToken stays 'stale-token'
+      await coordinator.start(deps);
+      (socketService.ensureConnected as jest.Mock).mockClear();
+
+      const listener = getListenerFor(windowAddSpy, 'online');
+      listener();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+      expect(socketService.ensureConnected).toHaveBeenCalledWith('stale-token');
+
+      await jest.advanceTimersByTimeAsync(250);
+      expect(authenticatedFetch).toHaveBeenCalledWith(expect.stringContaining('/api/game/game-1'));
+    });
+
+    it('unregisters both wake listeners in stop(), so a subsequent visibilitychange does nothing', async () => {
+      await coordinator.start(deps);
+      coordinator.stop();
+
+      expect(documentRemoveSpy).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+      expect(windowRemoveSpy).toHaveBeenCalledWith('online', expect.any(Function));
+
+      (socketService.ensureConnected as jest.Mock).mockClear();
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(refreshAccessToken).not.toHaveBeenCalled();
+      expect(socketService.ensureConnected).not.toHaveBeenCalled();
+    });
+
+    it('registers wake listeners even when the initial connect fails, so a later wake can self-heal', async () => {
+      (socketService.ensureConnected as jest.Mock).mockResolvedValueOnce(false);
+
+      const connected = await coordinator.start(deps);
+      expect(connected).toBe(false);
+
+      expect(documentAddSpy).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+      expect(windowAddSpy).toHaveBeenCalledWith('online', expect.any(Function));
+
+      const listener = getListenerFor(windowAddSpy, 'online');
+      listener();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(socketService.ensureConnected).toHaveBeenLastCalledWith('refreshed-token');
     });
   });
 });
