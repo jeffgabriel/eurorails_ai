@@ -7,6 +7,14 @@ import type {
   ActiveEffectSummary,
 } from '../../../shared/types/EventCard';
 import { config, debug } from './config';
+import { isAccessTokenExpired } from './tokenUtils';
+
+const JWT_STORAGE_KEY = 'eurorails.jwt';
+const REFRESH_TOKEN_STORAGE_KEY = 'eurorails.refreshToken';
+
+/** The exact `next(new Error(...))` message the server's socket auth middleware
+ * uses when a token fails verification (see socketService.ts's `io.use`). */
+const AUTH_CONNECT_ERROR_MESSAGE = 'UNAUTHORIZED';
 
 class SocketService {
   private socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
@@ -16,6 +24,13 @@ class SocketService {
   private joinedGameIds = new Set<ID>();
   private joinedLobbyIds = new Set<ID>();
   private hasEverConnected = false;
+
+  // Guards a single refreshAccessToken() call per disconnect cycle: once an
+  // auth-rejected connect_error triggers a refresh, further connect_error
+  // retries in the same cycle must not each fire their own refresh (a
+  // refresh storm against a rotating refresh token can revoke the session).
+  // Cleared on the next successful 'connect'.
+  private refreshTriggeredOnConnectError = false;
 
   private onReconnectedCallbacks = new Set<() => void>();
   private onSeqGapCallbacks = new Set<(data: { expected: number; received: number }) => void>();
@@ -55,6 +70,9 @@ class SocketService {
       debug.log('Socket connected');
       this.connecting = false;
       this.reconnectAttempts = 0;
+      // A live connection ends the disconnect cycle -- the next connect_error
+      // (a new cycle) is allowed to trigger its own refresh.
+      this.refreshTriggeredOnConnectError = false;
 
       const isReconnect = this.hasEverConnected;
       this.hasEverConnected = true;
@@ -92,7 +110,33 @@ class SocketService {
       this.connecting = false;
       this.reconnectAttempts++;
       // IMPORTANT: do not disconnect/null out the socket here; let Socket.IO keep retrying.
+
+      if (this.isAuthConnectError(error) && !this.refreshTriggeredOnConnectError) {
+        this.refreshTriggeredOnConnectError = true;
+        // Fire-and-forget: reconnect_attempt already re-reads the access
+        // token from localStorage before each retry, so a successful
+        // refresh here is picked up by Socket.IO's own retry loop without
+        // any further action.
+        void this.refreshTokenAfterConnectError();
+      }
     });
+  }
+
+  /** Detect the server's socket-auth-middleware rejection (see socketService.ts's `io.use`). */
+  private isAuthConnectError(error: Error): boolean {
+    return error?.message === AUTH_CONNECT_ERROR_MESSAGE;
+  }
+
+  private async refreshTokenAfterConnectError(): Promise<void> {
+    try {
+      const { useAuthStore } = await import('../store/auth.store');
+      const refreshed = await useAuthStore.getState().refreshAccessToken();
+      if (!refreshed) {
+        debug.warn('Token refresh after auth connect_error did not succeed');
+      }
+    } catch (err) {
+      debug.error('Token refresh after auth connect_error threw:', err);
+    }
   }
 
   disconnect(): void {
@@ -105,6 +149,10 @@ class SocketService {
       this.hasEverConnected = false;
       this.joinedGameIds.clear();
       this.joinedLobbyIds.clear();
+      // A full teardown starts a fresh epoch -- the next connect() begins a
+      // brand new socket and disconnect cycle, so any earlier connect_error
+      // refresh guard no longer applies.
+      this.refreshTriggeredOnConnectError = false;
     }
   }
 
@@ -183,7 +231,26 @@ class SocketService {
       if (!token) {
         return false;
       }
-      this.connect(token);
+
+      // Only take the async proactive-refresh path when a refresh is
+      // actually needed -- an `await` always yields a microtask tick even
+      // when its target is already settled, so this keeps the common
+      // (no-refresh-needed) case running synchronously through to
+      // `connect()`, matching the pre-existing timing this method relied on.
+      const refreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
+      let connectToken = token;
+      if (refreshToken && isAccessTokenExpired(token)) {
+        debug.log('Access token expired before connect; refreshing proactively');
+        const { useAuthStore } = await import('../store/auth.store');
+        const refreshed = await useAuthStore.getState().refreshAccessToken();
+        if (!refreshed) {
+          debug.error('Proactive refresh failed before connect; not connecting with a stale token');
+          return false;
+        }
+        connectToken = localStorage.getItem(JWT_STORAGE_KEY) || token;
+      }
+
+      this.connect(connectToken);
     }
 
     return this.waitForConnection(2500);
