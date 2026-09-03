@@ -1,5 +1,6 @@
 // store/auth.store.ts
 import { create } from 'zustand';
+import { toast } from 'sonner';
 import type { User, AuthResult, LoginForm, RegisterForm, ApiError } from '../shared/types';
 import { api } from '../shared/api';
 
@@ -27,6 +28,49 @@ type AuthStore = AuthState & AuthActions;
 const JWT_STORAGE_KEY = 'eurorails.jwt';
 const USER_STORAGE_KEY = 'eurorails.user';
 const REFRESH_TOKEN_STORAGE_KEY = 'eurorails.refreshToken';
+
+// Module-level (not per-store-instance, but the store is a singleton anyway):
+// every trigger of refreshAccessToken -- the reactive 401 handler in api.ts /
+// authenticatedFetch.ts, a proactive wake-time check, etc. -- must share this
+// one in-flight promise instead of each firing its own /api/auth/refresh
+// call. Concurrent refresh calls against a rotating refresh token cause the
+// auth server to treat the second call as replay of an already-consumed
+// token, which revokes the whole session.
+let refreshInFlight: Promise<boolean> | null = null;
+
+/** Narrow an unknown catch value to the shape thrown by ApiClient#request on a non-2xx response. */
+function isApiError(error: unknown): error is ApiError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    typeof (error as ApiError).error === 'string' &&
+    typeof (error as ApiError).message === 'string'
+  );
+}
+
+/**
+ * Classify a caught refreshToken() failure as a definitive rejection (the
+ * refresh token itself is invalid/expired -- the session is over) versus a
+ * transient failure (a network error, or the endpoint being unreachable --
+ * the session may still be good).
+ *
+ * `api.refreshToken()` only ever surfaces an ApiError when fetch got an
+ * actual HTTP response back; a raw (non-ApiError) exception means fetch
+ * itself failed before any response arrived, which is unambiguously
+ * transient. Among ApiError responses, the `/api/auth/refresh` route itself
+ * only ever answers with 401 on failure, so any ApiError from it IS that
+ * 401 -- except the generic `HTTP_5xx` fallback shape ApiClient#request
+ * falls back to when a non-JSON error response can't be parsed (e.g. a
+ * proxy/server outage in front of the route), which represents server
+ * unavailability rather than a rejected token and must stay transient too.
+ */
+function isDefinitiveRefreshRejection(error: unknown): boolean {
+  if (!isApiError(error)) {
+    return false;
+  }
+  const isServerOutageFallback = /^HTTP_5\d{2}$/.test(error.error);
+  return !isServerOutageFallback;
+}
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
   // Initial state
@@ -124,35 +168,63 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   refreshAccessToken: async (): Promise<boolean> => {
+    // Single-flight guard: join an already-in-progress refresh instead of
+    // starting a second one.
+    if (refreshInFlight) {
+      return refreshInFlight;
+    }
+
     const refreshToken = get().refreshToken || localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
-    
+
     if (!refreshToken) {
       console.warn('No refresh token available for refresh');
       return false;
     }
 
-    try {
-      const result = await api.refreshToken(refreshToken);
-      
-      // Update stored tokens
-      localStorage.setItem(JWT_STORAGE_KEY, result.token);
-      if (result.refreshToken) {
-        localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, result.refreshToken);
+    const performRefresh = async (): Promise<boolean> => {
+      try {
+        const result = await api.refreshToken(refreshToken);
+
+        // Update stored tokens
+        localStorage.setItem(JWT_STORAGE_KEY, result.token);
+        if (result.refreshToken) {
+          localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, result.refreshToken);
+        }
+
+        set({
+          token: result.token,
+          refreshToken: result.refreshToken || refreshToken,
+          isAuthenticated: true,
+        });
+
+        return true;
+      } catch (error) {
+        if (isDefinitiveRefreshRejection(error)) {
+          // The refresh token itself was rejected -- the session is over.
+          // A dead session must LOOK dead: clear auth state (which routes
+          // protected screens, including a live game, back to /login) and
+          // tell the player why.
+          console.error('Session refresh rejected; logging out', {
+            errorCode: isApiError(error) ? error.error : 'unknown',
+          });
+          get().logout();
+          toast.error('Session expired. Please log in again.');
+        } else {
+          // Network error or transient server outage -- keep the session
+          // alive and let the next trigger (retry, proactive check, next
+          // 401) try again.
+          console.warn('Token refresh failed transiently; retaining session', {
+            errorCode: isApiError(error) ? error.error : (error as { name?: string })?.name ?? 'network_error',
+          });
+        }
+        return false;
+      } finally {
+        refreshInFlight = null;
       }
-      
-      set({
-        token: result.token,
-        refreshToken: result.refreshToken || refreshToken,
-        isAuthenticated: true,
-      });
-      
-      return true;
-    } catch (error) {
-      console.error('Failed to refresh token:', error);
-      // Clear auth on refresh failure
-      get().logout();
-      return false;
-    }
+    };
+
+    refreshInFlight = performRefresh();
+    return refreshInFlight;
   },
 
   loadPersistedAuth: async () => {
