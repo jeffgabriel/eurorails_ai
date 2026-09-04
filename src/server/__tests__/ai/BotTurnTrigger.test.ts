@@ -908,6 +908,71 @@ describe('BotTurnTrigger — stuck bot recovery on reconnect', () => {
 
     expect(mockTakeTurn).not.toHaveBeenCalled();
   });
+
+  it('dequeues and executes a queued turn without hitting the DB fallback query', async () => {
+    queuedBotTurns.set('game-1', { gameId: 'game-1', currentPlayerIndex: 2, currentPlayerId: 'bot-9' });
+
+    mockTakeTurn.mockResolvedValue({
+      action: AIActionType.MoveTrain,
+      segmentsBuilt: 0,
+      cost: 0,
+      durationMs: 100,
+      success: true,
+    } as any);
+
+    await onHumanReconnect('game-1');
+
+    // Queued entry should be consumed immediately.
+    expect(queuedBotTurns.has('game-1')).toBe(false);
+
+    // The DB-fallback player-resolution query (index -> player mapping) must NOT
+    // run for the queued-turn path -- the queued entry already carries the
+    // player id/index, so onHumanReconnect must not fall back to the DB.
+    const fallbackResolutionCalled = mockQuery.mock.calls.some(
+      ([sql]) => typeof sql === 'string' && sql.includes('ORDER BY created_at ASC LIMIT 1 OFFSET'),
+    );
+    expect(fallbackResolutionCalled).toBe(false);
+
+    // Give the awaited onTurnChange's fire-and-forget bot pipeline time to run.
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    expect(mockTakeTurn).toHaveBeenCalledWith('game-1', 'bot-9');
+  });
+
+  it('should NOT re-trigger if the game is completed', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string') {
+        if (sql.includes('SELECT status FROM games') || sql.includes('current_player_index'))
+          return mockResult([{ status: 'completed', current_player_index: 0 }]);
+      }
+      return mockResult([]);
+    });
+
+    await onHumanReconnect('game-1');
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect(mockTakeTurn).not.toHaveBeenCalled();
+  });
+
+  it('logs and does not propagate when the DB fallback query throws', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string' && (sql.includes('SELECT status FROM games') || sql.includes('current_player_index'))) {
+        throw new Error('connection terminated unexpectedly');
+      }
+      return mockResult([]);
+    });
+
+    await expect(onHumanReconnect('game-1')).resolves.toBeUndefined();
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect(mockTakeTurn).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Stuck bot check failed for game game-1'),
+      expect.anything(),
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
 });
 
 describe('BotTurnTrigger.cleanupBotTurnState — BE-003', () => {
