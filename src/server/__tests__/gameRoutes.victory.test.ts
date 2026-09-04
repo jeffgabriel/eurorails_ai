@@ -32,11 +32,14 @@ describe('victory resolution HTTP synchronization', () => {
     jest.mocked(VictoryService.isFinalTurn).mockResolvedValue(true);
   });
 
-  it('returns and broadcasts reset state without announcing a winner or tie', async () => {
+  it.each([false, true])('returns the committed reset without announcing a winner or tie (broadcast fails: %s)', async (broadcastFails) => {
     const victoryState = {
       triggered: false, triggerPlayerIndex: -1, finalTurnPlayerIndex: -1, victoryThreshold: 250,
     };
     jest.mocked(VictoryService.resolveVictory).mockResolvedValue({ gameOver: false, victoryState });
+    if (broadcastFails) {
+      jest.mocked(emitStatePatch).mockRejectedValueOnce(new Error('sequence database unavailable'));
+    }
 
     const result = await request(app).post('/api/game/game-1/resolve-victory');
 

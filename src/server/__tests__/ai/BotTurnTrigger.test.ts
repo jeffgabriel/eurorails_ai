@@ -682,7 +682,12 @@ describe('BotTurnTrigger — JIRA-212: stalled-victory backstop guard', () => {
     mockResolveVictory.mockResolvedValue({ gameOver: false });
   });
 
-  it.each([true, false])('broadcasts a reset and continues bot play (stalled guard: %s)', async (stalled) => {
+  it.each([
+    [true, false],
+    [true, true],
+    [false, false],
+    [false, true],
+  ])('continues bot play after reset (stalled guard: %s, broadcast fails: %s)', async (stalled, broadcastFails) => {
     mockQuery.mockImplementation(async (sql: string) => {
       if (sql.includes('SELECT is_bot')) return mockResult([{ is_bot: true, name: 'Flash' }]);
       if (sql.includes('status, current_player_index')) return mockResult([{ status: 'active', current_player_index: 0 }]);
@@ -699,6 +704,9 @@ describe('BotTurnTrigger — JIRA-212: stalled-victory backstop guard', () => {
     });
     mockIsFinalTurn.mockResolvedValue(!stalled);
     mockResolveVictory.mockResolvedValue({ gameOver: false, victoryState });
+    if (broadcastFails) {
+      jest.mocked(emitStatePatch).mockRejectedValueOnce(new Error('sequence database unavailable'));
+    }
     mockTakeTurn.mockResolvedValue({
       action: AIActionType.BuildTrack, segmentsBuilt: 0, cost: 0,
       durationMs: 1, success: true, actor: 'system', actorDetail: 'route-executor',
@@ -708,6 +716,7 @@ describe('BotTurnTrigger — JIRA-212: stalled-victory backstop guard', () => {
 
     expect(emitStatePatch).toHaveBeenCalledWith('game-1', { victoryState });
     expect(mockTakeTurn).toHaveBeenCalledWith('game-1', 'bot-1');
+    expect(mockTakeTurn).toHaveBeenCalledTimes(1);
     expect(mockEmitGameOver).not.toHaveBeenCalled();
   });
 

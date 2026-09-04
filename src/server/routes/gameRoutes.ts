@@ -235,7 +235,12 @@ router.post('/:gameId/resolve-victory', authenticateToken, async (req, res) => {
         } else if (result.tieExtended && result.newThreshold) {
             emitTieExtended(gameId, result.newThreshold);
         } else if (result.victoryState) {
-            await emitStatePatch(gameId, { victoryState: result.victoryState });
+            // Return the committed reset even if notifying other clients fails.
+            try {
+                await emitStatePatch(gameId, { victoryState: result.victoryState });
+            } catch (broadcastError) {
+                console.warn(`Victory reset broadcast failed for game ${gameId}:`, broadcastError);
+            }
         }
 
         return res.status(200).json(result);

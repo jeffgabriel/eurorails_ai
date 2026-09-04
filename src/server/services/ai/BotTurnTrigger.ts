@@ -149,7 +149,13 @@ export async function onTurnChange(
           } else if (resolveResult.tieExtended && resolveResult.newThreshold) {
             emitTieExtended(gameId, resolveResult.newThreshold);
           } else if (resolveResult.victoryState) {
-            await emitStatePatch(gameId, { victoryState: resolveResult.victoryState });
+            // The reset has committed. Notification failure must not drop the
+            // pending bot turn before it reaches the execution/queue path.
+            try {
+              await emitStatePatch(gameId, { victoryState: resolveResult.victoryState });
+            } catch (broadcastError) {
+              console.warn(`[BotTurnTrigger] Victory reset broadcast failed for game ${gameId}:`, broadcastError);
+            }
           }
           // A reset leaves the current bot's turn pending. Continue below so
           // autoplay resumes instead of waiting for another turn-change event.
