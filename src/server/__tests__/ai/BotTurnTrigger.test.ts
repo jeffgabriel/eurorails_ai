@@ -21,6 +21,7 @@ jest.mock('../../services/socketService', () => ({
   emitVictoryTriggered: jest.fn<() => void>(),
   emitGameOver: jest.fn<() => void>(),
   emitTieExtended: jest.fn<() => void>(),
+  emitStatePatch: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
 }));
 
 jest.mock('../../services/playerService', () => ({
@@ -74,7 +75,7 @@ jest.mock('../../services/ai/connectedMajorCities', () => ({
 import { onTurnChange, pendingBotTurns, checkBotVictory, queuedBotTurns, onHumanReconnect, cleanupBotTurnState } from '../../services/ai/BotTurnTrigger';
 import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { db } from '../../db/index';
-import { emitToGame, emitVictoryTriggered, emitGameOver } from '../../services/socketService';
+import { emitToGame, emitVictoryTriggered, emitGameOver, emitStatePatch } from '../../services/socketService';
 import { AIActionType } from '../../../shared/types/GameTypes';
 import { VictoryService } from '../../services/victoryService';
 import { TrackService } from '../../services/trackService';
@@ -679,6 +680,35 @@ describe('BotTurnTrigger — JIRA-212: stalled-victory backstop guard', () => {
 
     mockIsFinalTurn.mockResolvedValue(false);
     mockResolveVictory.mockResolvedValue({ gameOver: false });
+  });
+
+  it.each([true, false])('broadcasts a reset and continues bot play (stalled guard: %s)', async (stalled) => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT is_bot')) return mockResult([{ is_bot: true, name: 'Flash' }]);
+      if (sql.includes('status, current_player_index')) return mockResult([{ status: 'active', current_player_index: 0 }]);
+      if (sql.includes('SELECT current_turn_number')) return mockResult([{ current_turn_number: 5 }]);
+      return mockResult([]);
+    });
+    const victoryState = {
+      triggered: false, triggerPlayerIndex: -1, finalTurnPlayerIndex: -1, victoryThreshold: 250,
+    };
+    mockGetVictoryState.mockResolvedValue(victoryState);
+    mockGetVictoryState.mockResolvedValueOnce({
+      triggered: true, triggerPlayerIndex: stalled ? 0 : 1,
+      finalTurnPlayerIndex: stalled ? 1 : 0, victoryThreshold: 250,
+    });
+    mockIsFinalTurn.mockResolvedValue(!stalled);
+    mockResolveVictory.mockResolvedValue({ gameOver: false, victoryState });
+    mockTakeTurn.mockResolvedValue({
+      action: AIActionType.BuildTrack, segmentsBuilt: 0, cost: 0,
+      durationMs: 1, success: true, actor: 'system', actorDetail: 'route-executor',
+    } as any);
+
+    await onTurnChange('game-1', 0, 'bot-1');
+
+    expect(emitStatePatch).toHaveBeenCalledWith('game-1', { victoryState });
+    expect(mockTakeTurn).toHaveBeenCalledWith('game-1', 'bot-1');
+    expect(mockEmitGameOver).not.toHaveBeenCalled();
   });
 
   it('forces resolveVictory and skips takeTurn when victory is stalled (AC3)', async () => {

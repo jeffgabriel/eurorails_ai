@@ -479,6 +479,23 @@ describe('GameSocketCoordinator', () => {
   });
 
   describe('onVictoryTriggered handler', () => {
+    it('clears the final-round state and refreshes the UI when the server resets victory', async () => {
+      await coordinator.start(deps);
+      gameStateService.getGameState().victoryState = {
+        triggered: true, triggerPlayerIndex: 0, finalTurnPlayerIndex: 1, victoryThreshold: 250,
+      };
+      const victoryState = {
+        triggered: false, triggerPlayerIndex: -1, finalTurnPlayerIndex: -1, victoryThreshold: 250,
+      };
+      const handler = getLastCall(socketService.onPatch as jest.Mock)[0];
+      handler({ patch: { victoryState }, serverSeq: 1 });
+      expect(gameStateService.getGameState().victoryState).toEqual(victoryState);
+      expect(gameStateService.getGameState().status).toBe('active');
+      expect(deps.onUIRefresh).toHaveBeenCalled();
+      expect(deps.onLaunchWinner).not.toHaveBeenCalled();
+      expect(deps.onTieExtended).not.toHaveBeenCalled();
+    });
+
     it('sets victoryState and refreshes the UI when the payload is for this game', async () => {
       await coordinator.start(deps);
       const handler = getLastCall(socketService.onVictoryTriggered as jest.Mock)[0];

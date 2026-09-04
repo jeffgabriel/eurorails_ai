@@ -7,6 +7,7 @@ import { authenticatedFetch } from './authenticatedFetch';
 export interface ResolveVictoryOutcome {
   gameOver: boolean;
   tieExtended: boolean;
+  victoryState?: VictoryState;
 }
 
 export interface MajorCityConnection {
@@ -282,7 +283,11 @@ export class VictoryService {
         } else if (result.tieExtended) {
           console.log('Victory resulted in tie - threshold extended');
         }
-        return { gameOver: !!result.gameOver, tieExtended: !!result.tieExtended };
+        return {
+          gameOver: !!result.gameOver,
+          tieExtended: !!result.tieExtended,
+          ...(result.victoryState ? { victoryState: result.victoryState } : {}),
+        };
       }
       const error = await response.json();
       console.warn('Victory resolution failed:', error.details);

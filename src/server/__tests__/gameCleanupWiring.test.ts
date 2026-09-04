@@ -13,12 +13,15 @@ jest.mock('../db/index', () => ({
 jest.mock('../services/gameCleanupService', () => ({
   cleanupGameState: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock('../services/trackService');
 
 import { db } from '../db/index';
 import { cleanupGameState } from '../services/gameCleanupService';
 import { VictoryService } from '../services/victoryService';
 import { PlayerService } from '../services/playerService';
 import { GameStatus } from '../../shared/types/GameTypes';
+import { TrackService } from '../services/trackService';
+import { victoryTrack } from './fixtures/victoryFixtures';
 
 const mockQuery = db.query as jest.Mock;
 const cleanupMock = cleanupGameState as jest.Mock;
@@ -29,6 +32,10 @@ describe('game-end cleanup wiring', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockQuery.mockResolvedValue({ rows: [] });
+    jest.mocked(TrackService.getTrackState).mockResolvedValue({
+      playerId: 'winner-1', gameId, segments: victoryTrack(),
+      totalCost: 0, turnBuildCost: 0, lastBuildTimestamp: new Date(),
+    });
   });
 
   describe('VictoryService.resolveVictory', () => {

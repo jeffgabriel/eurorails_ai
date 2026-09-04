@@ -840,9 +840,13 @@ export class GameScene extends Phaser.Scene {
    * Returns true if the game is over, false if it continues (e.g., tie extension).
    */
   private async resolveVictory(): Promise<boolean> {
-    const { gameOver } = await VictoryService.getInstance().resolveVictory(
+    const { gameOver, victoryState } = await VictoryService.getInstance().resolveVictory(
       this.gameState.id
     );
+    if (victoryState) {
+      this.gameState.victoryState = victoryState;
+      this.refreshGameUI();
+    }
     return gameOver;
   }
 

@@ -3,7 +3,7 @@ import { GameService } from '../services/gameService';
 import { VictoryService, MajorCityCoordinate } from '../services/victoryService';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { db } from '../db';
-import { emitVictoryTriggered, emitGameOver, emitTieExtended } from '../services/socketService';
+import { emitVictoryTriggered, emitGameOver, emitTieExtended, emitStatePatch } from '../services/socketService';
 import { ActiveEffectManager } from '../services/ActiveEffectManager';
 
 const router = express.Router();
@@ -234,6 +234,8 @@ router.post('/:gameId/resolve-victory', authenticateToken, async (req, res) => {
             emitGameOver(gameId, result.winnerId, result.winnerName);
         } else if (result.tieExtended && result.newThreshold) {
             emitTieExtended(gameId, result.newThreshold);
+        } else if (result.victoryState) {
+            await emitStatePatch(gameId, { victoryState: result.victoryState });
         }
 
         return res.status(200).json(result);
