@@ -372,6 +372,19 @@ describe('VictoryService', () => {
   });
 
   describe('resolveVictory', () => {
+    it('returns the reset victory state so the requesting client can resume normal play', async () => {
+      const victoryState = {
+        triggered: false, triggerPlayerIndex: -1, finalTurnPlayerIndex: -1, victoryThreshold: 250,
+      };
+      mockedFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ gameOver: false, victoryState }),
+      } as any);
+      expect(await service.resolveVictory('game-1')).toEqual({
+        gameOver: false, tieExtended: false, victoryState,
+      });
+    });
+
     afterEach(() => {
       jest.clearAllMocks();
     });

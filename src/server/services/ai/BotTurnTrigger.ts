@@ -6,7 +6,7 @@
  */
 
 import { db } from '../../db/index';
-import { emitToGame, getSocketIO, emitVictoryTriggered, emitGameOver, emitTieExtended } from '../socketService';
+import { emitToGame, getSocketIO, emitVictoryTriggered, emitGameOver, emitTieExtended, emitStatePatch } from '../socketService';
 import { PlayerService } from '../playerService';
 import { InitialBuildService } from '../InitialBuildService';
 import { AIStrategyEngine } from './AIStrategyEngine';
@@ -148,11 +148,22 @@ export async function onTurnChange(
             emitGameOver(gameId, resolveResult.winnerId, resolveResult.winnerName);
           } else if (resolveResult.tieExtended && resolveResult.newThreshold) {
             emitTieExtended(gameId, resolveResult.newThreshold);
+          } else if (resolveResult.victoryState) {
+            // The reset has committed. Notification failure must not drop the
+            // pending bot turn before it reaches the execution/queue path.
+            try {
+              await emitStatePatch(gameId, { victoryState: resolveResult.victoryState });
+            } catch (broadcastError) {
+              console.warn(`[BotTurnTrigger] Victory reset broadcast failed for game ${gameId}:`, broadcastError);
+            }
           }
+          // A reset leaves the current bot's turn pending. Continue below so
+          // autoplay resumes instead of waiting for another turn-change event.
+          if (!resolveResult.victoryState || resolveResult.victoryState.triggered) return;
         } catch (resolveError) {
           console.error(`[BotTurnTrigger] Stalled victory resolution failed for game ${gameId}:`, resolveError instanceof Error ? resolveError.message : resolveError);
+          return;
         }
-        return;
       }
     }
   } catch (guardError) {
@@ -545,6 +556,8 @@ async function checkAndResolveFinalTurn(gameId: string): Promise<void> {
       emitGameOver(gameId, result.winnerId, result.winnerName);
     } else if (result.tieExtended && result.newThreshold) {
       emitTieExtended(gameId, result.newThreshold);
+    } else if (result.victoryState) {
+      await emitStatePatch(gameId, { victoryState: result.victoryState });
     }
   } catch (error) {
     console.error(`[BotTurnTrigger] Final turn resolution failed for game ${gameId}:`, error instanceof Error ? error.message : error);

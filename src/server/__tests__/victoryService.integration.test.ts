@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import '@jest/globals';
 import { VICTORY_INITIAL_THRESHOLD, VICTORY_TIE_THRESHOLD, TerrainType } from '../../shared/types/GameTypes';
 import { TrackSegment } from '../../shared/types/TrackTypes';
+import { victoryCities, victoryTrack } from './fixtures/victoryFixtures';
 
 /**
  * Helper to create a TrackSegment with all required fields.
@@ -169,27 +170,7 @@ describe('VictoryService Integration Tests', () => {
 
   describe('declareVictory', () => {
     beforeEach(async () => {
-      // Create track for player1 with 7 cities
-      const cityCoords = [
-        { row: 10, col: 20 },
-        { row: 15, col: 25 },
-        { row: 20, col: 30 },
-        { row: 25, col: 35 },
-        { row: 30, col: 40 },
-        { row: 35, col: 45 },
-        { row: 40, col: 50 },
-      ];
-
-      // Connect cities linearly using helper
-      const segments: TrackSegment[] = [];
-      for (let i = 0; i < cityCoords.length - 1; i++) {
-        segments.push(createSegment(
-          cityCoords[i].row,
-          cityCoords[i].col,
-          cityCoords[i + 1].row,
-          cityCoords[i + 1].col
-        ));
-      }
+      const segments = victoryTrack();
 
       // TrackService.saveTrackState expects a PlayerTrackState object
       // The lastBuildTimestamp is a TIMESTAMP in PostgreSQL, so pass a Date object or ISO string
@@ -209,15 +190,7 @@ describe('VictoryService Integration Tests', () => {
         await client.query('UPDATE players SET money = 200 WHERE id = $1', [playerId1]);
       });
 
-      const claimedCities: MajorCityCoordinate[] = [
-        { name: 'City1', row: 10, col: 20 },
-        { name: 'City2', row: 15, col: 25 },
-        { name: 'City3', row: 20, col: 30 },
-        { name: 'City4', row: 25, col: 35 },
-        { name: 'City5', row: 30, col: 40 },
-        { name: 'City6', row: 35, col: 45 },
-        { name: 'City7', row: 40, col: 50 },
-      ];
+      const claimedCities = victoryCities;
 
       const result = await VictoryService.declareVictory(gameId, playerId1, claimedCities);
 
@@ -231,15 +204,7 @@ describe('VictoryService Integration Tests', () => {
         await client.query('UPDATE players SET money = 260, debt_owed = 20 WHERE id = $1', [playerId1]);
       });
 
-      const claimedCities: MajorCityCoordinate[] = [
-        { name: 'City1', row: 10, col: 20 },
-        { name: 'City2', row: 15, col: 25 },
-        { name: 'City3', row: 20, col: 30 },
-        { name: 'City4', row: 25, col: 35 },
-        { name: 'City5', row: 30, col: 40 },
-        { name: 'City6', row: 35, col: 45 },
-        { name: 'City7', row: 40, col: 50 },
-      ];
+      const claimedCities = victoryCities;
 
       const result = await VictoryService.declareVictory(gameId, playerId1, claimedCities);
 
@@ -256,15 +221,7 @@ describe('VictoryService Integration Tests', () => {
         await client.query('UPDATE players SET money = 280, debt_owed = 20 WHERE id = $1', [playerId1]);
       });
 
-      const claimedCities: MajorCityCoordinate[] = [
-        { name: 'City1', row: 10, col: 20 },
-        { name: 'City2', row: 15, col: 25 },
-        { name: 'City3', row: 20, col: 30 },
-        { name: 'City4', row: 25, col: 35 },
-        { name: 'City5', row: 30, col: 40 },
-        { name: 'City6', row: 35, col: 45 },
-        { name: 'City7', row: 40, col: 50 },
-      ];
+      const claimedCities = victoryCities;
 
       const result = await VictoryService.declareVictory(gameId, playerId1, claimedCities);
 
@@ -273,50 +230,31 @@ describe('VictoryService Integration Tests', () => {
       expect(result.victoryState?.triggered).toBe(true);
     });
 
-    it('should reject victory with fewer than 7 unique cities', async () => {
-      const claimedCities: MajorCityCoordinate[] = [
-        { name: 'City1', row: 10, col: 20 },
-        { name: 'City2', row: 15, col: 25 },
-        { name: 'City3', row: 20, col: 30 },
-        { name: 'City4', row: 25, col: 35 },
-        { name: 'City5', row: 30, col: 40 },
-        { name: 'City6', row: 35, col: 45 },
-        // Only 6 cities
-      ];
+    it('should reject victory with fewer than 7 connected cities despite seven claims', async () => {
+      await runQuery(client => client.query(
+        'UPDATE player_tracks SET segments = $1 WHERE game_id = $2 AND player_id = $3',
+        [JSON.stringify(victoryTrack(victoryCities.slice(0, 6))), gameId, playerId1],
+      ));
+      const claimedCities = victoryCities;
 
       const result = await VictoryService.declareVictory(gameId, playerId1, claimedCities);
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('6 unique cities claimed, need 7');
+      expect(result.error).toContain('6 connected major cities, need 7');
     });
 
-    it('should reject victory when claimed city not in track', async () => {
-      const claimedCities: MajorCityCoordinate[] = [
-        { name: 'City1', row: 10, col: 20 },
-        { name: 'City2', row: 15, col: 25 },
-        { name: 'City3', row: 20, col: 30 },
-        { name: 'City4', row: 25, col: 35 },
-        { name: 'City5', row: 30, col: 40 },
-        { name: 'City6', row: 35, col: 45 },
-        { name: 'City7', row: 99, col: 99 }, // Not in track
-      ];
+    it('should reject victory when no track exists despite seven claims', async () => {
+      await runQuery(client => client.query('DELETE FROM player_tracks WHERE game_id = $1', [gameId]));
+      const claimedCities = victoryCities;
 
       const result = await VictoryService.declareVictory(gameId, playerId1, claimedCities);
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('not found in track');
+      expect(result.error).toContain('0 connected major cities');
     });
 
     it('should accept valid victory declaration', async () => {
-      const claimedCities: MajorCityCoordinate[] = [
-        { name: 'City1', row: 10, col: 20 },
-        { name: 'City2', row: 15, col: 25 },
-        { name: 'City3', row: 20, col: 30 },
-        { name: 'City4', row: 25, col: 35 },
-        { name: 'City5', row: 30, col: 40 },
-        { name: 'City6', row: 35, col: 45 },
-        { name: 'City7', row: 40, col: 50 },
-      ];
+      const claimedCities = victoryCities;
 
       const result = await VictoryService.declareVictory(gameId, playerId1, claimedCities);
 
@@ -328,15 +266,7 @@ describe('VictoryService Integration Tests', () => {
     });
 
     it('should reject second victory declaration', async () => {
-      const claimedCities: MajorCityCoordinate[] = [
-        { name: 'City1', row: 10, col: 20 },
-        { name: 'City2', row: 15, col: 25 },
-        { name: 'City3', row: 20, col: 30 },
-        { name: 'City4', row: 25, col: 35 },
-        { name: 'City5', row: 30, col: 40 },
-        { name: 'City6', row: 35, col: 45 },
-        { name: 'City7', row: 40, col: 50 },
-      ];
+      const claimedCities = victoryCities;
 
       // First declaration succeeds
       await VictoryService.declareVictory(gameId, playerId1, claimedCities);
@@ -390,6 +320,68 @@ describe('VictoryService Integration Tests', () => {
   });
 
   describe('resolveVictory', () => {
+    beforeEach(async () => {
+      for (const playerId of [playerId1, playerId2]) {
+        await TrackService.saveTrackState(gameId, playerId, {
+          playerId, gameId, segments: victoryTrack(), totalCost: 0,
+          turnBuildCost: 0, lastBuildTimestamp: new Date(),
+        });
+      }
+    });
+
+    it('JIRA-191: chooses seven connected cities at 252M over two cities at 423M', async () => {
+      await runQuery(async (client) => {
+        await client.query('UPDATE players SET money = 423 WHERE id = $1', [playerId1]);
+        await client.query('UPDATE players SET money = 252 WHERE id = $1', [playerId2]);
+        await client.query('UPDATE player_tracks SET segments = $1 WHERE player_id = $2', [
+          JSON.stringify(victoryTrack([victoryCities[0], victoryCities[5]])), playerId1,
+        ]);
+      });
+      expect(await VictoryService.declareVictory(gameId, playerId2, victoryCities)).toMatchObject({ success: true });
+
+      expect(await VictoryService.resolveVictory(gameId)).toMatchObject({
+        gameOver: true, winnerId: playerId2,
+      });
+      const game = await runQuery(client => client.query('SELECT status, winner_id FROM games WHERE id = $1', [gameId]));
+      expect(game.rows[0]).toMatchObject({ status: 'completed', winner_id: playerId2 });
+    });
+
+    it.each(['track', 'money'])('resumes normal play after losing %s eligibility and permits a later declaration', async (lost) => {
+      expect(await VictoryService.declareVictory(gameId, playerId1, victoryCities)).toMatchObject({ success: true });
+      await runQuery(async (client) => {
+        if (lost === 'track') {
+          // A removed bridge splits seven cities into components of four and three.
+          const disconnected = [...victoryTrack(victoryCities.slice(0, 4)), ...victoryTrack(victoryCities.slice(4))];
+          await client.query('UPDATE player_tracks SET segments = $1 WHERE player_id = $2', [
+            JSON.stringify(disconnected), playerId1,
+          ]);
+        } else {
+          await client.query('UPDATE players SET money = 249 WHERE id = $1', [playerId1]);
+        }
+      });
+      const resolution = await VictoryService.resolveVictory(gameId);
+      expect(resolution).toEqual({
+        gameOver: false,
+        victoryState: { triggered: false, triggerPlayerIndex: -1, finalTurnPlayerIndex: -1, victoryThreshold: 250 },
+      });
+      expect(await VictoryService.getVictoryState(gameId)).toEqual(resolution.victoryState);
+      const game = await runQuery(client => client.query('SELECT status, winner_id FROM games WHERE id = $1', [gameId]));
+      expect(game.rows[0]).toMatchObject({ status: 'active', winner_id: null });
+      expect(await VictoryService.declareVictory(gameId, playerId1, victoryCities)).toMatchObject({ success: false });
+
+      await runQuery(async (client) => {
+        await client.query('UPDATE players SET money = 250 WHERE id = $1', [playerId1]);
+        await client.query('UPDATE player_tracks SET segments = $1 WHERE player_id = $2', [
+          JSON.stringify(victoryTrack()), playerId1,
+        ]);
+      });
+      const redeclaration = await VictoryService.declareVictory(gameId, playerId1, []);
+      expect(redeclaration.error).toBeUndefined();
+      expect(redeclaration).toMatchObject({
+        success: true, victoryState: { triggered: true },
+      });
+    });
+
     it('should declare winner when one player has most money above threshold', async () => {
       // Player1 has 260M, others have less
       await runQuery(async (client) => {

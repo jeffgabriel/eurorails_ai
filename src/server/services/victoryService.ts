@@ -1,14 +1,12 @@
 import { db } from '../db';
-import { VictoryState, VICTORY_INITIAL_THRESHOLD, VICTORY_TIE_THRESHOLD } from '../../shared/types/GameTypes';
+import { VictoryState, VICTORY_INITIAL_THRESHOLD, VICTORY_TIE_THRESHOLD, VICTORY_CITY_COUNT } from '../../shared/types/GameTypes';
 import { TrackService } from './trackService';
 import { TrackSegment } from '../../shared/types/TrackTypes';
 import { cleanupGameState } from './gameCleanupService';
+import { WinConditionsService, UnmetWinCondition } from './winConditionsService';
+import type { MajorCityCoordinate } from './winConditionsService';
 
-export interface MajorCityCoordinate {
-  name: string;
-  row: number;
-  col: number;
-}
+export type { MajorCityCoordinate } from './winConditionsService';
 
 export interface DeclareVictoryResult {
   success: boolean;
@@ -22,6 +20,8 @@ export interface ResolveVictoryResult {
   winnerName?: string;
   tieExtended?: boolean;
   newThreshold?: number;
+  /** Present when no player qualifies and normal play resumes. */
+  victoryState?: VictoryState;
 }
 
 export class VictoryService {
@@ -81,7 +81,7 @@ export class VictoryService {
   static async declareVictory(
     gameId: string,
     playerId: string,
-    claimedCities: MajorCityCoordinate[]
+    _claimedCities: MajorCityCoordinate[]
   ): Promise<DeclareVictoryResult> {
     // Get game state
     const gameResult = await db.query(
@@ -109,7 +109,7 @@ export class VictoryService {
                 array(SELECT id FROM players WHERE game_id = $1 AND is_deleted = false ORDER BY created_at),
                 p.id
               ) - 1) as player_index
-       FROM players p WHERE p.id = $2 AND p.game_id = $1`,
+       FROM players p WHERE p.id = $2 AND p.game_id = $1 AND p.is_deleted = false`,
       [gameId, playerId]
     );
 
@@ -119,10 +119,16 @@ export class VictoryService {
 
     const player = playerResult.rows[0];
     const threshold = game.victory_threshold || VICTORY_INITIAL_THRESHOLD;
-    const netWorth = player.money - (player.debt_owed || 0);
+    // Claims are retained in the API for compatibility; only persisted data
+    // establishes eligibility.
+    const trackState = await TrackService.getTrackState(gameId, playerId);
+    const evaluation = WinConditionsService.evaluate(
+      player.money, player.debt_owed ?? 0, trackState?.segments ?? [], threshold,
+    );
+    const { netWorth } = evaluation;
 
     // Validate money threshold (net of debt)
-    if (netWorth < threshold) {
+    if (evaluation.unmetCondition === UnmetWinCondition.InsufficientFunds) {
       const debtInfo = player.debt_owed > 0 ? ` (${player.money}M cash - ${player.debt_owed}M debt)` : '';
       return {
         success: false,
@@ -130,25 +136,10 @@ export class VictoryService {
       };
     }
 
-    // Validate 7 unique cities claimed
-    const uniqueCities = new Set(claimedCities.map(c => c.name));
-    if (uniqueCities.size < 7) {
+    if (!evaluation.eligible) {
       return {
         success: false,
-        error: `Only ${uniqueCities.size} unique cities claimed, need 7`
-      };
-    }
-
-    // Validate cities exist in player's track
-    const trackState = await TrackService.getTrackState(gameId, playerId);
-    if (!trackState || trackState.segments.length === 0) {
-      return { success: false, error: 'No track found for player' };
-    }
-
-    if (!this.validateCitiesInTrack(trackState.segments, claimedCities)) {
-      return {
-        success: false,
-        error: 'Claimed city coordinates not found in track'
+        error: `Only ${evaluation.connectedCities.length} connected major cities, need ${VICTORY_CITY_COUNT}`,
       };
     }
 
@@ -201,8 +192,13 @@ export class VictoryService {
    * Determines winner or extends threshold on tie
    */
   static async resolveVictory(gameId: string): Promise<ResolveVictoryResult> {
-    // Get all players with their money, debt, and track info
-    const playersResult = await db.query(
+    const playersResult = await db.query<{
+      id: string;
+      name: string;
+      money: number;
+      debt_owed: number | null;
+      net_worth: number;
+    }>(
       `SELECT p.id, p.name, p.money, p.debt_owed,
               (p.money - COALESCE(p.debt_owed, 0)) as net_worth
        FROM players p
@@ -218,12 +214,36 @@ export class VictoryService {
 
     const threshold = gameResult.rows[0]?.victory_threshold || VICTORY_INITIAL_THRESHOLD;
 
-    // Find players meeting the threshold (net of debt)
-    const eligiblePlayers = playersResult.rows.filter(p => p.net_worth >= threshold);
+    // Preserve monetary ordering, but only admit players whose current track
+    // also qualifies. Complete all reads before mutating the game.
+    const candidates = playersResult.rows.filter(p => p.net_worth >= threshold);
+    const evaluations = await Promise.all(candidates.map(async (player) => {
+      const trackState = await TrackService.getTrackState(gameId, player.id);
+      return WinConditionsService.evaluate(
+        player.money, player.debt_owed ?? 0, trackState?.segments ?? [], threshold,
+      );
+    }));
+    const eligiblePlayers = candidates.filter((_, index) => evaluations[index].eligible);
 
     if (eligiblePlayers.length === 0) {
-      // No one meets threshold - shouldn't happen if victory was triggered correctly
-      return { gameOver: false };
+      // Eligibility can be lost to events during the final round.
+      await db.query(
+        `UPDATE games
+         SET victory_triggered = false,
+             victory_trigger_player_index = -1,
+             final_turn_player_index = -1
+         WHERE id = $1`,
+        [gameId],
+      );
+      return {
+        gameOver: false,
+        victoryState: {
+          triggered: false,
+          triggerPlayerIndex: -1,
+          finalTurnPlayerIndex: -1,
+          victoryThreshold: threshold,
+        },
+      };
     }
 
     // Check for ties at the top (by net worth)

@@ -117,6 +117,9 @@ export class GameStateService {
         if (patch.status !== undefined) {
             this.gameState.status = patch.status;
         }
+        if (patch.victoryState !== undefined) {
+            this.gameState.victoryState = patch.victoryState;
+        }
 
         this.playerStateService?.updateLocalPlayer(this.gameState.players);
 

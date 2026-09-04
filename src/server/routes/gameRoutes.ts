@@ -3,7 +3,7 @@ import { GameService } from '../services/gameService';
 import { VictoryService, MajorCityCoordinate } from '../services/victoryService';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { db } from '../db';
-import { emitVictoryTriggered, emitGameOver, emitTieExtended } from '../services/socketService';
+import { emitVictoryTriggered, emitGameOver, emitTieExtended, emitStatePatch } from '../services/socketService';
 import { ActiveEffectManager } from '../services/ActiveEffectManager';
 
 const router = express.Router();
@@ -234,6 +234,13 @@ router.post('/:gameId/resolve-victory', authenticateToken, async (req, res) => {
             emitGameOver(gameId, result.winnerId, result.winnerName);
         } else if (result.tieExtended && result.newThreshold) {
             emitTieExtended(gameId, result.newThreshold);
+        } else if (result.victoryState) {
+            // Return the committed reset even if notifying other clients fails.
+            try {
+                await emitStatePatch(gameId, { victoryState: result.victoryState });
+            } catch (broadcastError) {
+                console.warn(`Victory reset broadcast failed for game ${gameId}:`, broadcastError);
+            }
         }
 
         return res.status(200).json(result);
