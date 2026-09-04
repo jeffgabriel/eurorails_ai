@@ -62,6 +62,19 @@ export class GameSocketCoordinator {
   private wakeVisibilityListener?: () => void;
   private wakeOnlineListener?: () => void;
 
+  // Lifecycle generation: bumped by every stop(). Async paths (start(), the
+  // wake handler) capture it before awaiting and bail out afterwards if it
+  // changed, so a connect or refresh that resolves after the scene was
+  // destroyed can never schedule work against that scene's dependencies --
+  // or against a newer scene's.
+  private generation = 0;
+
+  // True once the room join and game handler registration have run for the
+  // current generation. start() does this when its initial connect succeeds;
+  // otherwise a later wake that does connect must complete it, or the socket
+  // would be up but deaf (no handlers, no room, no server reconnect hook).
+  private socketReady = false;
+
   /**
    * Ensure a socket connection, join the game room, and register every
    * game-specific socket handler. Returns `false` (fail closed) when no
@@ -73,6 +86,7 @@ export class GameSocketCoordinator {
     // without a paired stop()) must not leave duplicate subscriptions behind.
     this.stop();
 
+    const generation = this.generation;
     this.gameId = deps.gameId;
 
     // Registered up front (not gated on the initial connect below) so that
@@ -83,18 +97,23 @@ export class GameSocketCoordinator {
 
     const token = localStorage.getItem(JWT_STORAGE_KEY) ?? '';
     const connected = await socketService.ensureConnected(token);
+    if (generation !== this.generation) {
+      return false;
+    }
     if (!connected) {
       console.warn('[GameSocketCoordinator] Socket not connected; caller should fall back to polling.');
       return false;
     }
 
-    socketService.join(this.gameId);
-    this.registerHandlers(deps);
+    this.completeSocketSetup(deps);
     return true;
   }
 
   /** Clear the resync timer, wake listeners, and all stored subscriptions. Safe to call more than once. */
   stop(): void {
+    this.generation++;
+    this.socketReady = false;
+
     if (this.resyncTimer !== undefined) {
       window.clearTimeout(this.resyncTimer);
       this.resyncTimer = undefined;
@@ -153,11 +172,15 @@ export class GameSocketCoordinator {
    * handshake, ensureConnected() re-opens it explicitly (see socket.ts).
    */
   private async handleWake(deps: GameSocketCoordinatorDeps): Promise<void> {
+    const generation = this.generation;
     let token = localStorage.getItem(JWT_STORAGE_KEY) ?? '';
 
     if (isAccessTokenExpired(token)) {
       const { useAuthStore } = await import('../lobby/store/auth.store');
       const refreshed = await useAuthStore.getState().refreshAccessToken();
+      if (generation !== this.generation) {
+        return;
+      }
       if (refreshed) {
         token = localStorage.getItem(JWT_STORAGE_KEY) ?? token;
       } else {
@@ -165,8 +188,26 @@ export class GameSocketCoordinator {
       }
     }
 
-    await socketService.ensureConnected(token);
+    const connected = await socketService.ensureConnected(token);
+    if (generation !== this.generation) {
+      return;
+    }
+
+    // If start() never got a connection (page loaded offline, refresh
+    // failed at the time), this wake is the first live socket -- finish the
+    // setup start() skipped so the socket actually delivers game events.
+    if (connected && !this.socketReady) {
+      this.completeSocketSetup(deps);
+    }
+
     this.scheduleSocketResync('wake', deps);
+  }
+
+  /** Join the game room and register every game handler; runs once per generation. */
+  private completeSocketSetup(deps: GameSocketCoordinatorDeps): void {
+    socketService.join(this.gameId);
+    this.registerHandlers(deps);
+    this.socketReady = true;
   }
 
   private registerHandlers(deps: GameSocketCoordinatorDeps): void {

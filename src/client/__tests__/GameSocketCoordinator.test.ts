@@ -821,6 +821,106 @@ describe('GameSocketCoordinator', () => {
       expect(authenticatedFetch).toHaveBeenCalledWith(expect.stringContaining('/api/game/game-1'));
     });
 
+    it('completes the room join and handler registration on the first wake that connects after start() failed', async () => {
+      mockIsAccessTokenExpired.mockReturnValue(false);
+      (socketService.ensureConnected as jest.Mock).mockResolvedValueOnce(false);
+
+      expect(await coordinator.start(deps)).toBe(false);
+      expect(socketService.join).not.toHaveBeenCalled();
+      expect(socketService.onTurnChange).not.toHaveBeenCalled();
+
+      (socketService.ensureConnected as jest.Mock).mockResolvedValue(true);
+      const listener = getListenerFor(windowAddSpy, 'online');
+
+      listener();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(socketService.join).toHaveBeenCalledWith('game-1');
+      expect(socketService.onTurnChange).toHaveBeenCalledTimes(1);
+      expect(socketService.onReconnected).toHaveBeenCalledTimes(1);
+
+      // A second wake must not join or register handlers again.
+      listener();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(socketService.join).toHaveBeenCalledTimes(1);
+      expect(socketService.onTurnChange).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(250);
+      expect(authenticatedFetch).toHaveBeenCalledWith(expect.stringContaining('/api/game/game-1'));
+    });
+
+    it('does not complete setup again on wake when start() already did', async () => {
+      mockIsAccessTokenExpired.mockReturnValue(false);
+      await coordinator.start(deps);
+      expect(socketService.join).toHaveBeenCalledTimes(1);
+
+      getListenerFor(windowAddSpy, 'online')();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(socketService.join).toHaveBeenCalledTimes(1);
+      expect(socketService.onTurnChange).toHaveBeenCalledTimes(1);
+    });
+
+    it('abandons a wake that was still awaiting when stop() ran: no setup, no resync', async () => {
+      (socketService.ensureConnected as jest.Mock).mockResolvedValueOnce(false);
+      mockIsAccessTokenExpired.mockReturnValue(false);
+      await coordinator.start(deps);
+
+      let resolveConnect!: (value: boolean) => void;
+      (socketService.ensureConnected as jest.Mock).mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => { resolveConnect = resolve; }),
+      );
+      const listener = getListenerFor(windowAddSpy, 'online');
+      listener();
+      await jest.advanceTimersByTimeAsync(0);
+
+      coordinator.stop();
+      (authenticatedFetch as jest.Mock).mockClear();
+
+      resolveConnect(true);
+      await jest.advanceTimersByTimeAsync(250);
+
+      expect(socketService.join).not.toHaveBeenCalled();
+      expect(socketService.onTurnChange).not.toHaveBeenCalled();
+      expect(authenticatedFetch).not.toHaveBeenCalled();
+    });
+
+    it('abandons a wake whose token refresh resolved after stop()', async () => {
+      await coordinator.start(deps);
+
+      let resolveRefresh!: (value: boolean) => void;
+      refreshAccessToken.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => { resolveRefresh = resolve; }),
+      );
+      (socketService.ensureConnected as jest.Mock).mockClear();
+      const listener = getListenerFor(windowAddSpy, 'online');
+      listener();
+      await jest.advanceTimersByTimeAsync(0);
+
+      coordinator.stop();
+      resolveRefresh(true);
+      await jest.advanceTimersByTimeAsync(250);
+
+      expect(socketService.ensureConnected).not.toHaveBeenCalled();
+    });
+
+    it('start() returns false and skips setup when its connect resolves after stop()', async () => {
+      mockIsAccessTokenExpired.mockReturnValue(false);
+      let resolveConnect!: (value: boolean) => void;
+      (socketService.ensureConnected as jest.Mock).mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => { resolveConnect = resolve; }),
+      );
+
+      const pending = coordinator.start(deps);
+      coordinator.stop();
+      resolveConnect(true);
+
+      expect(await pending).toBe(false);
+      expect(socketService.join).not.toHaveBeenCalled();
+      expect(socketService.onTurnChange).not.toHaveBeenCalled();
+    });
+
     it('unregisters both wake listeners in stop(), so a subsequent visibilitychange does nothing', async () => {
       await coordinator.start(deps);
       coordinator.stop();
