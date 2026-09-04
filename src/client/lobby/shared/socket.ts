@@ -29,8 +29,17 @@ class SocketService {
   // auth-rejected connect_error triggers a refresh, further connect_error
   // retries in the same cycle must not each fire their own refresh (a
   // refresh storm against a rotating refresh token can revoke the session).
-  // Cleared on the next successful 'connect'.
+  // Cleared on the next successful 'connect', or re-armed by the auth retry
+  // timer below when a refresh failed transiently.
   private refreshTriggeredOnConnectError = false;
+
+  // Pending explicit reconnect after a transient refresh failure. A
+  // middleware-denied handshake permanently stops Socket.IO's own retry loop
+  // (see connect_error below), so every retry from that state has to be
+  // driven from here.
+  private authRetryTimer?: number;
+  private static readonly AUTH_RETRY_BASE_MS = 2000;
+  private static readonly AUTH_RETRY_MAX_MS = 30000;
 
   private onReconnectedCallbacks = new Set<() => void>();
   private onSeqGapCallbacks = new Set<(data: { expected: number; received: number }) => void>();
@@ -73,6 +82,7 @@ class SocketService {
       // A live connection ends the disconnect cycle -- the next connect_error
       // (a new cycle) is allowed to trigger its own refresh.
       this.refreshTriggeredOnConnectError = false;
+      this.clearAuthRetry();
 
       const isReconnect = this.hasEverConnected;
       this.hasEverConnected = true;
@@ -113,10 +123,12 @@ class SocketService {
 
       if (this.isAuthConnectError(error) && !this.refreshTriggeredOnConnectError) {
         this.refreshTriggeredOnConnectError = true;
-        // Fire-and-forget: reconnect_attempt already re-reads the access
-        // token from localStorage before each retry, so a successful
-        // refresh here is picked up by Socket.IO's own retry loop without
-        // any further action.
+        // A handshake denied by the server's auth middleware is NOT a
+        // transient failure to Socket.IO: the client destroys the namespace
+        // socket (`socket.active` becomes false) and closes the manager with
+        // reconnection skipped, so its retry loop never runs again and
+        // `reconnect_attempt` never re-reads the refreshed token. After the
+        // refresh we therefore have to re-open the socket ourselves.
         void this.refreshTokenAfterConnectError();
       }
     });
@@ -128,18 +140,81 @@ class SocketService {
   }
 
   private async refreshTokenAfterConnectError(): Promise<void> {
+    let refreshed = false;
     try {
       const { useAuthStore } = await import('../store/auth.store');
-      const refreshed = await useAuthStore.getState().refreshAccessToken();
-      if (!refreshed) {
-        debug.warn('Token refresh after auth connect_error did not succeed');
-      }
+      refreshed = await useAuthStore.getState().refreshAccessToken();
     } catch (err) {
       debug.error('Token refresh after auth connect_error threw:', err);
+    }
+
+    if (refreshed) {
+      this.reconnectWithCurrentToken();
+      return;
+    }
+
+    // refreshAccessToken() returns false for both a definitive rejection (it
+    // has already logged out and cleared the persisted tokens -- the session
+    // is over and there is nothing to reconnect with) and a transient failure
+    // (tokens retained). Only the latter is worth retrying.
+    if (!localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY)) {
+      debug.warn('Token refresh after auth connect_error was rejected; not reconnecting');
+      return;
+    }
+    debug.warn('Token refresh after auth connect_error failed transiently; scheduling a reconnect retry');
+    this.scheduleAuthRetry();
+  }
+
+  /**
+   * Retry the denied handshake after a backoff. Re-sending the (still stale)
+   * token yields another UNAUTHORIZED connect_error, and re-arming the guard
+   * first lets that error trigger a fresh refresh attempt -- so the retry
+   * loop is: reconnect -> denied -> refresh -> (success: reconnect with the
+   * new token | transient failure: back here).
+   */
+  private scheduleAuthRetry(): void {
+    if (this.authRetryTimer !== undefined) {
+      return;
+    }
+    const exponent = Math.min(this.reconnectAttempts, 4);
+    const delayMs = Math.min(SocketService.AUTH_RETRY_BASE_MS * 2 ** exponent, SocketService.AUTH_RETRY_MAX_MS);
+    this.authRetryTimer = window.setTimeout(() => {
+      this.authRetryTimer = undefined;
+      this.refreshTriggeredOnConnectError = false;
+      this.reconnectWithCurrentToken();
+    }, delayMs);
+  }
+
+  private clearAuthRetry(): void {
+    if (this.authRetryTimer !== undefined) {
+      window.clearTimeout(this.authRetryTimer);
+      this.authRetryTimer = undefined;
+    }
+  }
+
+  /**
+   * Re-open the existing socket with whatever access token is currently
+   * persisted. Used whenever Socket.IO has stopped retrying on its own (a
+   * middleware-denied handshake) -- `socket.connect()` re-subscribes the
+   * namespace and re-opens the manager, which also clears its skip-reconnect
+   * flag so normal auto-reconnect resumes afterwards.
+   */
+  private reconnectWithCurrentToken(): void {
+    if (!this.socket) {
+      return;
+    }
+    const token = localStorage.getItem(JWT_STORAGE_KEY);
+    if (token) {
+      this.socket.auth = { token };
+    }
+    if (!this.socket.connected) {
+      this.connecting = true;
+      this.socket.connect();
     }
   }
 
   disconnect(): void {
+    this.clearAuthRetry();
     if (this.socket) {
       this.socket.disconnect();
       this.socket = null;
@@ -237,23 +312,46 @@ class SocketService {
       // when its target is already settled, so this keeps the common
       // (no-refresh-needed) case running synchronously through to
       // `connect()`, matching the pre-existing timing this method relied on.
-      const refreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
       let connectToken = token;
-      if (refreshToken && isAccessTokenExpired(token)) {
-        debug.log('Access token expired before connect; refreshing proactively');
-        const { useAuthStore } = await import('../store/auth.store');
-        const refreshed = await useAuthStore.getState().refreshAccessToken();
-        if (!refreshed) {
-          debug.error('Proactive refresh failed before connect; not connecting with a stale token');
+      if (this.needsProactiveRefresh(token)) {
+        if (!(await this.refreshBeforeConnect())) {
           return false;
         }
         connectToken = localStorage.getItem(JWT_STORAGE_KEY) || token;
       }
 
       this.connect(connectToken);
+    } else if (!this.socket!.active) {
+      // The socket exists but Socket.IO has given up on it: a handshake
+      // denied by the server's auth middleware destroys the namespace socket
+      // and stops all automatic reconnection (see connect_error). Waiting
+      // for it to reconnect would never resolve -- refresh if the persisted
+      // token is stale, then re-open it explicitly.
+      const currentToken = localStorage.getItem(JWT_STORAGE_KEY) || token;
+      if (this.needsProactiveRefresh(currentToken) && !(await this.refreshBeforeConnect())) {
+        return false;
+      }
+      this.clearAuthRetry();
+      this.refreshTriggeredOnConnectError = false;
+      this.reconnectWithCurrentToken();
     }
 
     return this.waitForConnection(2500);
+  }
+
+  /** Refresh-first only when a refresh token exists: the dev-auth sentinel is not a JWT and has nothing to refresh with. */
+  private needsProactiveRefresh(token: string): boolean {
+    return !!localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY) && isAccessTokenExpired(token);
+  }
+
+  private async refreshBeforeConnect(): Promise<boolean> {
+    debug.log('Access token expired before connect; refreshing proactively');
+    const { useAuthStore } = await import('../store/auth.store');
+    const refreshed = await useAuthStore.getState().refreshAccessToken();
+    if (!refreshed) {
+      debug.error('Proactive refresh failed before connect; not connecting with a stale token');
+    }
+    return refreshed;
   }
 
   join(gameId: ID): void {

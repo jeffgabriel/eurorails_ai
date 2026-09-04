@@ -144,14 +144,13 @@ export class GameSocketCoordinator {
    * single-flight refresh, then ensure the socket is connected and heal
    * state via the existing debounced resync.
    *
-   * ensureConnected() only takes its own proactive-refresh path when it is
-   * opening a brand-new socket (see socket.ts) -- when a socket already
-   * exists but is disconnected (the common wake case: Socket.IO's retry
-   * loop was simply paused while backgrounded), it just waits for
-   * reconnection, which uses whatever token `reconnect_attempt` reads from
-   * localStorage. Refreshing here, before that wait, is what makes the
-   * very next reconnect attempt succeed instead of bouncing through one or
-   * more connect_error cycles first.
+   * When a socket already exists but is merely disconnected (Socket.IO's
+   * retry loop was paused while backgrounded), ensureConnected() waits for
+   * its reconnection, which uses whatever token `reconnect_attempt` reads
+   * from localStorage -- refreshing here first is what makes the very next
+   * attempt succeed instead of bouncing through a connect_error cycle. When
+   * the socket was abandoned by Socket.IO after a middleware-denied
+   * handshake, ensureConnected() re-opens it explicitly (see socket.ts).
    */
   private async handleWake(deps: GameSocketCoordinatorDeps): Promise<void> {
     let token = localStorage.getItem(JWT_STORAGE_KEY) ?? '';
