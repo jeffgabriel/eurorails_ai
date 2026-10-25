@@ -108,17 +108,12 @@ describe('PlayerService.dropLoadForPlayer', () => {
     });
   });
 
-  describe('validates load removal uses array_remove', () => {
-    it('should use array_remove SQL', async () => {
+  describe('load removal', () => {
+    const runDropWithLoads = async (loads: LoadType[]): Promise<unknown[]> => {
       mockClient.query.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
         if (sql.includes('SELECT loads')) {
-          return Promise.resolve({
-            rows: [{ loads: [LoadType.Coal] }],
-          });
-        }
-        if (sql.includes('UPDATE players SET loads')) {
-          return Promise.resolve({ rows: [] });
+          return Promise.resolve({ rows: [{ loads }] });
         }
         return Promise.resolve({ rows: [] });
       });
@@ -129,7 +124,18 @@ describe('PlayerService.dropLoadForPlayer', () => {
         (call: any[]) => typeof call[0] === 'string' && call[0].includes('UPDATE players SET loads'),
       );
       expect(updateCall).toBeDefined();
-      expect(updateCall![0]).toContain('array_remove');
+      expect(updateCall![0]).not.toContain('array_remove');
+      return updateCall![1];
+    };
+
+    it('should remove the only copy of the load', async () => {
+      const params = await runDropWithLoads([LoadType.Coal, LoadType.Oil]);
+      expect(params).toEqual([[LoadType.Oil], playerId, gameId]);
+    });
+
+    it('should remove only one copy when carrying duplicates', async () => {
+      const params = await runDropWithLoads([LoadType.Coal, LoadType.Oil, LoadType.Coal]);
+      expect(params).toEqual([[LoadType.Oil, LoadType.Coal], playerId, gameId]);
     });
   });
 
