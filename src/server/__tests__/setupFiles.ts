@@ -9,3 +9,6 @@ process.env.NODE_ENV = 'test';
 import dotenv from 'dotenv';
 dotenv.config();
 
+// AuthService has no default signing secret; give tests one if .env doesn't
+process.env.JWT_SECRET ??= 'test-jwt-secret';
+

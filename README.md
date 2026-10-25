@@ -135,7 +135,7 @@ The application supports configuration via environment variables for both develo
 **Other Server Variables:**
 - `PORT` - Server port (default: `3001`)
 - `NODE_ENV` - Environment mode (`development`, `production`, or `test`)
-- `SESSION_SECRET` - Secret key for session encryption (change in production!)
+- `JWT_SECRET` - Secret key for signing auth tokens (required; the server will not start without it)
 - `ENABLE_AI_BOTS` - Enable AI bot turn execution (default: `true`). Set to `false` to disable.
 
 #### Client-Side Configuration (Build-Time)
@@ -194,7 +194,7 @@ VITE_SOCKET_URL=https://api.example.com
 - Always set `CLIENT_URL` or `ALLOWED_ORIGINS` explicitly in production
 - Never use wildcard origins (`*`) in production
 - Use HTTPS in production
-- Set strong `SESSION_SECRET` in production
+- Set a strong, random `JWT_SECRET` in production
 - Review CORS settings before deploying to production
 
 For complete environment variable documentation, see `example.env` in the project root.

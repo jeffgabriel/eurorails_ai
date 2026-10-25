@@ -6,9 +6,27 @@ import { User, UserRow, LoginForm, RegisterForm, AuthResult, JWTPayload } from '
 
 export class AuthService {
   private static readonly SALT_ROUNDS = 12;
-  private static readonly JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
   private static readonly JWT_EXPIRES_IN = '60m';
   private static readonly REFRESH_TOKEN_EXPIRES_IN = '7d';
+
+  /**
+   * JWT signing secret. There is deliberately no fallback: a default secret
+   * lets anyone who has read the source forge a token for any user.
+   */
+  private static get JWT_SECRET(): string {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      throw new Error('JWT_SECRET environment variable is not set');
+    }
+    return secret;
+  }
+
+  /**
+   * Throw at startup if JWT_SECRET is missing, rather than on the first login
+   */
+  static assertConfigured(): void {
+    void this.JWT_SECRET;
+  }
 
   /**
    * Hash a password using bcrypt
@@ -280,6 +298,9 @@ export class AuthService {
         refreshToken: newRefreshToken
       };
     } catch (error) {
+      // Callers only see the generic message; log the underlying cause
+      // (expired, bad signature, unknown user) so failures can be diagnosed
+      console.warn('Refresh token rejected:', error instanceof Error ? error.message : error);
       throw new Error('Invalid refresh token');
     }
   }
