@@ -1,4 +1,4 @@
-import nodemailer from 'nodemailer';
+import nodemailer, { type Transporter } from 'nodemailer';
 import { Resend } from 'resend';
 
 /**
@@ -121,7 +121,7 @@ class ResendEmailService implements EmailService {
  * Development email service using MailDev (local SMTP server)
  */
 class MailDevEmailService implements EmailService {
-  private transporter: nodemailer.Transporter;
+  private transporter: Transporter;
   private fromEmail: string;
 
   constructor() {
