@@ -15,6 +15,7 @@ import whisperRoutes from './routes/whisperRoutes';
 import logRoutes, { llmRouter } from './routes/logRoutes';
 import { checkDatabase, db } from './db';
 import { PlayerService } from './services/playerService';
+import { AuthService } from './services/authService';
 import { addRequestId } from './middleware/errorHandler';
 import { initializeSocketIO } from './services/socketService';
 import { initializeCleanupJobs } from './cron/cleanupJobs';
@@ -292,6 +293,9 @@ app.get('*', (req, res, next) => {
 // Initialize database and start server
 async function startServer() {
     try {
+        // Refuse to start without a JWT signing secret
+        AuthService.assertConfigured();
+
         // Check database connection and schema
         const dbReady = await checkDatabase();
         if (!dbReady) {
