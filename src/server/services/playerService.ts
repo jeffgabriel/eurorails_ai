@@ -2869,11 +2869,15 @@ export class PlayerService {
         throw new Error(`Player is not carrying load: ${loadType}`);
       }
 
-      // Remove the first occurrence of this load type
+      // Remove only the first occurrence of this load type. array_remove would
+      // strip every copy (e.g. both Oils on a Heavy Freight), so splice here;
+      // the row is locked FOR UPDATE above, so writing the array back is safe.
+      const remainingLoads = [...currentLoads];
+      remainingLoads.splice(remainingLoads.indexOf(loadType), 1);
       await client.query(
-        `UPDATE players SET loads = array_remove(loads, $1)
+        `UPDATE players SET loads = $1
          WHERE id = $2 AND game_id = $3`,
-        [loadType, playerId, gameId],
+        [remainingLoads, playerId, gameId],
       );
 
       await client.query("COMMIT");

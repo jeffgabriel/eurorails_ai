@@ -852,7 +852,7 @@ export class TurnExecutor {
 
   /**
    * DropLoad: delegate to PlayerService.dropLoadForPlayer which handles
-   * array_remove and city placement (LoadService) in a transaction.
+   * single-load removal and city placement (LoadService) in a transaction.
    * Per game rules: "Any load may be dropped at any city without a payoff."
    * Audit INSERT and socket emit are best-effort post-commit.
    */
@@ -893,7 +893,7 @@ export class TurnExecutor {
       };
     }
 
-    // Delegate to PlayerService — handles array_remove and city placement
+    // Delegate to PlayerService — handles single-load removal and city placement
     await PlayerService.dropLoadForPlayer(
       snapshot.gameId,
       snapshot.bot.playerId,
