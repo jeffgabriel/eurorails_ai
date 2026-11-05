@@ -53,15 +53,13 @@ jest.mock('../services/demandDeckService', () => {
     discardEventCard: jest.fn(),
     drawCard: jest.fn(),
     getCard,
-    returnDealtCardToTop: jest.fn(),
-    returnDiscardedCardToDealt: jest.fn(),
-    returnDiscardedEventCardToDrawPile: jest.fn(),
+    persist: jest.fn(),
   };
   return {
     demandDeckService: instance,
     DemandDeckService: {
       getCard,
-      getInstanceForGame: jest.fn(() => instance),
+      loadForGame: jest.fn(async () => instance),
       destroyInstance: jest.fn(),
       destroyAllInstances: jest.fn(),
     },

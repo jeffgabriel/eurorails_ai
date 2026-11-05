@@ -36,7 +36,8 @@ jest.mock('../services/demandDeckService', () => ({
     ]),
     getCard: jest.fn(),
     destroyAllInstances: jest.fn(),
-    getInstanceForGame: jest.fn(() => ({
+    loadForGame: jest.fn(async () => ({
+      persist: jest.fn(),
       reset: jest.fn(),
       reshuffle: jest.fn(),
       pushEventCardToTop: jest.fn(),
