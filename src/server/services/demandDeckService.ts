@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { PoolClient } from 'pg';
 import { DemandCard, RawDemandCard } from '../../shared/types/DemandCard';
 import { EventCard, RawEventCard } from '../../shared/types/EventCard';
 import { CardDrawResult } from '../../shared/types/CardDrawResult';
@@ -23,9 +24,13 @@ function eventDrawKey(eventCardId: number): number {
  * Card definitions (demand + event cards and their lookup maps) are immutable
  * configuration loaded once from disk and shared across all games via static
  * fields. The mutable deck state — draw pile, discard pile, and dealt set — is
- * isolated per game: each game gets its own instance via
- * {@link DemandDeckService.getInstanceForGame}. This prevents one game's draws
- * and discards from corrupting another game's deck.
+ * isolated per game and persisted on the game's row (`games.deck_draw_pile`,
+ * `games.deck_discard_pile`) so it survives server restarts.
+ *
+ * Server code obtains a deck with {@link DemandDeckService.loadForGame} inside
+ * its transaction, mutates it, and calls {@link DemandDeckService.persist}
+ * before COMMIT. The database is the source of truth: a rolled-back
+ * transaction leaves the persisted deck untouched, and the next load sees it.
  */
 export class DemandDeckService {
   // ---- Shared, immutable card configuration (loaded once from disk) ----
@@ -56,8 +61,12 @@ export class DemandDeckService {
   }
 
   /**
-   * Get (or lazily create) the demand deck for a specific game. Each game owns
-   * an isolated draw/discard/dealt state; the card definitions are shared.
+   * Get (or lazily create) the in-memory deck for a specific game, without
+   * touching the database. Returns the instance most recently loaded by
+   * {@link DemandDeckService.loadForGame} for this game, if any.
+   *
+   * Server code that draws or discards must use loadForGame + persist instead;
+   * this accessor exists for unit tests and in-memory inspection.
    */
   public static getInstanceForGame(gameId: string): DemandDeckService {
     if (!gameId || typeof gameId !== 'string') {
@@ -69,6 +78,116 @@ export class DemandDeckService {
       DemandDeckService.instances.set(gameId, instance);
     }
     return instance;
+  }
+
+  /**
+   * Load a game's deck from the database, locking the game row (`FOR UPDATE`)
+   * so concurrent deck transactions in the same game are serialized. The
+   * client must be inside an open transaction (BEGIN) that will mutate the
+   * deck and call {@link DemandDeckService.persist} before COMMIT; outside a
+   * transaction the lock is released immediately and nothing is serialized.
+   *
+   * Always returns a fresh instance built from the persisted state, so an
+   * earlier rolled-back transaction can never leak into this one. If the game
+   * has no persisted deck yet (a new game, or one created before deck
+   * persistence existed), a fresh shuffled deck is built with every card
+   * currently in a player's hand marked as dealt, and persisted immediately.
+   *
+   * Player hands are authoritative: any hand card found in a persisted pile is
+   * removed from it (with a warning) so it can never be dealt twice. The repair
+   * is saved by the caller's persist.
+   *
+   * The loaded instance also becomes the game's registry entry, so
+   * {@link DemandDeckService.getInstanceForGame} reflects the latest load.
+   */
+  public static async loadForGame(gameId: string, client: PoolClient): Promise<DemandDeckService> {
+    if (!gameId || typeof gameId !== 'string') {
+      throw new Error('DemandDeckService.loadForGame requires a non-empty gameId');
+    }
+    const result = await client.query(
+      'SELECT deck_draw_pile, deck_discard_pile FROM games WHERE id = $1 FOR UPDATE',
+      [gameId]
+    );
+    if (result.rows.length === 0) {
+      throw new Error(`Game ${gameId} not found`);
+    }
+
+    const handsResult = await client.query(
+      'SELECT hand FROM players WHERE game_id = $1',
+      [gameId]
+    );
+    const handCardIds: number[] = handsResult.rows.flatMap(
+      (row: { hand: number[] | null }) => (row.hand || []).map(Number)
+    );
+
+    const instance = new DemandDeckService(gameId);
+    const { deck_draw_pile: drawPile, deck_discard_pile: discardPile } = result.rows[0];
+    if (Array.isArray(drawPile) && Array.isArray(discardPile)) {
+      instance.restoreState(drawPile, discardPile);
+      const healed = instance.removeHandCardsFromPiles(handCardIds);
+      if (healed.length > 0) {
+        console.warn(
+          `[DemandDeckService] Game ${gameId}: removed hand cards [${healed.join(', ')}] from persisted draw/discard piles`
+        );
+      }
+    } else {
+      // No persisted deck yet: the fresh shuffle from the constructor must
+      // exclude every card already held in a hand, then be saved.
+      instance.removeHandCardsFromPiles(handCardIds);
+      await instance.persist(client);
+    }
+
+    DemandDeckService.instances.set(gameId, instance);
+    return instance;
+  }
+
+  /**
+   * Write this game's draw and discard piles to its game row. Dealt cards are
+   * not stored — they are derived on load as every card in neither pile.
+   */
+  public async persist(client: PoolClient): Promise<void> {
+    await client.query(
+      'UPDATE games SET deck_draw_pile = $1, deck_discard_pile = $2 WHERE id = $3',
+      [this.drawPile, this.discardPile, this.gameId]
+    );
+  }
+
+  /**
+   * Replace this instance's piles with persisted state and derive the dealt set
+   * as every known card key in neither pile.
+   */
+  private restoreState(drawPile: number[], discardPile: number[]): void {
+    this.drawPile = drawPile.map(Number);
+    this.discardPile = discardPile.map(Number);
+    const inPiles = new Set([...this.drawPile, ...this.discardPile]);
+    this.dealtCards = new Set(
+      [
+        ...DemandDeckService.demandCards.map(c => c.id),
+        ...DemandDeckService.eventCards.map(c => eventDrawKey(c.id)),
+      ].filter(key => !inPiles.has(key))
+    );
+  }
+
+  /**
+   * Mark every given hand card as dealt, removing all of its occurrences from
+   * the draw and discard piles. Returns the card ids that had to be removed
+   * from a pile.
+   */
+  private removeHandCardsFromPiles(handCardIds: number[]): number[] {
+    const handKeys = new Set(
+      handCardIds.filter(id => DemandDeckService.demandCardMap.has(id))
+    );
+    const healed = new Set(
+      [...this.drawPile, ...this.discardPile].filter(key => handKeys.has(key))
+    );
+    if (healed.size > 0) {
+      this.drawPile = this.drawPile.filter(key => !handKeys.has(key));
+      this.discardPile = this.discardPile.filter(key => !handKeys.has(key));
+    }
+    for (const key of handKeys) {
+      this.dealtCards.add(key);
+    }
+    return [...healed];
   }
 
   /**
@@ -193,10 +312,9 @@ export class DemandDeckService {
   }
 
   /**
-   * Ensure a demand card is marked as dealt in the in-memory deck state.
-   *
-   * This is used to reconcile deck state after a server restart: players' hands are persisted
-   * in Postgres, but the deck's dealtCards/drawPile/discardPile are currently in-memory only.
+   * Ensure a demand card is marked as dealt, removing it from the draw and
+   * discard piles. Used by discardCard as a fallback when a card held in a
+   * hand is not tracked as dealt.
    *
    * Only applicable to demand cards (player hands never contain event cards).
    */
@@ -204,19 +322,7 @@ export class DemandDeckService {
     if (!DemandDeckService.demandCardMap.has(cardId)) {
       return false;
     }
-    const drawKey = cardId; // Demand cards: drawKey === cardId (positive)
-    if (this.dealtCards.has(drawKey)) {
-      return true;
-    }
-    const drawIdx = this.drawPile.lastIndexOf(drawKey);
-    if (drawIdx !== -1) {
-      this.drawPile.splice(drawIdx, 1);
-    }
-    const discardIdx = this.discardPile.lastIndexOf(drawKey);
-    if (discardIdx !== -1) {
-      this.discardPile.splice(discardIdx, 1);
-    }
-    this.dealtCards.add(drawKey);
+    this.removeHandCardsFromPiles([cardId]);
     return true;
   }
 
@@ -231,8 +337,8 @@ export class DemandDeckService {
       throw new Error(`Invalid card ID: ${cardId}`);
     }
     if (!this.dealtCards.has(drawKey)) {
-      // Attempt to reconcile after restart: the card may be in a persisted player hand
-      // but not in dealtCards. Ensure it's treated as dealt and removed from draw/discard.
+      // The card is in a player hand but not tracked as dealt (e.g. a hand
+      // written outside the deck). Treat it as dealt and remove it from the piles.
       this.ensureCardIsDealt(cardId);
       if (!this.dealtCards.has(drawKey)) {
         throw new Error(`Card ${cardId} is not currently dealt to any player`);
@@ -292,24 +398,6 @@ export class DemandDeckService {
     }
     this.discardPile.splice(idx, 1);
     this.dealtCards.add(drawKey);
-    return true;
-  }
-
-  /**
-   * Return a discarded event card back to the top of the draw pile.
-   * Used for rollback compensation when a transaction fails after event cards were discarded.
-   */
-  public returnDiscardedEventCardToDrawPile(eventCardId: number): boolean {
-    if (!DemandDeckService.eventCardMap.has(eventCardId)) {
-      return false;
-    }
-    const drawKey = eventDrawKey(eventCardId);
-    const idx = this.discardPile.lastIndexOf(drawKey);
-    if (idx === -1) {
-      return false;
-    }
-    this.discardPile.splice(idx, 1);
-    this.drawPile.push(drawKey);
     return true;
   }
 
