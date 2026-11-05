@@ -5,9 +5,6 @@ import { DemandDeckService } from '../services/demandDeckService';
 import { TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 
-// Force Jest to run this test file serially
-export const test = { concurrent: false };
-
 /**
  * Integration tests for per-game deck persistence (issue #237).
  *
@@ -52,6 +49,24 @@ describe('DemandDeckService persistence', () => {
     return { draw: result.rows[0].deck_draw_pile, discard: result.rows[0].deck_discard_pile };
   }
 
+  /** Load a game's deck in a transaction, run `use`, then persist and commit. */
+  async function withDeck<T>(id: string, use: (deck: DemandDeckService) => T): Promise<T> {
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const deck = await DemandDeckService.loadForGame(id, client);
+      const result = use(deck);
+      await deck.persist(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async function readAllHandCards(id: string): Promise<number[]> {
     const result = await db.query('SELECT hand FROM players WHERE game_id = $1', [id]);
     return result.rows.flatMap((row: { hand: number[] }) => row.hand);
@@ -94,16 +109,17 @@ describe('DemandDeckService persistence', () => {
     const before = await readDeckColumns(gameId);
 
     DemandDeckService.destroyAllInstances();
-    const deck = await DemandDeckService.loadForGame(gameId, db);
+    const { drawn, state } = await withDeck(gameId, (deck) => {
+      const card = deck.drawCard();
+      return { drawn: card, state: deck.getDeckState() };
+    });
 
     // Drawing reveals the persisted order: the next card is the last element.
     const expectedTop = before.draw![before.draw!.length - 1];
-    const drawn = deck.drawCard();
     expect(drawn).not.toBeNull();
     const drawnKey = drawn!.type === 'event' ? -drawn!.card.id : drawn!.card.id;
     expect(drawnKey).toBe(expectedTop);
 
-    const state = deck.getDeckState();
     expect(state.drawPileSize).toBe(before.draw!.length - 1);
     expect(state.discardPileSize).toBe(before.discard!.length);
     // 6 cards in hands plus the one just drawn
@@ -119,7 +135,7 @@ describe('DemandDeckService persistence', () => {
     );
     expect((await readDeckColumns(gameId)).draw).toBeNull();
 
-    const deck = await DemandDeckService.loadForGame(gameId, db);
+    const state = await withDeck(gameId, (deck) => deck.getDeckState());
 
     const { draw, discard } = await readDeckColumns(gameId);
     expect(draw).not.toBeNull();
@@ -127,7 +143,7 @@ describe('DemandDeckService persistence', () => {
     for (const cardId of [1, 2, 3]) {
       expect(draw).not.toContain(cardId);
     }
-    expect(deck.getDeckState().dealtCardsCount).toBe(3);
+    expect(state.dealtCardsCount).toBe(3);
   });
 
   it('leaves the persisted deck unchanged when the transaction rolls back', async () => {
@@ -148,8 +164,8 @@ describe('DemandDeckService persistence', () => {
     }
 
     expect(await readDeckColumns(gameId)).toEqual(before);
-    const reloaded = await DemandDeckService.loadForGame(gameId, db);
-    expect(reloaded.getDeckState().drawPileSize).toBe(before.draw!.length);
+    const state = await withDeck(gameId, (deck) => deck.getDeckState());
+    expect(state.drawPileSize).toBe(before.draw!.length);
   });
 
   it('removes hand cards found in the persisted piles so they cannot be drawn again', async () => {
@@ -165,13 +181,11 @@ describe('DemandDeckService persistence', () => {
 
     try {
       DemandDeckService.destroyAllInstances();
-      const deck = await DemandDeckService.loadForGame(gameId, db);
+      const drawn = await withDeck(gameId, (deck) => deck.drawCard());
 
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(`removed hand cards [${handCard}]`));
-      const drawn = deck.drawCard();
       expect(drawn!.card.id).not.toBe(handCard);
 
-      await deck.persist(db);
       const after = await readDeckColumns(gameId);
       expect(after.draw).not.toContain(handCard);
       expect(after.discard).not.toContain(handCard);
@@ -186,7 +200,7 @@ describe('DemandDeckService persistence', () => {
 
     try {
       DemandDeckService.destroyAllInstances();
-      await DemandDeckService.loadForGame(gameId, db);
+      await withDeck(gameId, () => undefined);
       expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('removed hand cards'));
     } finally {
       warnSpy.mockRestore();
@@ -207,6 +221,24 @@ describe('DemandDeckService persistence', () => {
     }
   });
 
+  it('deals distinct hands to players created concurrently without a transaction client', async () => {
+    await Promise.all([
+      addPlayer(gameId, 'Alice', '#FF0000'),
+      addPlayer(gameId, 'Bob', '#0000FF'),
+      addPlayer(gameId, 'Carol', '#00FF00'),
+      addPlayer(gameId, 'Dave', '#FFFF00'),
+    ]);
+
+    const hands = await readAllHandCards(gameId);
+    expect(hands).toHaveLength(12);
+    expect(new Set(hands).size).toBe(12);
+    const { draw, discard } = await readDeckColumns(gameId);
+    for (const cardId of hands) {
+      expect(draw).not.toContain(cardId);
+      expect(discard).not.toContain(cardId);
+    }
+  });
+
   it('keeps each game’s persisted deck isolated', async () => {
     const otherGameId = uuidv4();
     await insertGame(otherGameId);
@@ -215,11 +247,11 @@ describe('DemandDeckService persistence', () => {
     const otherBefore = await readDeckColumns(otherGameId);
 
     DemandDeckService.destroyAllInstances();
-    const deck = await DemandDeckService.loadForGame(gameId, db);
-    for (let i = 0; i < 10; i++) {
-      deck.drawCard();
-    }
-    await deck.persist(db);
+    await withDeck(gameId, (deck) => {
+      for (let i = 0; i < 10; i++) {
+        deck.drawCard();
+      }
+    });
 
     expect(await readDeckColumns(otherGameId)).toEqual(otherBefore);
   });

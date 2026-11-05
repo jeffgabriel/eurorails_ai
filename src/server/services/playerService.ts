@@ -356,39 +356,50 @@ export class PlayerService {
   }
 
   static async createPlayer(gameId: string, player: Player, client?: any): Promise<void> {
+    // IMPORTANT: If client is provided, it MUST be used for transaction consistency
+    // Check if client is truthy and has a query method (it's a proper database client)
+    if (client && typeof client.query === 'function') {
+      await PlayerService.insertPlayerWithHand(gameId, player, client);
+      return;
+    }
+    if (client !== undefined) {
+      console.error(`PlayerService.createPlayer: Invalid client provided. Expected a database client with query() method, got:`, typeof client);
+    }
+
+    // No transaction client: open one so the deck load (which locks the game
+    // row), the player insert and the deck persist commit or roll back together.
+    // Without it, concurrent joins could load the same deck and deal the same cards.
+    const ownClient = await db.connect();
+    try {
+      await ownClient.query("BEGIN");
+      await PlayerService.insertPlayerWithHand(gameId, player, ownClient);
+      await ownClient.query("COMMIT");
+    } catch (err) {
+      await ownClient.query("ROLLBACK");
+      throw err;
+    } finally {
+      ownClient.release();
+    }
+  }
+
+  /**
+   * Insert a player and deal their initial hand from the game's deck, inside
+   * the caller's transaction.
+   */
+  private static async insertPlayerWithHand(
+    gameId: string,
+    player: Player,
+    useClient: import("pg").PoolClient
+  ): Promise<void> {
     // Validate and normalize color
     const normalizedColor = this.validateColor(player.color);
 
-    // Use provided client if available (for transactions), otherwise get a new connection
-    // IMPORTANT: If client is provided, it MUST be used for transaction consistency
-    // Check if client is truthy and has a query method (it's a proper database client)
-    let useClient: any;
-    if (client && typeof client.query === 'function') {
-      // Transaction client provided - use it
-      useClient = client;
-    } else {
-      // No transaction client - use pool (but warn if client was expected)
-      if (client !== undefined) {
-        console.error(`PlayerService.createPlayer: Invalid client provided. Expected a database client with query() method, got:`, typeof client);
-      } else {
-        // In tests we often create players without explicit transactions; avoid log spam in Jest.
-        if (process.env.NODE_ENV !== 'test') {
-          console.warn(
-            `PlayerService.createPlayer: No transaction client provided. Using pool connection. This may cause foreign key issues if called within a transaction.`
-          );
-        }
-      }
-      useClient = db;
-    }
-
     // First check if another player already has this color
     // Also verify the game exists (sanity check - helps debug transaction issues)
-    if (client && typeof client.query === 'function') {
-      const gameCheckResult = await client.query('SELECT id FROM games WHERE id = $1', [gameId]);
-      if (gameCheckResult.rows.length === 0) {
-        console.error(`PlayerService.createPlayer: Game ${gameId} not found in transaction. This indicates a transaction isolation issue.`);
-        throw new Error(`Game ${gameId} not found - transaction may not be properly isolated`);
-      }
+    const gameCheckResult = await useClient.query('SELECT id FROM games WHERE id = $1', [gameId]);
+    if (gameCheckResult.rows.length === 0) {
+      console.error(`PlayerService.createPlayer: Game ${gameId} not found in transaction. This indicates a transaction isolation issue.`);
+      throw new Error(`Game ${gameId} not found - transaction may not be properly isolated`);
     }
     
     const colorCheckQuery = `

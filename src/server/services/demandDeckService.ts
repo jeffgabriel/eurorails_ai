@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Pool, PoolClient } from 'pg';
+import { PoolClient } from 'pg';
 import { DemandCard, RawDemandCard } from '../../shared/types/DemandCard';
 import { EventCard, RawEventCard } from '../../shared/types/EventCard';
 import { CardDrawResult } from '../../shared/types/CardDrawResult';
@@ -17,9 +17,6 @@ import { CardDrawResult } from '../../shared/types/CardDrawResult';
 function eventDrawKey(eventCardId: number): number {
   return -eventCardId;
 }
-
-/** A pool or a transaction client — anything that can run a query. */
-type DeckQueryExecutor = Pool | PoolClient;
 
 /**
  * Per-game demand/event deck.
@@ -85,9 +82,10 @@ export class DemandDeckService {
 
   /**
    * Load a game's deck from the database, locking the game row (`FOR UPDATE`)
-   * so concurrent deck transactions in the same game are serialized. Call this
-   * inside the transaction that will mutate the deck, then call
-   * {@link DemandDeckService.persist} before COMMIT.
+   * so concurrent deck transactions in the same game are serialized. The
+   * client must be inside an open transaction (BEGIN) that will mutate the
+   * deck and call {@link DemandDeckService.persist} before COMMIT; outside a
+   * transaction the lock is released immediately and nothing is serialized.
    *
    * Always returns a fresh instance built from the persisted state, so an
    * earlier rolled-back transaction can never leak into this one. If the game
@@ -102,11 +100,11 @@ export class DemandDeckService {
    * The loaded instance also becomes the game's registry entry, so
    * {@link DemandDeckService.getInstanceForGame} reflects the latest load.
    */
-  public static async loadForGame(gameId: string, executor: DeckQueryExecutor): Promise<DemandDeckService> {
+  public static async loadForGame(gameId: string, client: PoolClient): Promise<DemandDeckService> {
     if (!gameId || typeof gameId !== 'string') {
       throw new Error('DemandDeckService.loadForGame requires a non-empty gameId');
     }
-    const result = await executor.query(
+    const result = await client.query(
       'SELECT deck_draw_pile, deck_discard_pile FROM games WHERE id = $1 FOR UPDATE',
       [gameId]
     );
@@ -114,7 +112,7 @@ export class DemandDeckService {
       throw new Error(`Game ${gameId} not found`);
     }
 
-    const handsResult = await executor.query(
+    const handsResult = await client.query(
       'SELECT hand FROM players WHERE game_id = $1',
       [gameId]
     );
@@ -136,7 +134,7 @@ export class DemandDeckService {
       // No persisted deck yet: the fresh shuffle from the constructor must
       // exclude every card already held in a hand, then be saved.
       instance.removeHandCardsFromPiles(handCardIds);
-      await instance.persist(executor);
+      await instance.persist(client);
     }
 
     DemandDeckService.instances.set(gameId, instance);
@@ -147,8 +145,8 @@ export class DemandDeckService {
    * Write this game's draw and discard piles to its game row. Dealt cards are
    * not stored — they are derived on load as every card in neither pile.
    */
-  public async persist(executor: DeckQueryExecutor): Promise<void> {
-    await executor.query(
+  public async persist(client: PoolClient): Promise<void> {
+    await client.query(
       'UPDATE games SET deck_draw_pile = $1, deck_discard_pile = $2 WHERE id = $3',
       [this.drawPile, this.discardPile, this.gameId]
     );
@@ -315,8 +313,8 @@ export class DemandDeckService {
 
   /**
    * Ensure a demand card is marked as dealt, removing it from the draw and
-   * discard piles. Used when building a deck for a game that has player hands
-   * but no persisted deck yet.
+   * discard piles. Used by discardCard as a fallback when a card held in a
+   * hand is not tracked as dealt.
    *
    * Only applicable to demand cards (player hands never contain event cards).
    */
@@ -324,19 +322,7 @@ export class DemandDeckService {
     if (!DemandDeckService.demandCardMap.has(cardId)) {
       return false;
     }
-    const drawKey = cardId; // Demand cards: drawKey === cardId (positive)
-    if (this.dealtCards.has(drawKey)) {
-      return true;
-    }
-    const drawIdx = this.drawPile.lastIndexOf(drawKey);
-    if (drawIdx !== -1) {
-      this.drawPile.splice(drawIdx, 1);
-    }
-    const discardIdx = this.discardPile.lastIndexOf(drawKey);
-    if (discardIdx !== -1) {
-      this.discardPile.splice(discardIdx, 1);
-    }
-    this.dealtCards.add(drawKey);
+    this.removeHandCardsFromPiles([cardId]);
     return true;
   }
 
@@ -351,8 +337,8 @@ export class DemandDeckService {
       throw new Error(`Invalid card ID: ${cardId}`);
     }
     if (!this.dealtCards.has(drawKey)) {
-      // Attempt to reconcile after restart: the card may be in a persisted player hand
-      // but not in dealtCards. Ensure it's treated as dealt and removed from draw/discard.
+      // The card is in a player hand but not tracked as dealt (e.g. a hand
+      // written outside the deck). Treat it as dealt and remove it from the piles.
       this.ensureCardIsDealt(cardId);
       if (!this.dealtCards.has(drawKey)) {
         throw new Error(`Card ${cardId} is not currently dealt to any player`);

@@ -5,6 +5,27 @@ import { authenticateToken } from '../middleware/authMiddleware';
 
 const router = express.Router();
 
+/**
+ * Load a game's deck, apply `mutate`, and persist it in one transaction so the
+ * deck row lock taken by loadForGame is held until the change is saved.
+ */
+async function mutateGameDeck<T>(gameId: string, mutate: (deck: DemandDeckService) => T): Promise<T> {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const deck = await DemandDeckService.loadForGame(gameId, client);
+    const result = mutate(deck);
+    await deck.persist(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Definitional endpoints — "what is printed on a card".
 // These are card-level data shared across all games, so they use the static
@@ -129,12 +150,13 @@ router.post('/debug/push-event', async (req, res) => {
       });
     }
 
-    const deck = await DemandDeckService.loadForGame(gameId, db);
-    deck.pushEventCardToTop(eventCardId);
-    await deck.persist(db);
+    const deckState = await mutateGameDeck(gameId, (deck) => {
+      deck.pushEventCardToTop(eventCardId);
+      return deck.getDeckState();
+    });
     return res.status(200).json({
       message: `Event card ${eventCardId} pushed to top of draw pile for game ${gameId}`,
-      deckState: deck.getDeckState()
+      deckState
     });
   } catch (error: any) {
     return res.status(400).json({
@@ -162,9 +184,7 @@ router.post('/debug/reshuffle', async (req, res) => {
       });
     }
 
-    const deck = await DemandDeckService.loadForGame(gameId, db);
-    const result = deck.reshuffle();
-    await deck.persist(db);
+    const result = await mutateGameDeck(gameId, (deck) => deck.reshuffle());
     return res.status(200).json({
       message: `Deck reshuffled for game ${gameId} (dealt cards preserved)`,
       ...result,
