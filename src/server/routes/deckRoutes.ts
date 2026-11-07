@@ -1,8 +1,30 @@
 import express from 'express';
 import { DemandDeckService } from '../services/demandDeckService';
+import { db } from '../db/index';
 import { authenticateToken } from '../middleware/authMiddleware';
 
 const router = express.Router();
+
+/**
+ * Load a game's deck, apply `mutate`, and persist it in one transaction so the
+ * deck row lock taken by loadForGame is held until the change is saved.
+ */
+async function mutateGameDeck<T>(gameId: string, mutate: (deck: DemandDeckService) => T): Promise<T> {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const deck = await DemandDeckService.loadForGame(gameId, client);
+    const result = mutate(deck);
+    await deck.persist(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Definitional endpoints — "what is printed on a card".
@@ -105,7 +127,7 @@ router.post('/reset', (req, res) => {
 });
 
 // Debug endpoint: push an event card to the top of a specific game's draw pile
-router.post('/debug/push-event', (req, res) => {
+router.post('/debug/push-event', async (req, res) => {
   try {
     if (!isTestOrDebugRequest(req)) {
       return res.status(403).json({
@@ -128,11 +150,13 @@ router.post('/debug/push-event', (req, res) => {
       });
     }
 
-    const deck = DemandDeckService.getInstanceForGame(gameId);
-    deck.pushEventCardToTop(eventCardId);
+    const deckState = await mutateGameDeck(gameId, (deck) => {
+      deck.pushEventCardToTop(eventCardId);
+      return deck.getDeckState();
+    });
     return res.status(200).json({
       message: `Event card ${eventCardId} pushed to top of draw pile for game ${gameId}`,
-      deckState: deck.getDeckState()
+      deckState
     });
   } catch (error: any) {
     return res.status(400).json({
@@ -143,7 +167,7 @@ router.post('/debug/push-event', (req, res) => {
 });
 
 // Debug endpoint: reshuffle a specific game's draw+discard piles, preserving dealt cards
-router.post('/debug/reshuffle', (req, res) => {
+router.post('/debug/reshuffle', async (req, res) => {
   try {
     if (!isTestOrDebugRequest(req)) {
       return res.status(403).json({
@@ -160,7 +184,7 @@ router.post('/debug/reshuffle', (req, res) => {
       });
     }
 
-    const result = DemandDeckService.getInstanceForGame(gameId).reshuffle();
+    const result = await mutateGameDeck(gameId, (deck) => deck.reshuffle());
     return res.status(200).json({
       message: `Deck reshuffled for game ${gameId} (dealt cards preserved)`,
       ...result,

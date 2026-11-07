@@ -356,39 +356,50 @@ export class PlayerService {
   }
 
   static async createPlayer(gameId: string, player: Player, client?: any): Promise<void> {
+    // IMPORTANT: If client is provided, it MUST be used for transaction consistency
+    // Check if client is truthy and has a query method (it's a proper database client)
+    if (client && typeof client.query === 'function') {
+      await PlayerService.insertPlayerWithHand(gameId, player, client);
+      return;
+    }
+    if (client !== undefined) {
+      console.error(`PlayerService.createPlayer: Invalid client provided. Expected a database client with query() method, got:`, typeof client);
+    }
+
+    // No transaction client: open one so the deck load (which locks the game
+    // row), the player insert and the deck persist commit or roll back together.
+    // Without it, concurrent joins could load the same deck and deal the same cards.
+    const ownClient = await db.connect();
+    try {
+      await ownClient.query("BEGIN");
+      await PlayerService.insertPlayerWithHand(gameId, player, ownClient);
+      await ownClient.query("COMMIT");
+    } catch (err) {
+      await ownClient.query("ROLLBACK");
+      throw err;
+    } finally {
+      ownClient.release();
+    }
+  }
+
+  /**
+   * Insert a player and deal their initial hand from the game's deck, inside
+   * the caller's transaction.
+   */
+  private static async insertPlayerWithHand(
+    gameId: string,
+    player: Player,
+    useClient: import("pg").PoolClient
+  ): Promise<void> {
     // Validate and normalize color
     const normalizedColor = this.validateColor(player.color);
 
-    // Use provided client if available (for transactions), otherwise get a new connection
-    // IMPORTANT: If client is provided, it MUST be used for transaction consistency
-    // Check if client is truthy and has a query method (it's a proper database client)
-    let useClient: any;
-    if (client && typeof client.query === 'function') {
-      // Transaction client provided - use it
-      useClient = client;
-    } else {
-      // No transaction client - use pool (but warn if client was expected)
-      if (client !== undefined) {
-        console.error(`PlayerService.createPlayer: Invalid client provided. Expected a database client with query() method, got:`, typeof client);
-      } else {
-        // In tests we often create players without explicit transactions; avoid log spam in Jest.
-        if (process.env.NODE_ENV !== 'test') {
-          console.warn(
-            `PlayerService.createPlayer: No transaction client provided. Using pool connection. This may cause foreign key issues if called within a transaction.`
-          );
-        }
-      }
-      useClient = db;
-    }
-
     // First check if another player already has this color
     // Also verify the game exists (sanity check - helps debug transaction issues)
-    if (client && typeof client.query === 'function') {
-      const gameCheckResult = await client.query('SELECT id FROM games WHERE id = $1', [gameId]);
-      if (gameCheckResult.rows.length === 0) {
-        console.error(`PlayerService.createPlayer: Game ${gameId} not found in transaction. This indicates a transaction isolation issue.`);
-        throw new Error(`Game ${gameId} not found - transaction may not be properly isolated`);
-      }
+    const gameCheckResult = await useClient.query('SELECT id FROM games WHERE id = $1', [gameId]);
+    if (gameCheckResult.rows.length === 0) {
+      console.error(`PlayerService.createPlayer: Game ${gameId} not found in transaction. This indicates a transaction isolation issue.`);
+      throw new Error(`Game ${gameId} not found - transaction may not be properly isolated`);
     }
     
     const colorCheckQuery = `
@@ -407,7 +418,7 @@ export class PlayerService {
     // ALWAYS draw 3 initial cards server-side (ignore any client-provided cards)
     // Cards must be drawn server-side to ensure proper deck management and prevent duplicates
     // Event cards drawn during initial deal are discarded and replaced per game rules
-    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
+    const demandDeckService = await DemandDeckService.loadForGame(gameId, useClient);
     const handCardIds: number[] = [];
     while (handCardIds.length < 3) {
       const drawResult = demandDeckService.drawCard();
@@ -452,6 +463,7 @@ export class PlayerService {
     ];
     try {
       await useClient.query(query, values);
+      await demandDeckService.persist(useClient);
     } catch (err: any) {
       if (
         err.code === "23505" &&
@@ -481,7 +493,7 @@ export class PlayerService {
       const exists = await this.playerExists(gameId, player.id);
 
       if (!exists) {
-        await this.createPlayer(gameId, player);
+        await this.createPlayer(gameId, player, client);
         await client.query("COMMIT");
         return;
       }
@@ -634,7 +646,6 @@ export class PlayerService {
    * @returns Array of players, with hands filtered based on requestingUserId
    */
   static async getPlayers(gameId: string, requestingUserId: string): Promise<Player[]> {
-    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     try {
       const query = `
@@ -702,9 +713,6 @@ export class PlayerService {
           handCards = [];
         } else {
           handCards = handArray.map((cardId: number) => {
-            // Reconcile in-memory deck state after server restarts:
-            // ensure cards present in DB hands are considered dealt and removed from draw/discard piles.
-            demandDeckService.ensureCardIsDealt(cardId);
             const card = DemandDeckService.getCard(cardId);
             if (!card) {
               console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
@@ -1143,10 +1151,10 @@ export class PlayerService {
     loadType: string,
     cardId: number
   ): Promise<{ newCard: any }> {
-    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     try {
       await client.query('BEGIN');
+      const demandDeckService = await DemandDeckService.loadForGame(gameId, client);
 
       // Get the player's current state
       const playerQuery = `
@@ -1188,6 +1196,7 @@ export class PlayerService {
       `;
       await client.query(updateQuery, [newHand, gameId, playerId]);
 
+      await demandDeckService.persist(client);
       await client.query('COMMIT');
       await PlayerService.flushEventEmissions();
 
@@ -1221,10 +1230,7 @@ export class PlayerService {
     | { restricted: true; reason: string }
     | { restricted?: false; payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: DemandCard; cardsDrawnDuringAction: number }
   > {
-    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
-    let drewCardId: number | null = null;
-    let discardedCardId: number | null = null;
     const discardedEventCardIds: number[] = [];
     try {
       await client.query("BEGIN");
@@ -1332,6 +1338,7 @@ export class PlayerService {
 
       // Draw a new card. Keep drawing until we get a demand card — event cards are
       // processed and discarded.
+      const demandDeckService = await DemandDeckService.loadForGame(gameId, client);
       let newDrawResult = demandDeckService.drawCard();
       while (newDrawResult !== null && newDrawResult.type === 'event') {
         const eventCardId = newDrawResult.card.id;
@@ -1346,7 +1353,6 @@ export class PlayerService {
         throw new Error("Failed to draw new card");
       }
       const newCard = newDrawResult.card;
-      drewCardId = newCard.id;
 
       const updatedHandIds = handIds.map((id) => (id === cardId ? newCard.id : id));
 
@@ -1366,7 +1372,6 @@ export class PlayerService {
       // Discard the fulfilled demand card into the deck discard pile.
       // This prevents it from re-entering the draw pile until a reshuffle.
       demandDeckService.discardCard(cardId);
-      discardedCardId = cardId;
 
       // Persist server-authored action log for this turn (used for undo).
       const deliverAction: TurnActionDeliver = {
@@ -1388,6 +1393,7 @@ export class PlayerService {
         [playerId, gameId, turnNumber, JSON.stringify([deliverAction])]
       );
 
+      await demandDeckService.persist(client);
       await client.query("COMMIT");
       await PlayerService.flushEventEmissions();
       // cardsDrawnDuringAction = 1 demand card drawn + any event cards processed along the way
@@ -1395,32 +1401,8 @@ export class PlayerService {
       return { payment, repayment, updatedMoney, updatedDebtOwed, updatedLoads, newCard, cardsDrawnDuringAction };
     } catch (error) {
       PlayerService.pendingEmissions.length = 0;
+      // The deck is persisted in this transaction, so ROLLBACK also restores it.
       await client.query("ROLLBACK");
-      // Best-effort compensation for in-memory deck mutations.
-      // If we drew a replacement card, return it to the top of the draw pile.
-      if (typeof drewCardId === "number") {
-        try {
-          demandDeckService.returnDealtCardToTop(drewCardId);
-        } catch {
-          // ignore
-        }
-      }
-      // If we discarded the fulfilled card, try to return it to dealt so it isn't lost.
-      if (typeof discardedCardId === "number") {
-        try {
-          demandDeckService.returnDiscardedCardToDealt(discardedCardId);
-        } catch {
-          // ignore
-        }
-      }
-      // Return any event cards that were discarded during the draw loop back to the draw pile.
-      for (const eventId of discardedEventCardIds) {
-        try {
-          demandDeckService.returnDiscardedEventCardToDrawPile(eventId);
-        } catch {
-          // ignore
-        }
-      }
       throw error;
     } finally {
       client.release();
@@ -1875,7 +1857,6 @@ export class PlayerService {
     | { kind: "deliver"; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; restoredCard: DemandCard; removedCardId: number }
     | { kind: "move"; updatedMoney: number; restoredPosition: { row: number; col: number; x?: number; y?: number }; ownersReversed: Array<{ playerId: string; amount: number }>; feeTotal: number }
   > {
-    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
     try {
       await client.query("BEGIN");
@@ -2074,6 +2055,7 @@ export class PlayerService {
       const updatedLoads = [...loads, loadType];
 
       // Return the dealt card to the deck before committing player state.
+      const demandDeckService = await DemandDeckService.loadForGame(gameId, client);
       const returned = demandDeckService.returnDealtCardToTop(removedCardId);
       if (!returned) {
         throw new Error("Failed to return dealt card to deck");
@@ -2100,6 +2082,7 @@ export class PlayerService {
         [JSON.stringify(remainingActions), playerId, gameId, turnNumber]
       );
 
+      await demandDeckService.persist(client);
       await client.query("COMMIT");
       return { kind: "deliver", updatedMoney, updatedDebtOwed, updatedLoads, restoredCard, removedCardId };
     } catch (error) {
@@ -2111,12 +2094,9 @@ export class PlayerService {
   }
 
   /**
-   * Core card-discard logic: discard old hand, draw 3 new Demand cards, persist to DB.
+   * Core card-discard logic: discard old hand, draw 3 new Demand cards, persist
+   * the hand and the deck in the caller's transaction.
    * Does NOT validate turns or advance the game turn — callers handle that.
-   *
-   * Callers pass in mutable `discardedIds` and `drawnIds` arrays so that
-   * partial progress is visible for rollback compensation even if this
-   * method throws mid-way (e.g. deck exhausted after 2 draws, or DB UPDATE fails).
    *
    * @returns newHandIds (persisted to DB).
    */
@@ -2124,16 +2104,12 @@ export class PlayerService {
     gameId: string,
     playerId: string,
     handIds: number[],
-    client: import("pg").PoolClient,
-    discardedIds: number[],
-    drawnIds: number[],
-    discardedEventIds: number[] = []
+    client: import("pg").PoolClient
   ): Promise<{ newHandIds: number[] }> {
-    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
+    const demandDeckService = await DemandDeckService.loadForGame(gameId, client);
     // Discard old hand (must be currently dealt).
     for (const id of handIds) {
       demandDeckService.discardCard(id);
-      discardedIds.push(id);
     }
 
     // Draw replacement hand (future-proof loop structure).
@@ -2150,11 +2126,9 @@ export class PlayerService {
         const discardEventResult = await EventCardService.processEventCard(gameId, result.card, playerId, client);
         await PlayerService.persistEventEffect(gameId, discardEventResult, client, 'discardHandCore', result.card);
         demandDeckService.discardEventCard(result.card.id);
-        discardedEventIds.push(result.card.id);
         continue;
       }
       newCards.push(result.card);
-      drawnIds.push(result.card.id);
     }
     const newHandIds = newCards.map((c) => c.id);
 
@@ -2164,6 +2138,7 @@ export class PlayerService {
        WHERE game_id = $2 AND id = $3`,
       [newHandIds, gameId, playerId]
     );
+    await demandDeckService.persist(client);
 
     return { newHandIds };
   }
@@ -2177,11 +2152,7 @@ export class PlayerService {
     gameId: string,
     playerId: string
   ): Promise<{ newHandIds: number[] }> {
-    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
-    const discardedIds: number[] = [];
-    const drawnIds: number[] = [];
-    const discardedEventIds: number[] = [];
     try {
       await client.query("BEGIN");
 
@@ -2203,27 +2174,18 @@ export class PlayerService {
         ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
         : [];
 
-      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client, discardedIds, drawnIds, discardedEventIds);
+      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client);
 
       await client.query("COMMIT");
       await PlayerService.flushEventEmissions();
       return { newHandIds: coreResult.newHandIds };
     } catch (err) {
       PlayerService.pendingEmissions.length = 0;
+      // The deck is persisted in this transaction, so ROLLBACK also restores it.
       try {
         await client.query("ROLLBACK");
       } catch {
         /* rollback best-effort */
-      }
-      // Best-effort deck compensation: return drawn cards, restore discarded originals.
-      for (const id of drawnIds) {
-        try { demandDeckService.returnDealtCardToTop(id); } catch { /* best-effort */ }
-      }
-      for (const id of discardedIds) {
-        try { demandDeckService.returnDiscardedCardToDealt(id); } catch { /* best-effort */ }
-      }
-      for (const id of discardedEventIds) {
-        try { demandDeckService.returnDiscardedEventCardToDrawPile(id); } catch { /* best-effort */ }
       }
       throw err;
     } finally {
@@ -2255,11 +2217,7 @@ export class PlayerService {
     gameId: string,
     userId: string
   ): Promise<{ currentPlayerIndex: number; nextPlayerId: string; nextPlayerName: string }> {
-    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
-    const discardedIds: number[] = [];
-    const drawnIds: number[] = [];
-    const discardedEventIds: number[] = [];
     try {
       await client.query("BEGIN");
 
@@ -2345,7 +2303,7 @@ export class PlayerService {
       // - no server-tracked turn_actions this turn
 
       // Core card logic: discard old hand, draw 3 new cards, persist.
-      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client, discardedIds, drawnIds, discardedEventIds);
+      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client);
 
       // Increment per-player turn count at END of the active player's turn.
       await client.query(
@@ -2397,31 +2355,8 @@ export class PlayerService {
 
       return { currentPlayerIndex: nextIndex, nextPlayerId, nextPlayerName: nextPlayerName || "Next player" };
     } catch (error) {
+      // The deck is persisted in this transaction, so ROLLBACK also restores it.
       await client.query("ROLLBACK");
-
-      // Best-effort compensation for in-memory deck mutations.
-      for (const id of drawnIds) {
-        try {
-          demandDeckService.returnDealtCardToTop(id);
-        } catch {
-          // ignore
-        }
-      }
-      for (const id of discardedIds) {
-        try {
-          demandDeckService.returnDiscardedCardToDealt(id);
-        } catch {
-          // ignore
-        }
-      }
-      for (const id of discardedEventIds) {
-        try {
-          demandDeckService.returnDiscardedEventCardToDrawPile(id);
-        } catch {
-          // ignore
-        }
-      }
-
       throw error;
     } finally {
       client.release();
@@ -2447,10 +2382,7 @@ export class PlayerService {
    * Note: Does NOT advance turn or increment current_turn_number.
    */
   static async restartForUser(gameId: string, userId: string): Promise<Player> {
-    const demandDeckService = DemandDeckService.getInstanceForGame(gameId);
     const client = await db.connect();
-    const discardedIds: number[] = [];
-    const drawnIds: number[] = [];
     try {
       await client.query("BEGIN");
 
@@ -2527,9 +2459,9 @@ export class PlayerService {
       }
 
       // Discard old hand (must be currently dealt).
+      const demandDeckService = await DemandDeckService.loadForGame(gameId, client);
       for (const id of handIds) {
         demandDeckService.discardCard(id);
-        discardedIds.push(id);
       }
 
       // Draw replacement hand (event cards discarded and replaced per game rules).
@@ -2545,7 +2477,6 @@ export class PlayerService {
           continue;
         }
         newCards.push(result.card);
-        drawnIds.push(result.card.id);
       }
       const newHandIds = newCards.map((c) => c.id);
 
@@ -2573,6 +2504,7 @@ export class PlayerService {
         [playerId, gameId, turnNumber]
       );
 
+      await demandDeckService.persist(client);
       await client.query("COMMIT");
 
       // Return updated player with proper hand filtering for this user (includes new hand).
@@ -2583,24 +2515,8 @@ export class PlayerService {
       }
       return updatedPlayer;
     } catch (error) {
+      // The deck is persisted in this transaction, so ROLLBACK also restores it.
       await client.query("ROLLBACK");
-
-      // Best-effort compensation for in-memory deck mutations.
-      for (const id of drawnIds) {
-        try {
-          demandDeckService.returnDealtCardToTop(id);
-        } catch {
-          // ignore
-        }
-      }
-      for (const id of discardedIds) {
-        try {
-          demandDeckService.returnDiscardedCardToDealt(id);
-        } catch {
-          // ignore
-        }
-      }
-
       throw error;
     } finally {
       client.release();
