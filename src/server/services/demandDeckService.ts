@@ -313,8 +313,7 @@ export class DemandDeckService {
 
   /**
    * Ensure a demand card is marked as dealt, removing it from the draw and
-   * discard piles. Used by discardCard as a fallback when a card held in a
-   * hand is not tracked as dealt.
+   * discard piles.
    *
    * Only applicable to demand cards (player hands never contain event cards).
    */
@@ -339,10 +338,7 @@ export class DemandDeckService {
     if (!this.dealtCards.has(drawKey)) {
       // The card is in a player hand but not tracked as dealt (e.g. a hand
       // written outside the deck). Treat it as dealt and remove it from the piles.
-      this.ensureCardIsDealt(cardId);
-      if (!this.dealtCards.has(drawKey)) {
-        throw new Error(`Card ${cardId} is not currently dealt to any player`);
-      }
+      this.removeHandCardsFromPiles([cardId]);
     }
     this.dealtCards.delete(drawKey);
     this.discardPile.push(drawKey);

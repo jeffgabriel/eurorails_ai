@@ -493,7 +493,7 @@ export class PlayerService {
       const exists = await this.playerExists(gameId, player.id);
 
       if (!exists) {
-        await this.createPlayer(gameId, player);
+        await this.createPlayer(gameId, player, client);
         await client.query("COMMIT");
         return;
       }
