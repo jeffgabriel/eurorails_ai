@@ -32,6 +32,10 @@ const config: Phaser.Types.Core.GameConfig = {
   height: 1080,
   parent: 'game-container',
   backgroundColor: '#ffffff',
+  // Required for this.add.dom() (e.g. the Settings edit-player name input).
+  dom: {
+    createContainer: true,
+  },
   scale: {
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,

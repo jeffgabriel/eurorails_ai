@@ -4,11 +4,6 @@ import { getSocketIO } from '../services/socketService';
 
 const router = express.Router();
 
-// Debug endpoint to verify route registration
-router.get('/test', (req, res) => {
-    res.json({ message: 'Track routes are working' });
-});
-
 // Save track state
 router.post('/save', async (req, res) => {
     try {
