@@ -349,27 +349,9 @@ export class SetupScene extends Phaser.Scene {
     private async startGame() {
         // Update game status to active
         try {
-            // Get user ID from localStorage (same way as lobby store does)
-            const userJson = localStorage.getItem('eurorails.user');
-            let userId = '';
-            if (userJson) {
-                try {
-                    const user = JSON.parse(userJson);
-                    userId = user.id;
-                } catch (error) {
-                    console.warn('Failed to parse user from localStorage:', error);
-                }
-            }
-            
-            const response = await fetch(`${config.apiBaseUrl}/api/lobby/games/${this.gameState.id}/start`, {
+            // Identity comes from the JWT; the server ignores any user id in the request.
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/lobby/games/${this.gameState.id}/start`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-user-id': userId,
-                },
-                body: JSON.stringify({
-                    creatorUserId: userId
-                })
             });
 
             if (response.ok) {

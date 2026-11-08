@@ -639,28 +639,34 @@ export class LobbyService {
     
     try {
       await client.query('BEGIN');
-      
+
+      // Lock the game row so the status check and the removal can't race a start.
+      const gameResult = await client.query(
+        'SELECT created_by, status FROM games WHERE id = $1 FOR UPDATE',
+        [gameId]
+      );
+
+      if (gameResult.rows.length === 0) {
+        throw new LobbyError('Game not found', 'GAME_NOT_FOUND', 404);
+      }
+
+      // Players may only leave during setup; removing a player from a running
+      // game would corrupt turn order and could abandon the game.
+      if (gameResult.rows[0].status !== 'setup') {
+        throw new GameAlreadyStartedError('Cannot leave a game that has already started');
+      }
+
       // Check if player exists in the game
       const playerResult = await client.query(
         'SELECT id FROM players WHERE game_id = $1 AND user_id = $2',
         [gameId, userId]
       );
-      
+
       if (playerResult.rows.length === 0) {
         throw new LobbyError('Player not found in this game', 'PLAYER_NOT_IN_GAME', 404);
       }
-      
-      // Check if this is the creator (compare user IDs)
-      const isCreator = await client.query(
-        'SELECT created_by FROM games WHERE id = $1',
-        [gameId]
-      );
-      
-      if (isCreator.rows.length === 0) {
-        throw new LobbyError('Game not found', 'GAME_NOT_FOUND', 404);
-      }
-      
-      const createdBy = isCreator.rows[0].created_by;
+
+      const createdBy = gameResult.rows[0].created_by;
       if (createdBy && createdBy === userId) {
         // If this is the creator, we need to transfer ownership or abandon the game
         const remainingPlayers = await client.query(

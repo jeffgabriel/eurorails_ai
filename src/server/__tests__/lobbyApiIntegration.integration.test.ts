@@ -98,12 +98,12 @@ describe('Lobby API HTTP Integration Tests', () => {
     it('should create a new game successfully', async () => {
       const gameData = {
         isPublic: true,
-        maxPlayers: 4,
-        createdByUserId: testUserId
+        maxPlayers: 4
       };
 
       const response = await request(app)
         .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
         .send(gameData)
         .expect(201);
 
@@ -123,12 +123,12 @@ describe('Lobby API HTTP Integration Tests', () => {
     it('should create a private game successfully', async () => {
       const gameData = {
         isPublic: false,
-        maxPlayers: 2,
-        createdByUserId: testUserId
+        maxPlayers: 2
       };
 
       const response = await request(app)
         .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
         .send(gameData)
         .expect(201);
 
@@ -139,24 +139,36 @@ describe('Lobby API HTTP Integration Tests', () => {
       testGameIds.push(response.body.data.id);
     });
 
-    it('should validate required fields', async () => {
+    it('should require authentication', async () => {
       const response = await request(app)
         .post('/api/lobby/games')
-        .send({})
-        .expect(400);
+        .send({ isPublic: true, createdByUserId: testUserId })
+        .expect(401);
 
-      expect(response.body.error).toBe('VALIDATION_ERROR');
+      expect(response.body.error).toBe('UNAUTHORIZED');
+    });
+
+    it('should take the creator from the token and ignore body/header identity', async () => {
+      const response = await request(app)
+        .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
+        .set('x-user-id', testUserId2)
+        .send({ isPublic: true, createdByUserId: testUserId2 })
+        .expect(201);
+
+      testGameIds.push(response.body.data.id);
+      expect(response.body.data.createdBy).toBe(testUserId);
     });
 
     it('should validate maxPlayers range', async () => {
       const gameData = {
         isPublic: true,
-        maxPlayers: 1, // Invalid: minimum is 2
-        createdByUserId: testUserId
+        maxPlayers: 1 // Invalid: minimum is 2
       };
 
       const response = await request(app)
         .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
         .send(gameData)
         .expect(400);
 
@@ -171,12 +183,12 @@ describe('Lobby API HTTP Integration Tests', () => {
       // Create a test game
       const gameData = {
         isPublic: true,
-        maxPlayers: 4,
-        createdByUserId: testUserId
+        maxPlayers: 4
       };
 
       const response = await request(app)
         .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
         .send(gameData)
         .expect(201);
 
@@ -261,12 +273,12 @@ describe('Lobby API HTTP Integration Tests', () => {
       // Create a test game
       const gameData = {
         isPublic: true,
-        maxPlayers: 4,
-        createdByUserId: testUserId
+        maxPlayers: 4
       };
 
       const response = await request(app)
         .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
         .send(gameData)
         .expect(201);
 
@@ -310,12 +322,12 @@ describe('Lobby API HTTP Integration Tests', () => {
       // Create a test game and add players
       const gameData = {
         isPublic: true,
-        maxPlayers: 4,
-        createdByUserId: testUserId
+        maxPlayers: 4
       };
 
       const response = await request(app)
         .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
         .send(gameData)
         .expect(201);
 
@@ -365,12 +377,12 @@ describe('Lobby API HTTP Integration Tests', () => {
       // Create a test game and add players
       const gameData = {
         isPublic: true,
-        maxPlayers: 4,
-        createdByUserId: testUserId
+        maxPlayers: 4
       };
 
       const response = await request(app)
         .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
         .send(gameData)
         .expect(201);
 
@@ -392,13 +404,9 @@ describe('Lobby API HTTP Integration Tests', () => {
     });
 
     it('should start game successfully', async () => {
-      const startData = {
-        creatorUserId: testUserId
-      };
-
       const response = await request(app)
         .post(`/api/lobby/games/${testGame.id}/start`)
-        .send(startData)
+        .set('Authorization', `Bearer ${testUserToken}`)
         .expect(200);
 
       expect(response.body.success).toBe(true);
@@ -416,41 +424,54 @@ describe('Lobby API HTTP Integration Tests', () => {
       // Create a game with only 1 player (creator)
       const gameData = {
         isPublic: true,
-        maxPlayers: 4,
-        createdByUserId: testUserId
+        maxPlayers: 4
       };
 
       const response = await request(app)
         .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
         .send(gameData)
         .expect(201);
 
       const singlePlayerGame = response.body.data;
       testGameIds.push(singlePlayerGame.id);
 
-      const startData = {
-        creatorUserId: testUserId
-      };
-
       const startResponse = await request(app)
         .post(`/api/lobby/games/${singlePlayerGame.id}/start`)
-        .send(startData)
+        .set('Authorization', `Bearer ${testUserToken}`)
         .expect(400);
 
       expect(startResponse.body.error).toBe('INSUFFICIENT_PLAYERS');
     });
 
     it('should handle non-creator trying to start', async () => {
-      const startData = {
-        creatorUserId: testUserId2 // Not the creator
-      };
-
       const response = await request(app)
         .post(`/api/lobby/games/${testGame.id}/start`)
-        .send(startData)
+        .set('Authorization', `Bearer ${testUserToken2}`)
         .expect(403);
 
       expect(response.body.error).toBe('NOT_GAME_CREATOR');
+    });
+
+    it('should ignore a creator id in the body or x-user-id header', async () => {
+      const response = await request(app)
+        .post(`/api/lobby/games/${testGame.id}/start`)
+        .set('Authorization', `Bearer ${testUserToken2}`)
+        .set('x-user-id', testUserId)
+        .send({ creatorUserId: testUserId })
+        .expect(403);
+
+      expect(response.body.error).toBe('NOT_GAME_CREATOR');
+    });
+
+    it('should require authentication', async () => {
+      const response = await request(app)
+        .post(`/api/lobby/games/${testGame.id}/start`)
+        .set('x-user-id', testUserId)
+        .send({ creatorUserId: testUserId })
+        .expect(401);
+
+      expect(response.body.error).toBe('UNAUTHORIZED');
     });
   });
 
@@ -461,12 +482,12 @@ describe('Lobby API HTTP Integration Tests', () => {
       // Create a test game and add players
       const gameData = {
         isPublic: true,
-        maxPlayers: 4,
-        createdByUserId: testUserId
+        maxPlayers: 4
       };
 
       const response = await request(app)
         .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
         .send(gameData)
         .expect(201);
 
@@ -488,13 +509,9 @@ describe('Lobby API HTTP Integration Tests', () => {
     });
 
     it('should leave game successfully', async () => {
-      const leaveData = {
-        userId: testUserId2
-      };
-
       const response = await request(app)
         .post(`/api/lobby/games/${testGame.id}/leave`)
-        .send(leaveData)
+        .set('Authorization', `Bearer ${testUserToken2}`)
         .expect(200);
 
       expect(response.body.success).toBe(true);
@@ -510,29 +527,65 @@ describe('Lobby API HTTP Integration Tests', () => {
 
     it('should handle non-existent game', async () => {
       const fakeId = uuidv4();
-      const leaveData = {
-        userId: testUserId2
-      };
-
       const response = await request(app)
         .post(`/api/lobby/games/${fakeId}/leave`)
-        .send(leaveData)
+        .set('Authorization', `Bearer ${testUserToken2}`)
         .expect(404);
 
-      expect(response.body.error).toBe('PLAYER_NOT_IN_GAME');
+      expect(response.body.error).toBe('GAME_NOT_FOUND');
+    });
+
+    it('should remove only the token user, ignoring a userId in the body', async () => {
+      await request(app)
+        .post(`/api/lobby/games/${testGame.id}/leave`)
+        .set('Authorization', `Bearer ${testUserToken2}`)
+        .set('x-user-id', testUserId)
+        .send({ userId: testUserId })
+        .expect(200);
+
+      const playersResponse = await request(app)
+        .get(`/api/lobby/games/${testGame.id}/players`)
+        .expect(200);
+
+      expect(playersResponse.body.data).toHaveLength(1);
+      expect(playersResponse.body.data[0].userId).toBe(testUserId);
+    });
+
+    it('should require authentication', async () => {
+      const response = await request(app)
+        .post(`/api/lobby/games/${testGame.id}/leave`)
+        .send({ userId: testUserId2 })
+        .expect(401);
+
+      expect(response.body.error).toBe('UNAUTHORIZED');
+    });
+
+    it('should refuse to leave a game that has started', async () => {
+      await request(app)
+        .post(`/api/lobby/games/${testGame.id}/start`)
+        .set('Authorization', `Bearer ${testUserToken}`)
+        .expect(200);
+
+      const response = await request(app)
+        .post(`/api/lobby/games/${testGame.id}/leave`)
+        .set('Authorization', `Bearer ${testUserToken2}`)
+        .expect(400);
+
+      expect(response.body.error).toBe('GAME_ALREADY_STARTED');
+
+      const playersResponse = await request(app)
+        .get(`/api/lobby/games/${testGame.id}/players`)
+        .expect(200);
+      expect(playersResponse.body.data).toHaveLength(2);
     });
   });
 
   describe('POST /api/lobby/players/presence - Update Presence', () => {
-    it('should return 404 when updating presence for non-existent player', async () => {
-      const presenceData = {
-        userId: uuidv4(),
-        isOnline: true
-      };
-
+    it('should return 404 when the token user has no player rows', async () => {
       const response = await request(app)
         .post('/api/lobby/players/presence')
-        .send(presenceData)
+        .set('Authorization', `Bearer ${testUserToken}`)
+        .send({ isOnline: true })
         .expect(404);
 
       expect(response.body.error).toBe('PLAYER_NOT_FOUND');
@@ -541,10 +594,49 @@ describe('Lobby API HTTP Integration Tests', () => {
     it('should validate required fields', async () => {
       const response = await request(app)
         .post('/api/lobby/players/presence')
+        .set('Authorization', `Bearer ${testUserToken}`)
         .send({})
         .expect(400);
 
       expect(response.body.error).toBe('VALIDATION_ERROR');
+    });
+
+    it('should require authentication', async () => {
+      const response = await request(app)
+        .post('/api/lobby/players/presence')
+        .send({ userId: testUserId, isOnline: false })
+        .expect(401);
+
+      expect(response.body.error).toBe('UNAUTHORIZED');
+    });
+
+    it('should update only the token user, ignoring a userId in the body', async () => {
+      const createResponse = await request(app)
+        .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
+        .send({ isPublic: true })
+        .expect(201);
+      const game = createResponse.body.data;
+      testGameIds.push(game.id);
+      await request(app)
+        .post('/api/lobby/games/join')
+        .set('Authorization', `Bearer ${testUserToken2}`)
+        .send({ joinCode: game.joinCode })
+        .expect(200);
+      await runQuery((client) => client.query('UPDATE players SET is_online = true WHERE game_id = $1', [game.id]));
+
+      await request(app)
+        .post('/api/lobby/players/presence')
+        .set('Authorization', `Bearer ${testUserToken2}`)
+        .send({ userId: testUserId, isOnline: false })
+        .expect(200);
+
+      const rows = await runQuery((client) =>
+        client.query('SELECT user_id, is_online FROM players WHERE game_id = $1', [game.id])
+      );
+      const onlineByUser = Object.fromEntries(rows.rows.map((r: any) => [r.user_id, r.is_online]));
+      expect(onlineByUser[testUserId]).toBe(true);
+      expect(onlineByUser[testUserId2]).toBe(false);
     });
   });
 

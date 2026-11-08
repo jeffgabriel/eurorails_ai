@@ -17,10 +17,10 @@ declare global {
 const router = express.Router();
 
 // Request/Response interfaces
+// Acting user identity always comes from the JWT (req.user), never the body or headers.
 interface CreateGameRequest {
   isPublic?: boolean;
   maxPlayers?: number;
-  createdByUserId?: string;
   creatorColor?: string;
 }
 
@@ -30,16 +30,7 @@ interface JoinGameRequest {
   // userId is no longer accepted from request body - must come from JWT token
 }
 
-interface StartGameRequest {
-  creatorUserId: string;
-}
-
-interface LeaveGameRequest {
-  userId: string;
-}
-
 interface UpdatePresenceRequest {
-  userId: string;
   isOnline: boolean;
 }
 
@@ -151,21 +142,11 @@ function validateUUID(uuid: string, fieldName: string, res: Response): boolean {
 }
 
 // POST /api/lobby/games - Create a new game
-router.post('/games', asyncHandler(async (req: Request, res: Response) => {
-  const { isPublic, maxPlayers, createdByUserId, creatorColor }: CreateGameRequest = req.body;
-  const userId = createdByUserId || req.headers['x-user-id'] as string;
+router.post('/games', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { isPublic, maxPlayers, creatorColor }: CreateGameRequest = req.body;
+  const userId = req.user!.id;
   
   logLobbyOperation('Create game request', { isPublic, maxPlayers, userId, creatorColor }, req);
-  
-  // Validate required fields
-  if (!validateRequiredFields({ userId }, res)) {
-    return;
-  }
-  
-  // Validate UUID format
-  if (!validateUUID(userId, 'userId', res)) {
-    return;
-  }
   
   // Validate maxPlayers if provided
   if (maxPlayers !== undefined && (maxPlayers < 2 || maxPlayers > 6)) {
@@ -349,24 +330,18 @@ router.get('/games/:id/available-colors', asyncHandler(async (req: Request, res:
 }));
 
 // POST /api/lobby/games/:id/start - Start a game
-router.post('/games/:id/start', asyncHandler(async (req: Request, res: Response) => {
+router.post('/games/:id/start', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { creatorUserId }: StartGameRequest = req.body;
-  const user = creatorUserId || req.headers['x-user-id'] as string;
+  const userId = req.user!.id;
   
-  logLobbyOperation('Start game request', { gameId: id, creatorUserId: user }, req);
-  
-  // Validate required fields
-  if (!validateRequiredFields({ user }, res)) {
-    return;
-  }
+  logLobbyOperation('Start game request', { gameId: id, creatorUserId: userId }, req);
   
   // Validate UUID format
-  if (!validateUUID(id, 'gameId', res) || !validateUUID(user, 'userId', res)) {
+  if (!validateUUID(id, 'gameId', res)) {
     return;
   }
   
-  await LobbyService.startGame(id, user);
+  await LobbyService.startGame(id, userId);
   
   res.status(200).json({
     success: true,
@@ -375,24 +350,18 @@ router.post('/games/:id/start', asyncHandler(async (req: Request, res: Response)
 }));
 
 // POST /api/lobby/games/:id/leave - Leave a game
-router.post('/games/:id/leave', asyncHandler(async (req: Request, res: Response) => {
+router.post('/games/:id/leave', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { userId }: LeaveGameRequest = req.body;
-  const user = userId || req.headers['x-user-id'] as string;
+  const userId = req.user!.id;
   
-  logLobbyOperation('Leave game request', { gameId: id, userId: user }, req);
-  
-  // Validate required fields
-  if (!validateRequiredFields({ user }, res)) {
-    return;
-  }
+  logLobbyOperation('Leave game request', { gameId: id, userId }, req);
   
   // Validate UUID format
-  if (!validateUUID(id, 'gameId', res) || !validateUUID(user, 'userId', res)) {
+  if (!validateUUID(id, 'gameId', res)) {
     return;
   }
   
-  await LobbyService.leaveGame(id, user);
+  await LobbyService.leaveGame(id, userId);
   
   res.status(200).json({
     success: true,
@@ -401,19 +370,14 @@ router.post('/games/:id/leave', asyncHandler(async (req: Request, res: Response)
 }));
 
 // POST /api/lobby/players/presence - Update player online status
-router.post('/players/presence', asyncHandler(async (req: Request, res: Response) => {
-  const { userId, isOnline }: UpdatePresenceRequest = req.body;
-  const user = userId || req.headers['x-user-id'] as string;
+router.post('/players/presence', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { isOnline }: UpdatePresenceRequest = req.body;
+  const userId = req.user!.id;
   
-  logLobbyOperation('Update player presence request', { userId: user, isOnline }, req);
+  logLobbyOperation('Update player presence request', { userId, isOnline }, req);
   
   // Validate required fields
-  if (!validateRequiredFields({ user, isOnline }, res)) {
-    return;
-  }
-  
-  // Validate UUID format
-  if (!validateUUID(user, 'userId', res)) {
+  if (!validateRequiredFields({ isOnline }, res)) {
     return;
   }
   
@@ -427,7 +391,7 @@ router.post('/players/presence', asyncHandler(async (req: Request, res: Response
     return;
   }
   
-  await LobbyService.updatePlayerPresence(user, isOnline);
+  await LobbyService.updatePlayerPresence(userId, isOnline);
   
   res.status(200).json({
     success: true,
