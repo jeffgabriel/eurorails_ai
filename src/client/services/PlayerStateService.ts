@@ -485,56 +485,6 @@ export class PlayerStateService {
     }
 
     /**
-     * Fulfill a demand card for the local player
-     */
-    public async fulfillDemandCard(
-        city: string,
-        loadType: LoadType,
-        cardId: number,
-        gameId: string
-    ): Promise<boolean> {
-        if (!this.localPlayer || !this.localPlayerId) {
-            console.error('Cannot fulfill demand: no local player');
-            return false;
-        }
-
-        try {
-            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/fulfill-demand`, {
-                method: 'POST',
-                body: JSON.stringify({
-                    gameId: gameId,
-                    playerId: this.localPlayerId,
-                    city: city,
-                    loadType: loadType,
-                    cardId: cardId
-                })
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                console.error('Failed to fulfill demand:', errorData);
-                return false;
-            }
-
-            const result = await response.json();
-
-            if (!result.newCard) {
-                console.error('No new card provided from server');
-                return false;
-            }
-
-            // Remove the fulfilled card from player's hand and add new card
-            this.localPlayer.hand = this.localPlayer.hand.filter(card => card.id !== cardId);
-            this.localPlayer.hand.push(result.newCard);
-
-            return true;
-        } catch (error) {
-            console.error('Error fulfilling demand:', error);
-            return false;
-        }
-    }
-
-    /**
      * Deliver a load:
      * - Server-authoritative: compute payment + validate demand server-side
      * - Updates local state only after success

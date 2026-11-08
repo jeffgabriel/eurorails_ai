@@ -1,5 +1,5 @@
 import 'phaser';
-import { FullGameState, Player, PlayerColor, TrainType } from '../../shared/types/GameTypes';
+import { FullGameState, Player, PlayerColor } from '../../shared/types/GameTypes';
 import { GameScene } from './GameScene';
 import { config } from '../config/apiConfig';
 import { UI_FONT_FAMILY } from '../config/uiFont';
@@ -69,8 +69,7 @@ export class SettingsScene extends Phaser.Scene {
         // If we're editing a player, always re-render the edit dialog so we never strand the user
         // on an empty overlay if something triggers a rerender (e.g., clicks falling through).
         if (this.editingPlayer) {
-            const isNewPlayer = !this.editingPlayer.id;
-            this.showEditPlayer(this.editingPlayer, isNewPlayer);
+            this.showEditPlayer(this.editingPlayer);
             return;
         }
 
@@ -473,33 +472,7 @@ export class SettingsScene extends Phaser.Scene {
         }
     }
 
-    private showAddPlayer() {
-        // Create a temporary player object for the add flow
-        const newPlayer: Player = {
-            id: '', // Will be set by the server
-            name: '',
-            color: PlayerColor.YELLOW, // Default color
-            money: 50,
-            trainType: TrainType.Freight,
-            turnNumber: 1,
-            trainState: {
-                position: {x: 0, y: 0, row: 0, col: 0},
-                movementHistory: [],
-                remainingMovement: 9,
-                loads: [] // Initialize empty loads array
-            },
-            hand: []
-        };
-        
-        // Use the existing edit player UI but with different save behavior
-        this.editingPlayer = newPlayer;
-        this.selectedColor = PlayerColor.YELLOW;
-        
-        // Show the edit dialog
-        this.showEditPlayer(newPlayer, true);
-    }
-
-    private showEditPlayer(player: Player, isNewPlayer: boolean = false) {
+    private showEditPlayer(player: Player) {
         this.editingPlayer = player;
         
         // Create semi-transparent dark overlay for the entire screen
@@ -530,7 +503,7 @@ export class SettingsScene extends Phaser.Scene {
         const title = this.add.text(
             this.scale.width / 2,
             this.scale.height / 2 - 140,
-            isNewPlayer ? 'Add New Player' : 'Edit Player',
+            'Edit Player',
             {
                 color: '#ffffff',
                 fontSize: '32px',
@@ -600,20 +573,14 @@ export class SettingsScene extends Phaser.Scene {
         this.add.text(
             this.scale.width / 2,
             this.scale.height / 2 + 100,
-            isNewPlayer ? 'Add' : 'Save',
+            'Save',
             {
                 color: '#ffffff',
                 fontSize: '20px'
             }
         ).setOrigin(0.5);
 
-        saveButton.on('pointerdown', () => {
-            if (isNewPlayer) {
-                this.addNewPlayer();
-            } else {
-                this.savePlayerChanges();
-            }
-        });
+        saveButton.on('pointerdown', () => this.savePlayerChanges());
 
         // Add cancel button - adjusted position
         const cancelButton = this.add.rectangle(
@@ -751,89 +718,6 @@ export class SettingsScene extends Phaser.Scene {
         } catch (error) {
             console.error('Error deleting player:', error);
             this.showErrorMessage(error instanceof Error ? error.message : 'Failed to delete player. Please try again.');
-        }
-    }
-
-    private async addNewPlayer() {
-        if (!this.editingPlayer || !this.nameInput) return;
-
-        const newName = this.nameInput.value.trim();
-        if (!newName) {
-            this.showErrorMessage('Please enter a valid name');
-            return;
-        }
-
-        // Check for duplicate names
-        const isDuplicateName = this.gameState.players.some(
-            player => player.name.toLowerCase() === newName.toLowerCase()
-        );
-
-        if (isDuplicateName) {
-            this.showErrorMessage('A player with this name already exists');
-            return;
-        }
-
-        try {
-            const playerData = {
-                name: newName,
-                color: this.selectedColor || PlayerColor.YELLOW,
-                money: 50,
-                trainType: TrainType.Freight,
-                trainState: {
-                    position: null,
-                    remainingMovement: 9,
-                    movementHistory: [],
-                    loads: [] // Initialize empty loads array
-                },
-                hand: []
-            };
-
-            // Save to database using the create endpoint
-            const response = await fetch(`${config.apiBaseUrl}/api/players/create`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    gameId: this.gameState.id,
-                    player: playerData
-                })
-            });
-
-            const responseText = await response.text();
-
-            if (!response.ok) {
-                let errorMessage = 'Failed to create player';
-                try {
-                    const errorData = JSON.parse(responseText);
-                    if (errorData.details?.includes('duplicate key')) {
-                        errorMessage = 'A player with this name already exists';
-                    } else {
-                        errorMessage = errorData.error || errorMessage;
-                    }
-                } catch (e) {
-                    // If we can't parse the error, use the raw text
-                    errorMessage = responseText || errorMessage;
-                }
-                throw new Error(errorMessage);
-            }
-
-            let newPlayer;
-            try {
-                newPlayer = JSON.parse(responseText);
-            } catch (e) {
-                console.error('Failed to parse server response:', e);
-                throw new Error('Invalid server response');
-            }
-
-            // Update local state with the server response
-            this.gameState.players.push(newPlayer);
-
-            // Close the dialog and refresh the display
-            this.closeEditDialog();
-        } catch (error) {
-            console.error('Error creating player:', error);
-            this.showErrorMessage(error instanceof Error ? error.message : 'Failed to create player. Please try again.');
         }
     }
 

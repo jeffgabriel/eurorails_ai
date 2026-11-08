@@ -1060,37 +1060,6 @@ export class PlayerService {
     };
   }
 
-  static async getActiveGame(): Promise<{ id: string; status: string; currentPlayerIndex: number; cameraState?: any } | null> {
-    const query = `
-        SELECT id, status, current_player_index, camera_state
-        FROM games 
-        WHERE status = 'active'
-        ORDER BY updated_at DESC
-        LIMIT 1
-    `;
-    const result = await db.query(query);
-    if (result.rows.length === 0) {
-        return null;
-    }
-    // If there are other active games, set them to 'completed' (only one active game at a time)
-    if (result.rows.length > 0) {
-        const keepActiveId = result.rows[0].id;
-        await db.query(
-            `UPDATE games 
-             SET status = 'completed' 
-             WHERE status = 'active' 
-             AND id != $1`,
-            [keepActiveId]
-        );
-    }
-    return {
-        id: result.rows[0].id,
-        status: result.rows[0].status,
-        currentPlayerIndex: result.rows[0].current_player_index,
-        cameraState: result.rows[0].camera_state
-    };
-  }
-
   static async updateGameStatus(
     gameId: string,
     status: GameStatus
@@ -1109,11 +1078,6 @@ export class PlayerService {
       finalStatus = normalizedStatus;
     }
     
-    // If setting a game to active, complete any other active games first
-    if (finalStatus === "active") {
-      await this.endAllActiveGames();
-    }
-
     const query = `
             UPDATE games
             SET status = $1, updated_at = CURRENT_TIMESTAMP
@@ -1129,85 +1093,10 @@ export class PlayerService {
     }
   }
 
-  static async endAllActiveGames(): Promise<void> {
-    const query = `
-            UPDATE games 
-            SET status = 'completed', updated_at = CURRENT_TIMESTAMP
-            WHERE status = 'active'
-        `;
-    await db.query(query);
-  }
-
   static async getGameStatus(gameId: string): Promise<GameStatus> {
     const query = "SELECT status FROM games WHERE id = $1";
     const result = await db.query(query, [gameId]);
     return result.rows[0]?.status || "completed";
-  }
-
-  static async fulfillDemand(
-    gameId: string,
-    playerId: string,
-    city: string,
-    loadType: string,
-    cardId: number
-  ): Promise<{ newCard: any }> {
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-      const demandDeckService = await DemandDeckService.loadForGame(gameId, client);
-
-      // Get the player's current state
-      const playerQuery = `
-        SELECT hand, loads
-        FROM players
-        WHERE game_id = $1 AND id = $2
-      `;
-      const playerResult = await client.query(playerQuery, [gameId, playerId]);
-      if (playerResult.rows.length === 0) {
-        throw new Error('Player not found');
-      }
-
-      const player = playerResult.rows[0];
-      
-      // Draw a new card from the deck.
-      // Keep drawing until we get a demand card — event cards are processed and discarded.
-      let newCard: import('../../shared/types/DemandCard').DemandCard | null = null;
-      let drawResult = demandDeckService.drawCard();
-      while (drawResult !== null && drawResult.type === 'event') {
-        console.info(`[fulfillDemand] Drew event card ${drawResult.card.id} — processing via EventCardService`);
-        const eventResult = await EventCardService.processEventCard(gameId, drawResult.card, playerId, client);
-        await PlayerService.persistEventEffect(gameId, eventResult, client, 'fulfillDemand', drawResult.card);
-        demandDeckService.discardEventCard(drawResult.card.id);
-        drawResult = demandDeckService.drawCard();
-      }
-      if (drawResult === null) {
-        throw new Error('Failed to draw new card');
-      }
-      newCard = drawResult.card;
-
-      // Create the new hand by replacing the fulfilled card with the new card
-      const newHand = player.hand.map(id => id === cardId ? newCard!.id : id);
-
-      // Update player's hand in database
-      const updateQuery = `
-        UPDATE players
-        SET hand = $1
-        WHERE game_id = $2 AND id = $3
-      `;
-      await client.query(updateQuery, [newHand, gameId, playerId]);
-
-      await demandDeckService.persist(client);
-      await client.query('COMMIT');
-      await PlayerService.flushEventEmissions();
-
-      return { newCard };
-    } catch (error) {
-      PlayerService.pendingEmissions.length = 0;
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
   }
 
   /**

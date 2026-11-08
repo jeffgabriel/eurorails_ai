@@ -1,6 +1,5 @@
 /**
  * Unit tests for addActiveEffect wiring in the draw loops of:
- * - PlayerService.fulfillDemand
  * - PlayerService.deliverLoadForUser
  * - PlayerService.discardHandForPlayer (via discardHandCore)
  */
@@ -156,105 +155,6 @@ function nonPersistentResult(cardId: number) {
     floodSegmentsRemoved: [],
   };
 }
-
-// ── fulfillDemand draw loop ───────────────────────────────────────────────────
-
-describe('PlayerService.fulfillDemand — draw loop addActiveEffect', () => {
-  const gameId = 'game-1';
-  const playerId = 'player-1';
-  const cardId = 5;
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockClient.query.mockImplementation((sql: string) => {
-      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return Promise.resolve();
-      if (sql.includes('SELECT hand, loads')) {
-        return Promise.resolve({ rows: [{ hand: [cardId, 2, 3], loads: [] }] });
-      }
-      if (sql.includes('UPDATE players')) return Promise.resolve({ rows: [] });
-      return Promise.resolve({ rows: [] });
-    });
-  });
-
-  it('should call addActiveEffect when processEventCard returns persistentEffectDescriptor', async () => {
-    const descriptor = { cardId: 121, drawingPlayerId: playerId, drawingPlayerIndex: 0, expiresAfterTurnNumber: 2, affectedZone: [] };
-    mockProcessEventCard.mockResolvedValue(persistentResult(121, descriptor));
-    (demandDeckService.drawCard as jest.Mock)
-      .mockReturnValueOnce(eventCardResult(121))
-      .mockReturnValueOnce(demandResult(99));
-
-    await PlayerService.fulfillDemand(gameId, playerId, 'Paris', 'Coal', cardId);
-
-    expect(mockAddActiveEffect).toHaveBeenCalledTimes(1);
-    expect(mockAddActiveEffect).toHaveBeenCalledWith(
-      gameId,
-      descriptor,
-      EventCardType.Strike,
-      [],
-      expect.anything(), // client
-      undefined, // floodedRiver
-    );
-  });
-
-  it('should NOT call addActiveEffect when persistentEffectDescriptor is absent', async () => {
-    mockProcessEventCard.mockResolvedValue(nonPersistentResult(124));
-    (demandDeckService.drawCard as jest.Mock)
-      .mockReturnValueOnce(eventCardResult(124))
-      .mockReturnValueOnce(demandResult(99));
-
-    await PlayerService.fulfillDemand(gameId, playerId, 'Paris', 'Coal', cardId);
-
-    expect(mockAddActiveEffect).not.toHaveBeenCalled();
-  });
-
-  it('should call addActiveEffect for each persistent event card in sequence', async () => {
-    const desc1 = { cardId: 121, drawingPlayerId: playerId, drawingPlayerIndex: 0, expiresAfterTurnNumber: 2, affectedZone: [] };
-    const desc2 = { cardId: 130, drawingPlayerId: playerId, drawingPlayerIndex: 0, expiresAfterTurnNumber: 2, affectedZone: [] };
-    mockProcessEventCard
-      .mockResolvedValueOnce(persistentResult(121, desc1))
-      .mockResolvedValueOnce(persistentResult(130, desc2));
-    (demandDeckService.drawCard as jest.Mock)
-      .mockReturnValueOnce(eventCardResult(121))
-      .mockReturnValueOnce(eventCardResult(130))
-      .mockReturnValueOnce(demandResult(99));
-
-    await PlayerService.fulfillDemand(gameId, playerId, 'Paris', 'Coal', cardId);
-
-    expect(mockAddActiveEffect).toHaveBeenCalledTimes(2);
-  });
-
-  it('should pass floodedRiver to addActiveEffect for Flood events', async () => {
-    const descriptor = { cardId: 133, drawingPlayerId: playerId, drawingPlayerIndex: 0, expiresAfterTurnNumber: 2, affectedZone: [] as string[] };
-    mockProcessEventCard.mockResolvedValue(floodPersistentResult(133, 'Rhine', descriptor));
-    (demandDeckService.drawCard as jest.Mock)
-      .mockReturnValueOnce(floodEventCardResult(133))
-      .mockReturnValueOnce(demandResult(99));
-
-    await PlayerService.fulfillDemand(gameId, playerId, 'Paris', 'Coal', cardId);
-
-    expect(mockAddActiveEffect).toHaveBeenCalledTimes(1);
-    expect(mockAddActiveEffect).toHaveBeenCalledWith(
-      gameId,
-      descriptor,
-      EventCardType.Flood,
-      [],
-      expect.anything(), // client
-      'Rhine',
-    );
-  });
-
-  it('should still draw until demand card after persisting effects', async () => {
-    mockProcessEventCard.mockResolvedValue(persistentResult(121));
-    (demandDeckService.drawCard as jest.Mock)
-      .mockReturnValueOnce(eventCardResult(121))
-      .mockReturnValueOnce(demandResult(99));
-
-    const result = await PlayerService.fulfillDemand(gameId, playerId, 'Paris', 'Coal', cardId);
-
-    expect(result.newCard.id).toBe(99);
-    expect(demandDeckService.drawCard).toHaveBeenCalledTimes(2);
-  });
-});
 
 // ── discardHandForPlayer draw loop ────────────────────────────────────────────
 
