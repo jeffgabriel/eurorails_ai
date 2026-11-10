@@ -105,7 +105,7 @@ describe('Lobby API Integration Tests', () => {
   });
 
   describe('End-to-End Lobby Workflow', () => {
-    it('should complete full lobby workflow: create -> join -> start -> leave', async () => {
+    it('should complete full lobby workflow: create -> join -> start, and refuse leaving once started', async () => {
       // 1. Create a game
       const game = await LobbyService.createGame({
         createdByUserId: testUserId,
@@ -136,13 +136,12 @@ describe('Lobby API Integration Tests', () => {
       const startedGame = await LobbyService.getGame(game.id);
       expect(startedGame!.status).toBe('initialBuild');
 
-      // 6. Leave the game
-      await LobbyService.leaveGame(game.id, testUserId2);
+      // 6. Leaving a started game is refused and the player stays
+      await expect(LobbyService.leaveGame(game.id, testUserId2))
+        .rejects.toThrow('Cannot leave a game that has already started');
 
-      // 7. Verify player was removed
       players = await LobbyService.getGamePlayers(game.id);
-      expect(players).toHaveLength(1);
-      expect(players.find(p => p.userId === testUserId2)).toBeUndefined();
+      expect(players).toHaveLength(2);
     });
 
     it('should handle multiple players joining and leaving', async () => {

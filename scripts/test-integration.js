@@ -18,15 +18,40 @@ if (major < 18) {
 
 const API_BASE_URL = 'http://localhost:3001';
 
+// Lobby write endpoints take identity from the JWT only, so register two
+// throwaway users and send their Bearer tokens.
+async function registerTestUser(label) {
+  const suffix = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+  const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: `it_${label}_${suffix}`,
+      email: `it_${label}_${suffix}@example.com`,
+      password: 'IntegrationTest1',
+      confirmPassword: 'IntegrationTest1'
+    })
+  });
+  const data = await response.json();
+  if (!response.ok || !data.data || !data.data.token) {
+    throw new Error(`Failed to register test user ${label}: ${JSON.stringify(data)}`);
+  }
+  return data.data.token;
+}
+
+function authHeaders(token) {
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`
+  };
+}
+
 async function testHealthEndpoint() {
   console.log('🔍 Testing health endpoint...');
   try {
     const response = await fetch(`${API_BASE_URL}/api/lobby/health`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': '123e4567-e89b-12d3-a456-426614174000'
-      }
+      headers: { 'Content-Type': 'application/json' }
     });
     
     const data = await response.json();
@@ -38,15 +63,12 @@ async function testHealthEndpoint() {
   }
 }
 
-async function testCreateGame() {
+async function testCreateGame(token) {
   console.log('🔍 Testing create game...');
   try {
     const response = await fetch(`${API_BASE_URL}/api/lobby/games`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': '123e4567-e89b-12d3-a456-426614174000'
-      },
+      headers: authHeaders(token),
       body: JSON.stringify({ isPublic: true, maxPlayers: 4 })
     });
     
@@ -59,15 +81,12 @@ async function testCreateGame() {
   }
 }
 
-async function testJoinGame(gameId, joinCode) {
+async function testJoinGame(gameId, joinCode, token) {
   console.log('🔍 Testing join game...');
   try {
     const response = await fetch(`${API_BASE_URL}/api/lobby/games/join`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': '123e4567-e89b-12d3-a456-426614174001'
-      },
+      headers: authHeaders(token),
       body: JSON.stringify({ joinCode })
     });
     
@@ -80,15 +99,12 @@ async function testJoinGame(gameId, joinCode) {
   }
 }
 
-async function testGetGame(gameId) {
+async function testGetGame(gameId, token) {
   console.log('🔍 Testing get game...');
   try {
     const response = await fetch(`${API_BASE_URL}/api/lobby/games/${gameId}`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': '123e4567-e89b-12d3-a456-426614174000'
-      }
+      headers: authHeaders(token)
     });
     
     const data = await response.json();
@@ -100,15 +116,12 @@ async function testGetGame(gameId) {
   }
 }
 
-async function testGetPlayers(gameId) {
+async function testGetPlayers(gameId, token) {
   console.log('🔍 Testing get players...');
   try {
     const response = await fetch(`${API_BASE_URL}/api/lobby/games/${gameId}/players`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': '123e4567-e89b-12d3-a456-426614174000'
-      }
+      headers: authHeaders(token)
     });
     
     const data = await response.json();
@@ -140,8 +153,18 @@ async function runIntegrationTests() {
     return;
   }
   
+  let creatorToken;
+  let joinerToken;
+  try {
+    creatorToken = await registerTestUser('creator');
+    joinerToken = await registerTestUser('joiner');
+  } catch (error) {
+    console.error('❌', error.message);
+    process.exit(1);
+  }
+
   // Test create game
-  results.createGame = await testCreateGame();
+  results.createGame = await testCreateGame(creatorToken);
   console.log('');
   
   if (!results.createGame) {
@@ -153,10 +176,7 @@ async function runIntegrationTests() {
   console.log('🔍 Creating game for join test...');
   const createResponse = await fetch(`${API_BASE_URL}/api/lobby/games`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-id': '123e4567-e89b-12d3-a456-426614174000'
-    },
+    headers: authHeaders(creatorToken),
     body: JSON.stringify({ isPublic: true, maxPlayers: 4 })
   });
   
@@ -165,13 +185,13 @@ async function runIntegrationTests() {
     const gameId = createData.data.id;
     const joinCode = createData.data.joinCode;
     
-    results.joinGame = await testJoinGame(gameId, joinCode);
+    results.joinGame = await testJoinGame(gameId, joinCode, joinerToken);
     console.log('');
     
-    results.getGame = await testGetGame(gameId);
+    results.getGame = await testGetGame(gameId, creatorToken);
     console.log('');
     
-    results.getPlayers = await testGetPlayers(gameId);
+    results.getPlayers = await testGetPlayers(gameId, creatorToken);
     console.log('');
   }
   
