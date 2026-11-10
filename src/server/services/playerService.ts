@@ -338,10 +338,10 @@ export class PlayerService {
    * Verify that a user is a player in the specified game
    * @param gameId - The game ID
    * @param userId - The user ID
-   * @returns true if the user is a player in the game, false otherwise
+   * @returns true if the user is a non-deleted player in the game, false otherwise
    */
   static async isUserPlayerInGame(gameId: string, userId: string): Promise<boolean> {
-    const query = "SELECT id FROM players WHERE game_id = $1 AND user_id = $2";
+    const query = "SELECT id FROM players WHERE game_id = $1 AND user_id = $2 AND is_deleted = false LIMIT 1";
     const result = await db.query(query, [gameId, userId]);
     return result.rows.length > 0;
   }

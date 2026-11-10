@@ -2,6 +2,7 @@ import express from 'express';
 import { GameService } from '../services/gameService';
 import { VictoryService, MajorCityCoordinate } from '../services/victoryService';
 import { authenticateToken } from '../middleware/authMiddleware';
+import { requireGameMembership } from '../middleware/gameMembership';
 import { db } from '../db';
 import { emitVictoryTriggered, emitGameOver, emitTieExtended, emitStatePatch } from '../services/socketService';
 import { ActiveEffectManager } from '../services/ActiveEffectManager';
@@ -254,7 +255,7 @@ router.post('/:gameId/resolve-victory', authenticateToken, async (req, res) => {
 });
 
 // Get victory state for a game
-router.get('/:gameId/victory-state', authenticateToken, async (req, res) => {
+router.get('/:gameId/victory-state', authenticateToken, requireGameMembership('gameId'), async (req, res) => {
     try {
         const { gameId } = req.params;
         const userId = req.user?.id;

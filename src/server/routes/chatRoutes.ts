@@ -366,10 +366,14 @@ router.post('/mark-read', authenticateToken, requireAuth, asyncHandler(async (re
   const numericIds = uniqueMessageIds.map(id => typeof id === 'string' ? parseInt(id, 10) : id);
 
   try {
-    // Verify user is recipient of all messages
+    // Verify user is recipient of all messages, and only in games where the
+    // user is still a (non-deleted) player
     const verifyResult = await db.query(
-      `SELECT id FROM chat_messages 
+      `SELECT id FROM chat_messages
        WHERE id = ANY($1::bigint[])
+       AND game_id IN (
+         SELECT game_id FROM players WHERE user_id = $2 AND is_deleted = false
+       )
        AND (
          recipient_type = 'game'
          OR (recipient_type = 'player' AND recipient_id = $2)

@@ -1,8 +1,39 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { TrackService } from '../services/trackService';
 import { getSocketIO } from '../services/socketService';
+import { authenticateToken } from '../middleware/authMiddleware';
+import { requireGameMembership } from '../middleware/gameMembership';
+import { db } from '../db';
+import { isUuid } from '../utils/uuid';
 
 const router = express.Router();
+
+const PUBLIC_MAP_STATUSES = ['completed', 'abandoned'];
+const requireMember = requireGameMembership('gameId');
+
+/**
+ * All-tracks reads are limited to the game's players, except for completed or
+ * abandoned games: those back the public read-only map viewer (/map/:id),
+ * matching GET /api/game/:gameId/map-data. The viewer only needs the aggregate
+ * route, so the per-player route has no such exception.
+ */
+async function requireMemberUnlessFinished(req: Request, res: Response, next: NextFunction): Promise<void> {
+    const { gameId } = req.params;
+    try {
+        if (isUuid(gameId)) {
+            const result = await db.query('SELECT status FROM games WHERE id = $1', [gameId]);
+            if (result.rows.length > 0 && PUBLIC_MAP_STATUSES.includes(result.rows[0].status)) {
+                next();
+                return;
+            }
+        }
+    } catch (error) {
+        console.error('Track read access check failed:', error);
+        res.status(500).json({ error: 'Server error', details: 'Failed to verify access' });
+        return;
+    }
+    await authenticateToken(req, res, () => requireMember(req, res, next));
+}
 
 // Save track state
 router.post('/save', async (req, res) => {
@@ -41,7 +72,7 @@ router.post('/save', async (req, res) => {
 });
 
 // Get track state for a player
-router.get('/:gameId/:playerId', async (req, res) => {
+router.get('/:gameId/:playerId', authenticateToken, requireMember, async (req, res) => {
     try {
         const { gameId, playerId } = req.params;
 
@@ -66,7 +97,7 @@ router.get('/:gameId/:playerId', async (req, res) => {
 });
 
 // Get all tracks for a game
-router.get('/:gameId', async (req, res) => {
+router.get('/:gameId', requireMemberUnlessFinished, async (req, res) => {
     try {
         const { gameId } = req.params;
 

@@ -54,11 +54,14 @@ describe('Lobby API HTTP Integration Tests', () => {
   let testUserId2: string;
   let testUserToken: string;
   let testUserToken2: string;
+  let outsiderUserId: string;
+  let outsiderToken: string;
 
   beforeAll(async () => {
     // Generate test user IDs
     testUserId = uuidv4();
     testUserId2 = uuidv4();
+    outsiderUserId = uuidv4();
     
     // Create test users in the database
     await runQuery(async (client) => {
@@ -70,11 +73,16 @@ describe('Lobby API HTTP Integration Tests', () => {
         'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
         [testUserId2, 'testuser2', 'test2@example.com', 'hashedpassword2']
       );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [outsiderUserId, 'testoutsider', 'outsider@example.com', 'hashedpassword3']
+      );
     });
     
     // Generate JWT tokens for test users
     testUserToken = generateTestToken(testUserId, 'testuser1', 'test1@example.com');
     testUserToken2 = generateTestToken(testUserId2, 'testuser2', 'test2@example.com');
+    outsiderToken = generateTestToken(outsiderUserId, 'testoutsider', 'outsider@example.com');
   });
 
   afterEach(async () => {
@@ -90,7 +98,7 @@ describe('Lobby API HTTP Integration Tests', () => {
     
     // Clean up test users
     await runQuery(async (client) => {
-      await client.query('DELETE FROM users WHERE id = $1 OR id = $2', [testUserId, testUserId2]);
+      await client.query('DELETE FROM users WHERE id = ANY($1)', [[testUserId, testUserId2, outsiderUserId]]);
     });
   });
 
@@ -289,29 +297,72 @@ describe('Lobby API HTTP Integration Tests', () => {
     it('should get game information successfully', async () => {
       const response = await request(app)
         .get(`/api/lobby/games/${testGame.id}`)
+        .set('Authorization', `Bearer ${testUserToken}`)
         .expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.data.id).toBe(testGame.id);
       expect(response.body.data.joinCode).toBe(testGame.joinCode);
+      expect(response.body.data.createdBy).toBe(testUserId);
       expect(response.body.data.status).toBe('setup');
     });
 
-    it('should handle non-existent game', async () => {
+    it('should require authentication', async () => {
+      const response = await request(app)
+        .get(`/api/lobby/games/${testGame.id}`)
+        .expect(401);
+
+      expect(response.body.error).toBe('UNAUTHORIZED');
+      expect(response.body.data).toBeUndefined();
+    });
+
+    it('should forbid a non-member and not leak the join code', async () => {
+      const response = await request(app)
+        .get(`/api/lobby/games/${testGame.id}`)
+        .set('Authorization', `Bearer ${testUserToken2}`)
+        .expect(403);
+
+      expect(response.body.error).toBe('FORBIDDEN');
+      expect(JSON.stringify(response.body)).not.toContain(testGame.joinCode);
+    });
+
+    it('should return 403 for a non-existent game without revealing it', async () => {
       const fakeId = uuidv4();
       const response = await request(app)
         .get(`/api/lobby/games/${fakeId}`)
-        .expect(404);
+        .set('Authorization', `Bearer ${testUserToken}`)
+        .expect(403);
 
-      expect(response.body.error).toBe('GAME_NOT_FOUND');
+      expect(response.body.error).toBe('FORBIDDEN');
     });
 
-    it('should validate UUID format', async () => {
+    it('should return 403 for a malformed game id', async () => {
       const response = await request(app)
         .get('/api/lobby/games/invalid-uuid')
-        .expect(400);
+        .set('Authorization', `Bearer ${testUserToken}`)
+        .expect(403);
 
-      expect(response.body.error).toBe('VALIDATION_ERROR');
+      expect(response.body.error).toBe('FORBIDDEN');
+    });
+
+    it('should forbid a player who has been soft-deleted from the game', async () => {
+      await request(app)
+        .post('/api/lobby/games/join')
+        .set('Authorization', `Bearer ${testUserToken2}`)
+        .send({ joinCode: testGame.joinCode })
+        .expect(200);
+      testPlayerIds.push(testUserId2);
+      await runQuery((client) => client.query(
+        'UPDATE players SET is_deleted = true WHERE game_id = $1 AND user_id = $2',
+        [testGame.id, testUserId2]
+      ));
+
+      const response = await request(app)
+        .get(`/api/lobby/games/${testGame.id}`)
+        .set('Authorization', `Bearer ${testUserToken2}`)
+        .expect(403);
+
+      expect(response.body.error).toBe('FORBIDDEN');
     });
   });
 
@@ -351,6 +402,7 @@ describe('Lobby API HTTP Integration Tests', () => {
     it('should get game players successfully', async () => {
       const response = await request(app)
         .get(`/api/lobby/games/${testGame.id}/players`)
+        .set('Authorization', `Bearer ${testUserToken}`)
         .expect(200);
 
       expect(response.body.success).toBe(true);
@@ -359,14 +411,68 @@ describe('Lobby API HTTP Integration Tests', () => {
       expect(response.body.data.find((p: any) => p.userId === testUserId2)).toBeDefined();
     });
 
-    it('should handle non-existent game', async () => {
+    it('should require authentication', async () => {
+      const response = await request(app)
+        .get(`/api/lobby/games/${testGame.id}/players`)
+        .expect(401);
+
+      expect(response.body.error).toBe('UNAUTHORIZED');
+      expect(response.body.data).toBeUndefined();
+    });
+
+    it('should forbid a non-member and not leak user ids', async () => {
+      const response = await request(app)
+        .get(`/api/lobby/games/${testGame.id}/players`)
+        .set('Authorization', `Bearer ${outsiderToken}`)
+        .expect(403);
+
+      expect(response.body.error).toBe('FORBIDDEN');
+      expect(JSON.stringify(response.body)).not.toContain(testUserId);
+    });
+
+    it('should return 403 for a non-existent game', async () => {
       const fakeId = uuidv4();
       const response = await request(app)
         .get(`/api/lobby/games/${fakeId}/players`)
+        .set('Authorization', `Bearer ${testUserToken}`)
+        .expect(403);
+
+      expect(response.body.error).toBe('FORBIDDEN');
+    });
+  });
+
+  describe('GET /api/lobby/games/by-join-code/:joinCode - Look up game to join', () => {
+    it('should let a non-member look up the game with limited fields', async () => {
+      const created = await request(app)
+        .post('/api/lobby/games')
+        .set('Authorization', `Bearer ${testUserToken}`)
+        .send({ isPublic: true, maxPlayers: 4 })
+        .expect(201);
+      const testGame = created.body.data;
+      testGameIds.push(testGame.id);
+
+      const response = await request(app)
+        .get(`/api/lobby/games/by-join-code/${testGame.joinCode}`)
+        .set('Authorization', `Bearer ${outsiderToken}`)
         .expect(200);
 
-      // Non-existent games return empty array of players
-      expect(response.body.data).toEqual([]);
+      expect(response.body.data).toEqual({
+        id: testGame.id,
+        joinCode: testGame.joinCode,
+        status: 'setup',
+        gameStatus: 'setup',
+        maxPlayers: 4,
+        isPublic: true,
+      });
+      expect(JSON.stringify(response.body)).not.toContain(testUserId);
+
+      // Joining by code still works for the non-member
+      await request(app)
+        .post('/api/lobby/games/join')
+        .set('Authorization', `Bearer ${outsiderToken}`)
+        .send({ joinCode: testGame.joinCode })
+        .expect(200);
+      testPlayerIds.push(outsiderUserId);
     });
   });
 
@@ -415,6 +521,7 @@ describe('Lobby API HTTP Integration Tests', () => {
       // Verify game status in database
       const gameResponse = await request(app)
         .get(`/api/lobby/games/${testGame.id}`)
+        .set('Authorization', `Bearer ${testUserToken}`)
         .expect(200);
 
       expect(gameResponse.body.data.status).toBe('initialBuild');
@@ -519,6 +626,7 @@ describe('Lobby API HTTP Integration Tests', () => {
       // Verify player was removed
       const playersResponse = await request(app)
         .get(`/api/lobby/games/${testGame.id}/players`)
+        .set('Authorization', `Bearer ${testUserToken}`)
         .expect(200);
 
       expect(playersResponse.body.data).toHaveLength(1);
@@ -545,6 +653,7 @@ describe('Lobby API HTTP Integration Tests', () => {
 
       const playersResponse = await request(app)
         .get(`/api/lobby/games/${testGame.id}/players`)
+        .set('Authorization', `Bearer ${testUserToken}`)
         .expect(200);
 
       expect(playersResponse.body.data).toHaveLength(1);
@@ -575,6 +684,7 @@ describe('Lobby API HTTP Integration Tests', () => {
 
       const playersResponse = await request(app)
         .get(`/api/lobby/games/${testGame.id}/players`)
+        .set('Authorization', `Bearer ${testUserToken}`)
         .expect(200);
       expect(playersResponse.body.data).toHaveLength(2);
     });

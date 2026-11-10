@@ -1,6 +1,7 @@
 import express from 'express';
 import { PlayerService } from '../services/playerService';
 import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
+import { requireGameMembership } from '../middleware/gameMembership';
 import { emitStatePatch, getSocketIO } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
@@ -123,7 +124,7 @@ router.post('/delete', async (req, res) => {
 
 // Get players for a game
 // Require authentication to enforce per-player hand visibility
-router.get('/:gameId', authenticateToken, async (req, res) => {
+router.get('/:gameId', authenticateToken, requireGameMembership('gameId'), async (req, res) => {
     try {
         const gameId = req.params.gameId;
         const userId = req.user?.id; // Authentication required, so userId should always be present
