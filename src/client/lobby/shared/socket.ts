@@ -362,13 +362,6 @@ class SocketService {
     this.socket.emit('join', { gameId });
   }
 
-  sendAction(gameId: ID, type: string, payload: unknown, clientSeq: number): void {
-    if (!this.socket) {
-      throw new Error('Socket not connected');
-    }
-    this.socket.emit('action', { gameId, type, payload, clientSeq });
-  }
-
   onInit(callback: (data: { gameState: GameState; serverSeq: number }) => void): void {
     if (!this.socket) return;
     

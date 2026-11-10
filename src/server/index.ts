@@ -20,11 +20,11 @@ import { addRequestId } from './middleware/errorHandler';
 import { initializeSocketIO } from './services/socketService';
 import { initializeCleanupJobs } from './cron/cleanupJobs';
 import { moderationService } from './services/moderationService';
+import { isOriginAllowed } from './utils/corsOrigins';
 
 const app = express();
 // Railway provides PORT env var, fallback to 3000 for consistency with Docker health check
 const port = parseInt(process.env.PORT || '3001', 10);
-const serverPort = parseInt(process.env.SERVER_LOCAL_PORT || '3000', 10);
 
 // Store server instance for health check diagnostics
 let httpServer: http.Server | null = null;
@@ -32,62 +32,14 @@ let httpServer: http.Server | null = null;
 // Cache the base HTML template to avoid reading on every request
 // Removed cachedHtmlTemplate - no longer needed since we serve static files directly
 
-// Configure CORS origins
-function getCorsOrigins(): string | string[] {
-    // If ALLOWED_ORIGINS is set, use it (comma-separated list)
-    if (process.env.ALLOWED_ORIGINS) {
-        const origins = process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean);
-        return origins;
-    }
-    
-    // If CLIENT_URL is set, use it
-    if (process.env.CLIENT_URL) {
-        return process.env.CLIENT_URL;
-    }
-    
-    // In development, default to localhost on the configured server port
-    if (process.env.NODE_ENV === 'development') {
-        const defaultOrigin = `http://localhost:${serverPort}`;
-        return defaultOrigin;
-    }
-    
-    // In production, require explicit configuration - fail fast for security
-    if (process.env.NODE_ENV === 'production') {
-        console.error('========================================');
-        console.error('SECURITY ERROR: CORS not configured for production!');
-        console.error('Production deployments MUST set CLIENT_URL or ALLOWED_ORIGINS');
-        console.error('Falling back to localhost is INSECURE and will block legitimate requests.');
-        console.error('========================================');
-        // Still return localhost as fallback for backwards compatibility,
-        // but log a clear error that this must be fixed
-        return `http://localhost:${serverPort}`;
-    }
-    
-    // For test environment or other cases, default to localhost
-    console.warn('CORS: No CLIENT_URL or ALLOWED_ORIGINS set. Defaulting to localhost');
-    return `http://localhost:${serverPort}`;
-}
-
 // Middleware for parsing JSON and serving static files
-// CORS configuration - use function to evaluate at request time for dynamic origins
+// CORS configuration - evaluated at request time; the allow-list is shared with Socket.IO
 app.use(cors({
     origin: (origin, callback) => {
-        const allowedOrigins = getCorsOrigins();
-        
-        // If no origin (e.g., same-origin request, Postman), allow it
-        if (!origin) {
+        if (isOriginAllowed(origin)) {
             return callback(null, true);
         }
-        
-        // Check if origin is in allowed list
-        if (Array.isArray(allowedOrigins)) {
-            if (allowedOrigins.includes(origin)) {
-                return callback(null, true);
-            }
-        } else if (allowedOrigins === origin || allowedOrigins === '*') {
-            return callback(null, true);
-        }
-        
+
         // Origin not allowed
         console.warn(`CORS blocked origin: ${origin}`);
         callback(new Error('Not allowed by CORS'));
