@@ -5,6 +5,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { requestLogger } from '../middleware/requestLogger';
 import { optionalAuth, authenticateToken, requireAuth } from '../middleware/authMiddleware';
 import { requireGameMembership } from '../middleware/gameMembership';
+import { isUuid } from '../utils/uuid';
 
 // Extend the Request type to include requestId (needed for this file)
 declare global {
@@ -130,8 +131,7 @@ function validateRequiredFields(fields: Record<string, any>, res: Response): boo
 
 // Helper function to validate UUID format
 function validateUUID(uuid: string, fieldName: string, res: Response): boolean {
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (!uuidRegex.test(uuid)) {
+  if (!isUuid(uuid)) {
     res.status(400).json({
       error: 'VALIDATION_ERROR',
       message: `Invalid ${fieldName} format`,

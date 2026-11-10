@@ -126,12 +126,20 @@ describe('Membership checks on read endpoints (#302)', () => {
   });
 
   describe('track reads for finished games (public map viewer)', () => {
-    it.each(['completed', 'abandoned'])('allows anonymous reads of a %s game', async (status: string) => {
+    it.each(['completed', 'abandoned'])('allows anonymous reads of all tracks in a %s game', async (status: string) => {
       const gameId = await createGame(status);
-      const all = await request(app).get(`/api/tracks/${gameId}`);
-      const one = await request(app).get(`/api/tracks/${gameId}/${memberPlayerId}`);
-      expect(all.status).toBe(200);
-      expect(one.status).toBe(200);
+      const res = await request(app).get(`/api/tracks/${gameId}`);
+      expect(res.status).toBe(200);
+    });
+
+    it.each(['completed', 'abandoned'])('still requires membership for one player\'s track in a %s game', async (status: string) => {
+      const gameId = await createGame(status);
+      const anonymous = await request(app).get(`/api/tracks/${gameId}/${memberPlayerId}`);
+      const outsider = await request(app)
+        .get(`/api/tracks/${gameId}/${memberPlayerId}`)
+        .set('Authorization', `Bearer ${outsiderToken}`);
+      expect(anonymous.status).toBe(401);
+      expect(outsider.status).toBe(403);
     });
   });
 

@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { PlayerService } from '../services/playerService';
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../utils/uuid';
 
 /**
  * Builds middleware that allows the request through only when the authenticated
@@ -25,8 +24,7 @@ export function requireGameMembership(paramName: string = 'gameId'): RequestHand
 
     const gameId = req.params[paramName];
     try {
-      const isMember = typeof gameId === 'string'
-        && UUID_PATTERN.test(gameId)
+      const isMember = isUuid(gameId)
         && await PlayerService.isUserPlayerInGame(gameId, userId);
 
       if (!isMember) {

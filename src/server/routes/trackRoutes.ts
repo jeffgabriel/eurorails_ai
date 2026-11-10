@@ -4,22 +4,23 @@ import { getSocketIO } from '../services/socketService';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { requireGameMembership } from '../middleware/gameMembership';
 import { db } from '../db';
+import { isUuid } from '../utils/uuid';
 
 const router = express.Router();
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PUBLIC_MAP_STATUSES = ['completed', 'abandoned'];
 const requireMember = requireGameMembership('gameId');
 
 /**
- * Track reads are limited to the game's players, except for completed or
+ * All-tracks reads are limited to the game's players, except for completed or
  * abandoned games: those back the public read-only map viewer (/map/:id),
- * matching GET /api/game/:gameId/map-data.
+ * matching GET /api/game/:gameId/map-data. The viewer only needs the aggregate
+ * route, so the per-player route has no such exception.
  */
 async function requireMemberUnlessFinished(req: Request, res: Response, next: NextFunction): Promise<void> {
     const { gameId } = req.params;
     try {
-        if (UUID_PATTERN.test(gameId)) {
+        if (isUuid(gameId)) {
             const result = await db.query('SELECT status FROM games WHERE id = $1', [gameId]);
             if (result.rows.length > 0 && PUBLIC_MAP_STATUSES.includes(result.rows[0].status)) {
                 next();
@@ -71,7 +72,7 @@ router.post('/save', async (req, res) => {
 });
 
 // Get track state for a player
-router.get('/:gameId/:playerId', requireMemberUnlessFinished, async (req, res) => {
+router.get('/:gameId/:playerId', authenticateToken, requireMember, async (req, res) => {
     try {
         const { gameId, playerId } = req.params;
 
