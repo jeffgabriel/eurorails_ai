@@ -3,6 +3,8 @@ import { DemandCard as DemandCardType } from '../../shared/types/DemandCard';
 import ContainerLite from 'phaser3-rex-plugins/plugins/containerlite.js';
 
 export class DemandCard extends ContainerLite {
+  /** Max pointer travel (px) between press and release that still counts as a tap. */
+  static readonly TAP_MAX_DISTANCE_PX = 10;
   private readonly CARD_WIDTH = 170;
   private readonly CARD_HEIGHT = 255;
   private readonly DEMAND_SPACING = 70; // Space between demand sections
@@ -67,6 +69,12 @@ export class DemandCard extends ContainerLite {
           .setInteractive({ useHandCursor: true });
         hitArea.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
           if (pointer.event) pointer.event.stopPropagation();
+        });
+        // Toggle on release, and only for a tap: the release at the end of a
+        // swipe (scrolling the hand panel on narrow screens) must not toggle.
+        hitArea.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+          if (pointer.event) pointer.event.stopPropagation();
+          if (pointer.getDistance() > DemandCard.TAP_MAX_DISTANCE_PX) return;
           this.toggleMarkedDemandIndex(index);
         });
         this.add(hitArea);
