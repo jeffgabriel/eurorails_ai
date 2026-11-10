@@ -1,9 +1,12 @@
+/** The webpack dev server's origin (webpack.config.js devServer.port). */
+const DEV_CLIENT_ORIGIN = 'http://localhost:3000';
+
 /**
  * Single CORS allow-list shared by the HTTP API (index.ts) and Socket.IO.
  *
  * Resolution order: ALLOWED_ORIGINS (comma-separated) → CLIENT_URL →
- * http://localhost:<SERVER_LOCAL_PORT|3000>. Evaluated on every call so tests
- * and runtime config changes take effect without a restart.
+ * DEV_CLIENT_ORIGIN. Evaluated on every call so tests and runtime config
+ * changes take effect without a restart.
  */
 export function getAllowedOrigins(): string[] {
   if (process.env.ALLOWED_ORIGINS) {
@@ -14,9 +17,6 @@ export function getAllowedOrigins(): string[] {
     return [process.env.CLIENT_URL];
   }
 
-  const serverPort = parseInt(process.env.SERVER_LOCAL_PORT || '3000', 10);
-  const fallback = `http://localhost:${serverPort}`;
-
   if (process.env.NODE_ENV === 'production') {
     console.error('========================================');
     console.error('SECURITY ERROR: CORS not configured for production!');
@@ -26,7 +26,7 @@ export function getAllowedOrigins(): string[] {
   } else if (process.env.NODE_ENV !== 'development') {
     console.warn('CORS: No CLIENT_URL or ALLOWED_ORIGINS set. Defaulting to localhost');
   }
-  return [fallback];
+  return [DEV_CLIENT_ORIGIN];
 }
 
 /**

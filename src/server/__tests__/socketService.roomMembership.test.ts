@@ -63,8 +63,13 @@ describe('socketService room membership (#298)', () => {
   });
 
   afterAll((done) => {
-    getSocketIO()?.close();
-    httpServer.close(() => done());
+    // io.close() also closes the attached HTTP server; closing it again errors.
+    const io = getSocketIO();
+    if (io) {
+      io.close(() => done());
+    } else {
+      httpServer.close(() => done());
+    }
   });
 
   beforeEach(() => {
