@@ -4,6 +4,7 @@ import { BotSkillLevel, BotConfig, LLMProvider } from '../../shared/types/GameTy
 import { asyncHandler } from '../middleware/errorHandler';
 import { requestLogger } from '../middleware/requestLogger';
 import { optionalAuth, authenticateToken, requireAuth } from '../middleware/authMiddleware';
+import { requireGameMembership } from '../middleware/gameMembership';
 
 // Extend the Request type to include requestId (needed for this file)
 declare global {
@@ -232,7 +233,7 @@ router.post('/games/join', optionalAuth, asyncHandler(async (req: Request, res: 
 }));
 
 // GET /api/lobby/games/:id - Get game information
-router.get('/games/:id', asyncHandler(async (req: Request, res: Response) => {
+router.get('/games/:id', authenticateToken, requireGameMembership('id'), asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   
   logLobbyOperation('Get game request', { gameId: id }, req);
@@ -260,7 +261,7 @@ router.get('/games/:id', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 // GET /api/lobby/games/:id/players - Get all players in a game
-router.get('/games/:id/players', asyncHandler(async (req: Request, res: Response) => {
+router.get('/games/:id/players', authenticateToken, requireGameMembership('id'), asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   
   logLobbyOperation('Get game players request', { gameId: id }, req);
@@ -303,10 +304,19 @@ router.get('/games/by-join-code/:joinCode', asyncHandler(async (req: Request, re
     });
     return;
   }
-  
+
+  // Callers here are usually not members yet, so return only what the join flow
+  // needs. createdBy (a user id) is reserved for members via GET /games/:id.
   res.status(200).json({
     success: true,
-    data: game
+    data: {
+      id: game.id,
+      joinCode: game.joinCode,
+      status: game.status,
+      gameStatus: game.gameStatus,
+      maxPlayers: game.maxPlayers,
+      isPublic: game.isPublic,
+    }
   });
 }));
 

@@ -2,6 +2,7 @@ import 'phaser';
 import { FullGameState, Player, PlayerColor } from '../../shared/types/GameTypes';
 import { GameScene } from './GameScene';
 import { config } from '../config/apiConfig';
+import { authenticatedFetch } from '../services/authenticatedFetch';
 import { UI_FONT_FAMILY } from '../config/uiFont';
 import { CityListDropDown } from '../components/CityListDropDown';
 import { CityListItem } from '../components/CityListDropDown';
@@ -56,7 +57,7 @@ export class SettingsScene extends Phaser.Scene {
         // Fetch join code if we have a game ID
         if (this.gameState.id && !this.joinCode) {
             try {
-                const response = await fetch(`${config.apiBaseUrl}/api/lobby/games/${this.gameState.id}`);
+                const response = await authenticatedFetch(`${config.apiBaseUrl}/api/lobby/games/${this.gameState.id}`);
                 if (response.ok) {
                     const data = await response.json();
                     this.joinCode = data.data?.joinCode;

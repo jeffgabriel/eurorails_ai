@@ -1,12 +1,12 @@
 import { PlayerTrackState } from '../../shared/types/TrackTypes';
 import { config } from '../config/apiConfig';
+import { authenticatedFetch } from './authenticatedFetch';
 
 export class TrackService {
   async saveTrackState(gameId: string, playerId: string, trackState: PlayerTrackState): Promise<boolean> {
     try {
-      const response = await fetch(`${config.apiBaseUrl}/api/tracks/save`, {
+      const response = await authenticatedFetch(`${config.apiBaseUrl}/api/tracks/save`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ gameId, playerId, trackState })
       });
       return response.ok;
@@ -18,7 +18,7 @@ export class TrackService {
 
   async loadTrackState(gameId: string, playerId: string): Promise<PlayerTrackState | null> {
     try {
-      const response = await fetch(`${config.apiBaseUrl}/api/tracks/${gameId}/${playerId}`);
+      const response = await authenticatedFetch(`${config.apiBaseUrl}/api/tracks/${gameId}/${playerId}`);
       if (!response.ok) return null;
       return await response.json();
     } catch (error) {
@@ -29,7 +29,7 @@ export class TrackService {
 
   async loadAllTracks(gameId: string): Promise<PlayerTrackState[]> {
     try {
-      const response = await fetch(`${config.apiBaseUrl}/api/tracks/${gameId}`);
+      const response = await authenticatedFetch(`${config.apiBaseUrl}/api/tracks/${gameId}`);
       if (!response.ok) {
         throw new Error(`Failed to load tracks: HTTP ${response.status}`);
       }
