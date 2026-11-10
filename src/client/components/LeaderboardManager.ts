@@ -5,6 +5,7 @@ import { GameStateService } from "../services/GameStateService";
 import { PlayerStateService } from "../services/PlayerStateService";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { CameraController } from "./CameraController";
+import { diag } from "../utils/deviceDiagnostics";
 
 export class LeaderboardManager {
   private scene: Phaser.Scene;
@@ -398,6 +399,7 @@ export class LeaderboardManager {
       chatButton
         .setInteractive({ useHandCursor: true })
         .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+          diag.log("chat", "chatButtonPointerdown", { x: pointer.x, y: pointer.y, wasTouch: pointer.wasTouch });
           if (pointer.event) {
             pointer.event.stopPropagation();
           }

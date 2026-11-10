@@ -89,6 +89,7 @@ const mockCameras = {
     scrollY: 0,
     zoom: 1,
     ignore: jest.fn(),
+    getWorldPoint: jest.fn((x, y) => ({ x, y })),
   },
   add: jest.fn().mockReturnValue({
     setScroll: jest.fn(),

@@ -14,6 +14,12 @@ import { useGameStore } from "../lobby/store/game.store";
 import { authenticatedFetch } from "../services/authenticatedFetch";
 import { config } from "../config/apiConfig";
 import { ActiveEffectSummary } from "../../shared/types/EventCard";
+import { diag } from "../utils/deviceDiagnostics";
+import {
+  clampPanelScrollLeft,
+  isPanelWiderThanScreen,
+  PANEL_SWIPE_THRESHOLD_PX,
+} from "../utils/panelScroll";
 
 interface PlayerHandSceneData {
   gameState: FullGameState;
@@ -60,6 +66,14 @@ export class PlayerHandScene extends Phaser.Scene {
   private demandMarksStorageKey: string | null = null;
   private citySelectionManager: CitySelectionManager | null = null;
   private background: Phaser.GameObjects.Rectangle | null = null;
+  // Narrow screens (panel wider than the screen): controls are pinned to the right
+  // edge and the rest of the panel scrolls horizontally with a swipe.
+  private rootBackground: any | null = null;
+  private pinnedControlsSizer: any | null = null;
+  private isNarrowLayout: boolean = false;
+  private panelScrollLeft: number = 0;
+  private panelSwipe: { pointerId: number; startX: number; startLeft: number; active: boolean } | null = null;
+  private resizeRelayoutTimer: Phaser.Time.TimerEvent | null = null;
   private rootSizer: any | null = null;
   private cardsSizer: any | null = null;
   private infoSizer: any | null = null;
@@ -113,10 +127,154 @@ export class PlayerHandScene extends Phaser.Scene {
   }
 
   create() {
+    // Each time the panel opens, start scrolled to the beginning (demand cards).
+    this.panelScrollLeft = 0;
+    this.panelSwipe = null;
     // Create the UI (which adds to rootContainer)
     this.createUI();
     // Set camera to not scroll
     this.cameras.main.setScroll(0, 0);
+
+    // Narrow-screen horizontal swipe. Handlers no-op unless the panel is wider than the screen.
+    this.input.on("pointerdown", this.onPanelSwipeStart, this);
+    this.input.on("pointermove", this.onPanelSwipeMove, this);
+    this.input.on("pointerup", this.onPanelSwipeEnd, this);
+
+    // Re-layout on resize/rotation so the panel (and narrow mode) matches the new width.
+    const onResize = (): void => {
+      diag.log("hand", "resizeWhileOpen", { w: this.scale.width, h: this.scale.height });
+      this.resizeRelayoutTimer?.remove(false);
+      this.resizeRelayoutTimer = this.time.delayedCall(150, () => {
+        this.resizeRelayoutTimer = null;
+        if (this.rootSizer) this.createUI({ animate: false });
+      });
+    };
+    this.scale.on("resize", onResize);
+    this.events.once("shutdown", () => {
+      this.scale.off("resize", onResize);
+      this.resizeRelayoutTimer?.remove(false);
+      this.resizeRelayoutTimer = null;
+    });
+  }
+
+  /** Width of the scrollable area (screen minus the pinned controls). */
+  private getPanelVisibleWidth(): number {
+    return Math.max(0, this.scale.width - (this.pinnedControlsSizer?.width ?? 0));
+  }
+
+  private setPanelScrollLeft(left: number): void {
+    if (!this.rootSizer) return;
+    this.panelScrollLeft = clampPanelScrollLeft(left, this.rootSizer.width, this.getPanelVisibleWidth());
+    this.rootSizer.setX(this.panelScrollLeft + this.rootSizer.width / 2);
+  }
+
+  private onPanelSwipeStart(pointer: Phaser.Input.Pointer): void {
+    if (!this.isNarrowLayout || !this.rootSizer || this.panelSwipe) return;
+    const panelTop = this.rootSizer.y - this.rootSizer.height / 2;
+    if (pointer.y < panelTop || pointer.x > this.getPanelVisibleWidth()) return;
+    this.panelSwipe = { pointerId: pointer.id, startX: pointer.x, startLeft: this.panelScrollLeft, active: false };
+  }
+
+  private onPanelSwipeMove(pointer: Phaser.Input.Pointer): void {
+    const swipe = this.panelSwipe;
+    if (!swipe || pointer.id !== swipe.pointerId || !pointer.isDown) return;
+    const dx = pointer.x - swipe.startX;
+    if (!swipe.active) {
+      if (Math.abs(dx) < PANEL_SWIPE_THRESHOLD_PX) return;
+      swipe.active = true;
+    }
+    this.setPanelScrollLeft(swipe.startLeft + dx);
+  }
+
+  private onPanelSwipeEnd(pointer: Phaser.Input.Pointer): void {
+    const swipe = this.panelSwipe;
+    if (!swipe || pointer.id !== swipe.pointerId) return;
+    if (swipe.active) {
+      diag.log("hand", "panelSwipe", { from: swipe.startLeft, to: this.panelScrollLeft, contentW: this.rootSizer?.width });
+    }
+    this.panelSwipe = null;
+  }
+
+  /**
+   * If the laid-out panel is wider than the screen, move the controls (crayon, undo,
+   * hide arrow) into a separate sizer pinned to the right edge, let the rest scroll,
+   * and make both backgrounds interactive so swipes don't fall through to the map.
+   * Leaves the desktop layout untouched when everything fits.
+   */
+  private applyNarrowLayout(controlsRegionSizer: any | null): void {
+    this.isNarrowLayout = false;
+    if (!this.rootSizer || !controlsRegionSizer) return;
+    if (!isPanelWiderThanScreen(this.rootSizer.width, this.scale.width)) return;
+
+    this.isNarrowLayout = true;
+    const rexUI = (this as any).rexUI;
+    const rootHeight =
+      typeof this.rootSizer.height === "number" && this.rootSizer.height > 0
+        ? this.rootSizer.height
+        : this.HAND_HEIGHT_BASE;
+
+    this.rootSizer.remove(controlsRegionSizer);
+
+    const pinnedBackground = rexUI.add.roundRectangle({ color: 0x333333, alpha: 0.95 });
+    pinnedBackground.setInteractive();
+    this.pinnedControlsSizer = rexUI.add
+      .sizer({
+        orientation: "x",
+        height: rootHeight,
+        space: { left: 6, right: 6, top: 6, bottom: 6 },
+      })
+      .setName("pinned-controls-sizer");
+    this.pinnedControlsSizer.addBackground(pinnedBackground);
+    this.pinnedControlsSizer.add(controlsRegionSizer, {
+      proportion: 1,
+      align: "center",
+      padding: { left: 8, right: 4 },
+      expand: true,
+    });
+    this.pinnedControlsSizer.layout();
+
+    // Content now only needs to fill the area left of the pinned controls.
+    this.rootSizer.setMinWidth(this.getPanelVisibleWidth());
+    this.rootSizer.layout();
+    this.rootBackground?.setInteractive();
+
+    // Draw pinned controls above the scrolling content (modals use depth >= 1000).
+    this.pinnedControlsSizer.setDepth(10);
+    controlsRegionSizer.setDepth(11);
+    this.pinnedControlsSizer.setPosition(
+      this.scale.width - this.pinnedControlsSizer.width / 2,
+      this.rootSizer.y
+    );
+    this.setPanelScrollLeft(this.panelScrollLeft);
+  }
+
+  /** Objects that slide in/out together with the panel. */
+  private getPanelTweenTargets(): any[] {
+    return this.pinnedControlsSizer ? [this.rootSizer, this.pinnedControlsSizer] : [this.rootSizer];
+  }
+
+  /** Diagnostics only (H2/H4): panel and control bounds vs. the viewport. */
+  private diagLogLayout(reason: string): void {
+    if (!diag.isEnabled() || !this.rootSizer) return;
+    const w = this.scale.width;
+    const h = this.scale.height;
+    const sizerBounds = diag.boundsOf(this.rootSizer);
+    const crayonBounds = diag.boundsOf(this.crayonButtonImage);
+    const hideBounds = diag.boundsOf(this.children.getByName("hide-button-hit-area"));
+    diag.log("hand", "layout", {
+      reason,
+      isNarrowLayout: this.isNarrowLayout,
+      pinnedW: this.pinnedControlsSizer?.width ?? null,
+      scrollLeft: this.panelScrollLeft,
+      scale: { w, h },
+      sizer: { w: this.rootSizer.width, h: this.rootSizer.height, x: this.rootSizer.x, y: this.rootSizer.y },
+      sizerBounds,
+      crayonBounds,
+      hideBounds,
+      sizerOnScreen: diag.isRectOnScreen(sizerBounds, w, h),
+      crayonOnScreen: diag.isRectOnScreen(crayonBounds, w, h),
+      hideOnScreen: diag.isRectOnScreen(hideBounds, w, h),
+    });
   }
 
   /**
@@ -147,6 +305,11 @@ export class PlayerHandScene extends Phaser.Scene {
   }
 
   private onCrayonPressed(pointer: Phaser.Input.Pointer): void {
+    diag.log("hand", "crayonPointerdown", {
+      wasTouch: pointer.wasTouch,
+      isDrawingMode: this.isDrawingMode,
+      warn: this.shouldWarnBeforeEnteringDrawingMode(),
+    });
     if (pointer.event) {
       pointer.event.stopPropagation();
     }
@@ -1581,21 +1744,21 @@ export class PlayerHandScene extends Phaser.Scene {
       .setName(`root-sizer`);
 
     // Give the background an explicit size so it always fills the bar.
-    this.rootSizer.addBackground(
-      (this as any).rexUI.add.roundRectangle({
-        width: this.scale.width,
-        height: this.HAND_HEIGHT_BASE,
-        color: 0x333333,
-        alpha: 0.8,
-      })
-    );
+    this.rootBackground = (this as any).rexUI.add.roundRectangle({
+      width: this.scale.width,
+      height: this.HAND_HEIGHT_BASE,
+      color: 0x333333,
+      alpha: 0.8,
+    });
+    this.rootSizer.addBackground(this.rootBackground);
     // Root horizontal layout: [cards region] [train] [player info] [controls]
     this.createDemandCardSection();
     this.createTrainSection();
     this.createPlayerInfoSection();
-    this.createControlsSection();
+    const controlsRegionSizer = this.createControlsSection();
 
     this.rootSizer.layout();
+    this.applyNarrowLayout(controlsRegionSizer);
     // RexUI sizers are positioned by their center; anchor bottom flush.
     const rootHeight =
       (typeof this.rootSizer.height === "number" && this.rootSizer.height > 0)
@@ -1606,17 +1769,19 @@ export class PlayerHandScene extends Phaser.Scene {
     if (animate) {
       // Slide in animation - animate container up to visible position
       this.tweens.add({
-        targets: this.rootSizer,
+        targets: this.getPanelTweenTargets(),
         y: finalY,
         duration: 300,
         ease: "Power2",
         onComplete: () => {
           this.refreshTrainCardLoadsAfterLayout();
+          this.diagLogLayout("slideInComplete");
         },
       });
     } else {
-      this.rootSizer.setY(finalY);
+      this.getPanelTweenTargets().forEach((target) => target.setY(finalY));
       this.refreshTrainCardLoadsAfterLayout();
+      this.diagLogLayout("relayout");
     }
   }
 
@@ -1985,9 +2150,10 @@ export class PlayerHandScene extends Phaser.Scene {
     });
   }
 
-  private createControlsSection(): void {
+  /** Builds the controls region, adds it to rootSizer, and returns it (null if not built). */
+  private createControlsSection(): any | null {
     if (this.gameStateService.getCurrentPlayer() === null) {
-      return;
+      return null;
     }
     // Controls region: fill remaining horizontal space in rootSizer so we can
     // keep the crayon stack on the left while pinning the hide arrow to the
@@ -2056,6 +2222,9 @@ export class PlayerHandScene extends Phaser.Scene {
         });
     } else {
       crayonButton.setInteractive({ useHandCursor: false });
+      crayonButton.on("pointerdown", () => {
+        diag.log("hand", "crayonPointerdownIgnored", { isLocalPlayerActive, canEnterDrawingMode });
+      });
     }
 
     // Undo button
@@ -2104,7 +2273,10 @@ export class PlayerHandScene extends Phaser.Scene {
       .rectangle(0, 0, 40, 40, 0x000000, 0)
       .setName(`hide-button-hit-area`);
     hitArea.setInteractive({ useHandCursor: true });
-    hitArea.on("pointerdown", () => this.slideOutAndClose());
+    hitArea.on("pointerdown", () => {
+      diag.log("hand", "hideArrowPointerdown");
+      this.slideOutAndClose();
+    });
 
     hideButtonContainer.addLocal(toggleGraphics);
     hideButtonContainer.addLocal(hitArea);
@@ -2147,6 +2319,7 @@ export class PlayerHandScene extends Phaser.Scene {
       padding: { left: 8, right: 4 },
       expand: true,
     });
+    return controlsRegionSizer;
   }
 
   private slideOutAndClose(): void {
@@ -2154,7 +2327,7 @@ export class PlayerHandScene extends Phaser.Scene {
 
     // Slide down animation
     this.tweens.add({
-      targets: this.rootSizer,
+      targets: this.getPanelTweenTargets(),
       y: this.scale.height,
       duration: 300,
       ease: "Power2",
@@ -2233,6 +2406,20 @@ export class PlayerHandScene extends Phaser.Scene {
     if (this.background) {
       this.background = null; // Will be destroyed when container is destroyed
     }
+
+    // Destroy pinned controls (narrow screens) before the root sizer
+    if (this.pinnedControlsSizer) {
+      try {
+        this.pinnedControlsSizer.clear(true);
+        this.pinnedControlsSizer.destroy();
+      } catch (e) {
+        console.warn("Error destroying pinnedControlsSizer:", e);
+      }
+      this.pinnedControlsSizer = null;
+    }
+    this.isNarrowLayout = false;
+    this.panelSwipe = null;
+    this.rootBackground = null;
 
     // Destroy root container and all its children
     if (this.rootSizer) {

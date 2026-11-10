@@ -29,6 +29,7 @@ import { socketService } from "../lobby/shared/socket";
 import { GameSocketCoordinator } from "../services/GameSocketCoordinator";
 import type { RefreshSpriteUpdate } from "../services/PlayerStateService";
 import { BotTurnPresenter, BotTurnCompletePayload, BotDisplay } from "../components/BotTurnPresenter";
+import { diag } from "../utils/deviceDiagnostics";
 
 export class GameScene extends Phaser.Scene {
   // Main containers
@@ -578,6 +579,7 @@ export class GameScene extends Phaser.Scene {
 
     // Add resize handler to update UI when browser window is resized
     this.scale.on('resize', async () => {
+      diag.log('game', 'scaleResize', { w: this.scale.width, h: this.scale.height });
       // Wait a bit for the resize to complete
       await new Promise(resolve => setTimeout(resolve, 100));
 

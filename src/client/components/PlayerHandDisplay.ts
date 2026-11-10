@@ -10,6 +10,7 @@ import { useGameStore } from "../lobby/store/game.store";
 import { EventCardType, ActiveEffectSummary } from "../../shared/types/EventCard";
 import { authenticatedFetch } from "../services/authenticatedFetch";
 import { config } from "../config/apiConfig";
+import { diag } from "../utils/deviceDiagnostics";
 
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
@@ -141,6 +142,9 @@ export class PlayerHandDisplay {
 
     if (playerHandScene) {
       // If scene is already running, update it instead of launching again
+      diag.log("hand", playerHandScene.scene.isActive() ? "updateSceneData" : "launch", {
+        scale: { w: this.scene.scale.width, h: this.scene.scale.height },
+      });
       if (playerHandScene.scene.isActive()) {
         (playerHandScene as any).updateSceneData(
           this.gameState,
@@ -318,6 +322,7 @@ export class PlayerHandDisplay {
     hitArea.setInteractive({ useHandCursor: true });
 
     hitArea.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+      diag.log("hand", "expandArrowPointerdown", { x: pointer.x, y: pointer.y, wasTouch: pointer.wasTouch });
       if (pointer.event) {
         pointer.event.stopPropagation();
       }
@@ -329,15 +334,32 @@ export class PlayerHandDisplay {
     // Make entire status bar clickable to expand
     statusBarBg.setInteractive({ useHandCursor: true });
     statusBarBg.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+      diag.log("hand", "statusBarPointerdown", { x: pointer.x, y: pointer.y, wasTouch: pointer.wasTouch });
       if (pointer.event) {
         pointer.event.stopPropagation();
       }
       await this.toggleCollapse();
     });
+
+    // Diagnostics (H3/H1): where the collapsed bar and expand arrow sit vs. the viewport
+    if (diag.isEnabled()) {
+      const w = this.scene.scale.width;
+      const h = this.scene.scale.height;
+      const barBounds = diag.boundsOf(statusBarBg);
+      const arrowBounds = diag.boundsOf(hitArea);
+      diag.log("hand", "statusBarCreated", {
+        scale: { w, h },
+        barBounds,
+        arrowBounds,
+        barOnScreen: diag.isRectOnScreen(barBounds, w, h),
+        arrowOnScreen: diag.isRectOnScreen(arrowBounds, w, h),
+      });
+    }
   }
 
   private async toggleCollapse(): Promise<void> {
     this.isCollapsed = !this.isCollapsed;
+    diag.log("hand", "toggleCollapse", { isCollapsed: this.isCollapsed });
 
     // Update display
     if (this.currentContainer) {

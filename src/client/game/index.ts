@@ -7,6 +7,7 @@ import { LoadDialogScene } from '../scenes/LoadDialogScene';
 import { PlayerHandScene } from '../scenes/PlayerHandScene';
 import { ChatScene } from '../scenes/ChatScene';
 import RexUIPlugin from 'phaser3-rex-plugins/templates/ui/ui-plugin.js';
+import { attachPhaserProbe, initDeviceDiagnostics } from '../utils/deviceDiagnostics';
 
 // Get game ID from URL parameters or path
 function getGameIdFromUrl(): string | null {
@@ -36,6 +37,11 @@ const config: Phaser.Types.Core.GameConfig = {
   dom: {
     createContainer: true,
   },
+  // A second touch pointer enables pinch-zoom. Mouse input uses its own separate
+  // pointer, so mouse-only devices keep Phaser's default of one touch pointer.
+  input: {
+    activePointers: typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0 ? 2 : 1,
+  },
   scale: {
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
@@ -54,6 +60,10 @@ const config: Phaser.Types.Core.GameConfig = {
 
 // Initialize the game
 const game = new Phaser.Game(config);
+
+// Opt-in device diagnostics (?diag=1): cross-scene hit-test probe + Phaser fields in snapshots.
+initDeviceDiagnostics();
+attachPhaserProbe(game as any);
 
 // Get game ID and pass it to the setup scene
 const gameId = getGameIdFromUrl();

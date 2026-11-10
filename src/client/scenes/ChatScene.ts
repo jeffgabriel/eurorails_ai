@@ -3,6 +3,7 @@ import { chatStateService, ChatMessage } from '../services/ChatStateService';
 import { ChatMessageBubble } from '../components/ChatMessageBubble';
 import { UI_FONT_FAMILY } from '../config/uiFont';
 import DOMPurify from 'dompurify';
+import { diag } from '../utils/deviceDiagnostics';
 
 /**
  * ChatScene - Right-side sliding sidebar for in-game chat
@@ -122,6 +123,27 @@ export class ChatScene extends Phaser.Scene {
     // Mark scene as ready
     this.isReady = true;
     this._resolveWhenReady();
+    diag.log('chat', 'created', {
+      isMobile: this.isMobile,
+      scale: { w: this.scale.width, h: this.scale.height },
+      containerX: this.container.x,
+      chatInputsInDom: document.querySelectorAll('input[data-chat-input]').length,
+    });
+  }
+
+  /** Diagnostics only (H1/C1): chat geometry and input state. */
+  private diagState(): Record<string, unknown> {
+    return {
+      isOpen: this.isOpen,
+      isMobile: this.isMobile,
+      scale: { w: this.scale.width, h: this.scale.height },
+      containerX: this.container?.x,
+      backgroundW: this.background?.width,
+      backgroundInteractive: !!this.background?.input?.enabled,
+      inputDisplay: this.inputField?.style.display,
+      inputFocused: !!this.inputField && document.activeElement === this.inputField,
+      chatInputsInDom: document.querySelectorAll('input[data-chat-input]').length,
+    };
   }
 
   /**
@@ -251,6 +273,7 @@ export class ChatScene extends Phaser.Scene {
     this.inputField.placeholder = 'Type a message...';
     this.inputField.maxLength = 500;
     this.inputField.className = 'chat-input';
+    this.inputField.setAttribute('data-chat-input', '');
     this.inputField.style.cssText = `
       position: absolute;
       left: ${this.scale.width - width + 15}px;
@@ -280,7 +303,10 @@ export class ChatScene extends Phaser.Scene {
       padding: { x: 15, y: 8 },
     }).setOrigin(0, 0.5)
       .setInteractive({ useHandCursor: true })
-      .on('pointerdown', () => this.sendMessage());
+      .on('pointerdown', () => {
+        diag.log('chat', 'sendPointerdown', this.diagState());
+        this.sendMessage();
+      });
 
     this.container.add(sendBtn);
   }
@@ -358,6 +384,7 @@ export class ChatScene extends Phaser.Scene {
     // Send on Enter key
     this.inputField.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Enter' && !e.shiftKey) {
+        diag.log('chat', 'enterKey');
         e.preventDefault();
         this.sendMessage();
       }
@@ -521,14 +548,17 @@ export class ChatScene extends Phaser.Scene {
    * Handle window resize
    */
   private handleResize(width: number, height: number): void {
+    diag.log('chat', 'handleResize', { ...this.diagState(), newW: width, newH: height });
     this.isMobile = width < 768;
 
     // Rebuild UI for new dimensions
     if (this.isOpen) {
       this.close();
       this.time.delayedCall(this.ANIMATION_DURATION, () => {
+        diag.log('chat', 'restartScheduled', this.diagState());
         this.scene.restart({ gameId: this.gameId, userId: this.userId });
         this.open();
+        diag.log('chat', 'openAfterRestartCalled', this.diagState());
       });
     }
   }
@@ -537,6 +567,7 @@ export class ChatScene extends Phaser.Scene {
    * Open chat in DM mode with a specific player
    */
   public async openDM(recipientUserId: string, recipientName: string): Promise<void> {
+    diag.log('chat', 'openDM', this.diagState());
     try {
       this.dmRecipientId = recipientUserId;
       this.dmRecipientName = recipientName;
@@ -590,6 +621,7 @@ export class ChatScene extends Phaser.Scene {
    * Open the chat sidebar
    */
   public async open(): Promise<void> {
+    diag.log('chat', 'open', this.diagState());
     if (this.isOpen) return;
 
     this.isOpen = true;
@@ -621,6 +653,7 @@ export class ChatScene extends Phaser.Scene {
    * Close the chat sidebar
    */
   public close(): void {
+    diag.log('chat', 'close', this.diagState());
     if (!this.isOpen) return;
 
     this.isOpen = false;
@@ -643,6 +676,7 @@ export class ChatScene extends Phaser.Scene {
    * Toggle chat open/closed
    */
   public toggle(): void {
+    diag.log('chat', 'toggle', this.diagState());
     if (this.isOpen) {
       this.close();
     } else {
