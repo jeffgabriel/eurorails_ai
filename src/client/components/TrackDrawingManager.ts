@@ -585,6 +585,12 @@ export class TrackDrawingManager {
         if (!this.isDrawingMode) {
             return;
         }
+        // Second finger of a pinch-zoom: never treat as a drawing tap.
+        // pointer2 only exists on touch-capable devices.
+        if (this.scene.input.pointer2?.isDown && this.scene.input.pointer1?.isDown) {
+            diag.log('draw', 'click', { ...diagBase, result: 'multiTouch' });
+            return;
+        }
         if (!pointer.leftButtonDown()) {
             diag.log('draw', 'click', { ...diagBase, result: 'notLeftButton' });
             return;

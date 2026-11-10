@@ -18,7 +18,8 @@
         
         #root {
             width: 100vw;
-            height: 100vh;
+            height: 100vh; /* fallback for browsers without dvh */
+            height: 100dvh; /* visible height; 100vh includes mobile browser toolbars */
             overflow: hidden;
         }
     </style>

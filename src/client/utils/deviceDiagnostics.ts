@@ -52,7 +52,7 @@ const MOVE_SUMMARY_MS = 500;
 const RECENT_LIMIT = 200;
 const MAX_STRING = 300;
 const MAX_ARRAY = 20;
-const MAX_DEPTH = 4;
+const MAX_DEPTH = 6;
 
 let enabled = false;
 let initialized = false;

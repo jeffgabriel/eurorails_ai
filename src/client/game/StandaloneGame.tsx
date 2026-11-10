@@ -62,7 +62,8 @@ export function StandaloneGame() {
       ref={containerRef} 
       className="size-full"
       style={{ 
-        minHeight: '100vh',
+        // dvh = visible height; 100vh is taller than the screen on mobile browsers
+        minHeight: '100dvh',
         background: '#0b0e14',
         position: 'relative'
       }}

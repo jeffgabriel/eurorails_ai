@@ -133,6 +133,11 @@ describe('deviceDiagnostics', () => {
       expect(out.fn).toBeUndefined();
     });
 
+    it('sanitize keeps hit-test object fields (data.scenes[].top[].field)', () => {
+      const out = sanitize({ scenes: [{ scene: 'GameScene', top: [{ type: 'Zone', w: 10 }] }] }) as any;
+      expect(out.scenes[0].top[0]).toEqual({ type: 'Zone', w: 10 });
+    });
+
     it('describeTarget never includes input values', () => {
       const input = document.createElement('input');
       input.id = 'msg';

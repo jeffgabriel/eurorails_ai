@@ -18,6 +18,11 @@ export class CameraController {
     private localPlayerId: string | null = null;
     private readonly ZOOM_STEP: number = 0.05;
     private mapContainer: Phaser.GameObjects.Container | null = null;
+    // Pinch-zoom state. Only reachable when a second touch pointer exists
+    // (input.activePointers >= 2, touch-capable devices only), so mouse play is unaffected.
+    private isPinching: boolean = false;
+    private pinchStartDistance: number = 0;
+    private pinchStartZoom: number = 1;
     
     constructor(scene: Phaser.Scene, mapWidth: number, mapHeight: number, gameState: FullGameState) {
         this.scene = scene;
@@ -101,9 +106,85 @@ export class CameraController {
         }
     }
 
+    /** Zoom limits shared by wheel and pinch zoom. */
+    private getZoomLimits(): { minZoom: number; maxZoom: number } {
+        const minZoom = Math.min(
+            (this.camera.width - 100) / this.mapWidth,
+            (this.camera.height - 300) / this.mapHeight
+        ) * 0.8;
+        return { minZoom, maxZoom: 2.0 };
+    }
+
+    /** True when two touch pointers are down. pointer2 only exists on touch-capable devices. */
+    private isTwoTouchActive(): boolean {
+        const p1 = this.scene.input.pointer1;
+        const p2 = this.scene.input.pointer2;
+        return !!(p1 && p2 && p1.isDown && p2.isDown);
+    }
+
+    private getPinchGeometry(): { distance: number; midX: number; midY: number } {
+        const p1 = this.scene.input.pointer1!;
+        const p2 = this.scene.input.pointer2!;
+        return {
+            distance: Math.hypot(p2.x - p1.x, p2.y - p1.y),
+            midX: (p1.x + p2.x) / 2,
+            midY: (p1.y + p2.y) / 2,
+        };
+    }
+
+    private beginPinch(): void {
+        const { distance } = this.getPinchGeometry();
+        this.isPinching = true;
+        this.pinchStartDistance = Math.max(distance, 1);
+        this.pinchStartZoom = this.camera.zoom;
+        // A pinch replaces any in-progress drag
+        this.isMouseDown = false;
+        this.isDragging = false;
+        diag.log('camera', 'pinchStart', { zoom: this.camera.zoom, distance });
+    }
+
+    /**
+     * Zoom by the ratio of finger distances, keeping the world point under the
+     * pinch midpoint fixed on screen.
+     */
+    private updatePinch(): void {
+        const { distance, midX, midY } = this.getPinchGeometry();
+        const { minZoom, maxZoom } = this.getZoomLimits();
+        const oldZoom = this.camera.zoom;
+        const newZoom = Math.min(maxZoom, Math.max(minZoom, this.pinchStartZoom * (distance / this.pinchStartDistance)));
+        if (newZoom === oldZoom) return;
+
+        // Phaser camera: screen = ox + zoom * (world - scroll - ox), with ox = width * originX
+        const ox = this.camera.width * this.camera.originX;
+        const oy = this.camera.height * this.camera.originY;
+        const worldX = (midX - ox) / oldZoom + this.camera.scrollX + ox;
+        const worldY = (midY - oy) / oldZoom + this.camera.scrollY + oy;
+
+        this.camera.zoom = newZoom;
+        const maxScrollY = this.mapHeight - ((this.camera.height - 200) / newZoom);
+        this.camera.scrollX = worldX - ox - (midX - ox) / newZoom;
+        this.camera.scrollY = Math.min(maxScrollY, Math.max(0, worldY - oy - (midY - oy) / newZoom));
+        this.requestRender();
+    }
+
+    private endPinch(): void {
+        this.isPinching = false;
+        // The remaining finger must lift and touch again before panning, so the map doesn't jump.
+        this.isMouseDown = false;
+        this.isDragging = false;
+        diag.log('camera', 'pinchEnd', { zoom: this.camera.zoom });
+        this.requestRender();
+        this.saveCameraState();
+    }
+
     private setupInputHandlers(): void {
         // Handle pointer down event
         this.scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+            if (this.isTwoTouchActive()) {
+                if (!this.isPinching) this.beginPinch();
+                return;
+            }
+
             // Only start dragging if we're clicking on the map, not on UI elements
             // Check if any interactive objects (like UI buttons) are under the pointer
             const objectsUnderPointer = this.scene.input.hitTestPointer(pointer);
@@ -133,6 +214,10 @@ export class CameraController {
 
         // Handle pointer move for camera panning
         this.scene.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+            if (this.isPinching) {
+                if (this.isTwoTouchActive()) this.updatePinch();
+                return;
+            }
             if (!this.isMouseDown) return;
             
             const now = Date.now();
@@ -171,6 +256,10 @@ export class CameraController {
 
         // Handle pointer up event
         this.scene.input.on('pointerup', () => {
+            if (this.isPinching) {
+                if (!this.isTwoTouchActive()) this.endPinch();
+                return;
+            }
             if (this.isDragging) {
                 diag.log('camera', 'dragEnd', {
                     zoom: this.camera.zoom,
@@ -188,6 +277,7 @@ export class CameraController {
         this.scene.game.events.on('blur', () => {
             this.isMouseDown = false;
             this.isDragging = false;
+            this.isPinching = false;
         });
 
         // Add zoom controls with adjusted limits and throttling
@@ -209,11 +299,7 @@ export class CameraController {
             // Throttle zoom updates to every 32ms
             if (now - lastWheelTime >= 32) {
                 const zoom = this.camera.zoom;
-                const minZoom = Math.min(
-                    (this.camera.width - 100) / this.mapWidth,
-                    (this.camera.height - 300) / this.mapHeight
-                ) * 0.8;
-                const maxZoom = 2.0;
+                const { minZoom, maxZoom } = this.getZoomLimits();
                 
                 if (deltaY > 0) {
                     this.camera.zoom = Math.max(minZoom, zoom - this.ZOOM_STEP);
@@ -316,5 +402,6 @@ export class CameraController {
     public resetDragState(): void {
         this.isMouseDown = false;
         this.isDragging = false;
+        this.isPinching = false;
     }
 }

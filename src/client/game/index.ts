@@ -37,6 +37,11 @@ const config: Phaser.Types.Core.GameConfig = {
   dom: {
     createContainer: true,
   },
+  // A second touch pointer enables pinch-zoom. Mouse input uses its own separate
+  // pointer, so mouse-only devices keep Phaser's default of one touch pointer.
+  input: {
+    activePointers: typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0 ? 2 : 1,
+  },
   scale: {
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
