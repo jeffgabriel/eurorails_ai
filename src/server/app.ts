@@ -9,6 +9,7 @@ import playerRoutes from './routes/playerRoutes';
 import trackRoutes from './routes/trackRoutes';
 import deckRoutes from './routes/deckRoutes';
 import chatRoutes from './routes/chatRoutes';
+import clientDiagRoutes from './routes/clientDiagRoutes';
 import logRoutes, { llmRouter } from './routes/logRoutes';
 import { 
   addRequestId, 
@@ -56,6 +57,7 @@ app.use('/api/deck', deckRoutes);
 app.use('/api/loads', loadRoutes);
 app.use('/api/lobby', lobbyRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/diag', clientDiagRoutes);
 app.use('/logs', logRoutes);
 app.use('/log', logRoutes);
 app.use('/llm', llmRouter);

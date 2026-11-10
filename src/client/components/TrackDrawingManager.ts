@@ -6,6 +6,7 @@ import { TrackService } from '../services/TrackService';
 import { getWaterCrossingExtraCost } from '../../shared/config/waterCrossings';
 import { TERRAIN_BUILD_COSTS } from '../../shared/config/terrainCosts';
 import { getMajorCityLookup } from '../../shared/services/majorCityGroups';
+import { diag } from '../utils/deviceDiagnostics';
 
 export class TrackDrawingManager {
     private scene: Phaser.Scene;
@@ -49,6 +50,9 @@ export class TrackDrawingManager {
     
     // Add this property to track pending hover points
     private pendingHoverPoint: GridPoint | null = null;
+    // Device diagnostics (?diag=1): hover activity between clicks (D1)
+    private diagHoverCount: number = 0;
+    private diagLastHoverAt: number = 0;
     
     // Add cost update queue
     private costUpdateQueue: {
@@ -297,6 +301,7 @@ export class TrackDrawingManager {
         }
 
         this.isDrawingMode = !this.isDrawingMode;
+        diag.log('draw', this.isDrawingMode ? 'modeOn' : 'modeOff', { zoom: this.scene.cameras.main.zoom });
         
         if (this.isDrawingMode) {
             this.initializeDrawingMode();
@@ -565,12 +570,29 @@ export class TrackDrawingManager {
     }
 
     private handleDrawingClick(pointer: Phaser.Input.Pointer): void {
-        if (!this.isDrawingMode || !pointer.leftButtonDown()) {
+        const diagBase = diag.isEnabled() ? {
+            x: pointer.x,
+            y: pointer.y,
+            wasTouch: pointer.wasTouch,
+            buttons: pointer.buttons,
+            zoom: this.scene.cameras.main.zoom,
+            hoversSinceLastClick: this.diagHoverCount,
+            msSinceLastHover: this.diagLastHoverAt ? Date.now() - this.diagLastHoverAt : null,
+            hasStart: !!this.lastClickedPoint,
+        } : undefined;
+        this.diagHoverCount = 0;
+
+        if (!this.isDrawingMode) {
+            return;
+        }
+        if (!pointer.leftButtonDown()) {
+            diag.log('draw', 'click', { ...diagBase, result: 'notLeftButton' });
             return;
         }
 
         // Ignore clicks in UI area
         if (pointer.y > this.scene.scale.height - 200) {
+            diag.log('draw', 'click', { ...diagBase, result: 'uiArea', scaleHeight: this.scene.scale.height });
             return;
         }
 
@@ -578,6 +600,16 @@ export class TrackDrawingManager {
         // Find the grid point at this position
         const gridPoint = this.getGridPointAtPosition(clickedPoint.x, clickedPoint.y);
         if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
+            if (diag.isEnabled()) {
+                const nearestWorld = this.diagNearestGridDistance(clickedPoint.x, clickedPoint.y);
+                diag.log('draw', 'click', {
+                    ...diagBase,
+                    result: gridPoint ? 'water' : 'noGridPoint',
+                    nearestWorldPx: nearestWorld,
+                    nearestScreenPx: nearestWorld !== null ? nearestWorld * this.scene.cameras.main.zoom : null,
+                    snapRadiusScreenPx: 15 * this.scene.cameras.main.zoom,
+                });
+            }
             return;
         }
 
@@ -591,11 +623,24 @@ export class TrackDrawingManager {
             const isConnectedPointOfMajorCity = this.isConnectedPointOfMajorCity(gridPoint);
             const isConnectedToNetwork = this.isPointConnectedToNetwork(gridPoint, playerTrackState);
             if (!isMajorCity && !isConnectedPointOfMajorCity && !isConnectedToNetwork) {
+                diag.log('draw', 'click', {
+                    ...diagBase,
+                    result: 'firstClickRejected',
+                    point: { row: gridPoint.row, col: gridPoint.col, terrain: gridPoint.terrain },
+                    isMajorCity,
+                    isConnectedPointOfMajorCity,
+                    isConnectedToNetwork,
+                });
                 return;
             }
             
             this.lastClickedPoint = gridPoint;
             this.updateValidConnectionPoints();
+            diag.log('draw', 'click', {
+                ...diagBase,
+                result: 'firstClickAccepted',
+                point: { row: gridPoint.row, col: gridPoint.col },
+            });
             return;
         }
 
@@ -606,6 +651,7 @@ export class TrackDrawingManager {
             
             // Verify no water points in the path
             if (this.previewPath.some(point => point.terrain === TerrainType.Water)) {
+                diag.log('draw', 'click', { ...diagBase, result: 'previewHasWater' });
                 return;
             }
             
@@ -626,8 +672,15 @@ export class TrackDrawingManager {
             
             // Check if the total cost is valid
             if (!this.isValidCost(totalPathCost)) {
+                diag.log('draw', 'click', { ...diagBase, result: 'invalidCost', totalPathCost });
                 return;
             }
+            diag.log('draw', 'click', {
+                ...diagBase,
+                result: 'committed',
+                pathLength: this.previewPath.length,
+                totalPathCost,
+            });
             
             // Create segments from the path
             for (let i = 0; i < this.previewPath.length - 1; i++) {
@@ -718,10 +771,42 @@ export class TrackDrawingManager {
                 this.lastClickedPoint = gridPoint;
             }
             this.updateValidConnectionPoints();
+        } else if (diagBase) {
+            const last = this.previewPath[this.previewPath.length - 1];
+            diag.log('draw', 'click', {
+                ...diagBase,
+                result: 'previewMismatch',
+                tapped: { row: gridPoint.row, col: gridPoint.col },
+                previewLength: this.previewPath.length,
+                previewEnd: last ? { row: last.row, col: last.col } : null,
+                pendingHover: this.pendingHoverPoint
+                    ? { row: this.pendingHoverPoint.row, col: this.pendingHoverPoint.col }
+                    : null,
+            });
         }
     }
 
+    /** Diagnostics only: distance (world px) to the nearest non-water grid point near (x, y). */
+    private diagNearestGridDistance(worldX: number, worldY: number): number | null {
+        const approxRow = Math.floor((worldY - MapRenderer.GRID_MARGIN) / MapRenderer.VERTICAL_SPACING);
+        const approxCol = Math.floor((worldX - MapRenderer.GRID_MARGIN) / MapRenderer.HORIZONTAL_SPACING);
+        let best: number | null = null;
+        for (let r = Math.max(0, approxRow - 2); r <= Math.min(this.gridPoints.length - 1, approxRow + 2); r++) {
+            const row = this.gridPoints[r];
+            if (!row) continue;
+            for (let c = Math.max(0, approxCol - 2); c <= Math.min(row.length - 1, approxCol + 2); c++) {
+                const point = row[c];
+                if (!point || point.terrain === TerrainType.Water) continue;
+                const d = Math.hypot(point.x - worldX, point.y - worldY);
+                if (best === null || d < best) best = d;
+            }
+        }
+        return best;
+    }
+
     private handleDrawingHover(pointer: Phaser.Input.Pointer): void {
+        this.diagHoverCount++;
+        this.diagLastHoverAt = Date.now();
         if (!this.isDrawingMode || !this.lastClickedPoint) {
             this.previewGraphics.clear();
             this.previewPath = [];

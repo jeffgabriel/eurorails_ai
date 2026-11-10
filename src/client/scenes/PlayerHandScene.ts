@@ -14,6 +14,7 @@ import { useGameStore } from "../lobby/store/game.store";
 import { authenticatedFetch } from "../services/authenticatedFetch";
 import { config } from "../config/apiConfig";
 import { ActiveEffectSummary } from "../../shared/types/EventCard";
+import { diag } from "../utils/deviceDiagnostics";
 
 interface PlayerHandSceneData {
   gameState: FullGameState;
@@ -117,6 +118,37 @@ export class PlayerHandScene extends Phaser.Scene {
     this.createUI();
     // Set camera to not scroll
     this.cameras.main.setScroll(0, 0);
+
+    // Diagnostics (H4): does the open panel re-layout on resize/rotation?
+    if (diag.isEnabled()) {
+      const onResize = (): void => {
+        diag.log("hand", "resizeWhileOpen", { w: this.scale.width, h: this.scale.height });
+        this.time.delayedCall(400, () => this.diagLogLayout("afterResize"));
+      };
+      this.scale.on("resize", onResize);
+      this.events.once("shutdown", () => this.scale.off("resize", onResize));
+    }
+  }
+
+  /** Diagnostics only (H2/H4): panel and control bounds vs. the viewport. */
+  private diagLogLayout(reason: string): void {
+    if (!diag.isEnabled() || !this.rootSizer) return;
+    const w = this.scale.width;
+    const h = this.scale.height;
+    const sizerBounds = diag.boundsOf(this.rootSizer);
+    const crayonBounds = diag.boundsOf(this.crayonButtonImage);
+    const hideBounds = diag.boundsOf(this.children.getByName("hide-button-hit-area"));
+    diag.log("hand", "layout", {
+      reason,
+      scale: { w, h },
+      sizer: { w: this.rootSizer.width, h: this.rootSizer.height, x: this.rootSizer.x, y: this.rootSizer.y },
+      sizerBounds,
+      crayonBounds,
+      hideBounds,
+      sizerOnScreen: diag.isRectOnScreen(sizerBounds, w, h),
+      crayonOnScreen: diag.isRectOnScreen(crayonBounds, w, h),
+      hideOnScreen: diag.isRectOnScreen(hideBounds, w, h),
+    });
   }
 
   /**
@@ -147,6 +179,11 @@ export class PlayerHandScene extends Phaser.Scene {
   }
 
   private onCrayonPressed(pointer: Phaser.Input.Pointer): void {
+    diag.log("hand", "crayonPointerdown", {
+      wasTouch: pointer.wasTouch,
+      isDrawingMode: this.isDrawingMode,
+      warn: this.shouldWarnBeforeEnteringDrawingMode(),
+    });
     if (pointer.event) {
       pointer.event.stopPropagation();
     }
@@ -1612,11 +1649,13 @@ export class PlayerHandScene extends Phaser.Scene {
         ease: "Power2",
         onComplete: () => {
           this.refreshTrainCardLoadsAfterLayout();
+          this.diagLogLayout("slideInComplete");
         },
       });
     } else {
       this.rootSizer.setY(finalY);
       this.refreshTrainCardLoadsAfterLayout();
+      this.diagLogLayout("relayout");
     }
   }
 
@@ -2056,6 +2095,9 @@ export class PlayerHandScene extends Phaser.Scene {
         });
     } else {
       crayonButton.setInteractive({ useHandCursor: false });
+      crayonButton.on("pointerdown", () => {
+        diag.log("hand", "crayonPointerdownIgnored", { isLocalPlayerActive, canEnterDrawingMode });
+      });
     }
 
     // Undo button
@@ -2104,7 +2146,10 @@ export class PlayerHandScene extends Phaser.Scene {
       .rectangle(0, 0, 40, 40, 0x000000, 0)
       .setName(`hide-button-hit-area`);
     hitArea.setInteractive({ useHandCursor: true });
-    hitArea.on("pointerdown", () => this.slideOutAndClose());
+    hitArea.on("pointerdown", () => {
+      diag.log("hand", "hideArrowPointerdown");
+      this.slideOutAndClose();
+    });
 
     hideButtonContainer.addLocal(toggleGraphics);
     hideButtonContainer.addLocal(hitArea);

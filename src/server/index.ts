@@ -11,6 +11,7 @@ import loadRoutes from './routes/loadRoutes';
 import lobbyRoutes from './routes/lobbyRoutes';
 import authRoutes from './routes/authRoutes';
 import chatRoutes from './routes/chatRoutes';
+import clientDiagRoutes from './routes/clientDiagRoutes';
 import whisperRoutes from './routes/whisperRoutes';
 import logRoutes, { llmRouter } from './routes/logRoutes';
 import { checkDatabase, db } from './db';
@@ -61,6 +62,7 @@ app.use('/api/deck', deckRoutes);
 app.use('/api/loads', loadRoutes);
 app.use('/api/lobby', lobbyRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/diag', clientDiagRoutes);
 app.use('/api/games', whisperRoutes);
 
 // Log viewer routes (dev tool — no auth)

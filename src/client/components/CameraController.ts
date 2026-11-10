@@ -2,6 +2,7 @@ import 'phaser';
 import { FullGameState, CameraState } from '../../shared/types/GameTypes';
 import { config } from '../config/apiConfig';
 import { isWheelBlocked } from '../utils/wheelBlocker';
+import { diag } from '../utils/deviceDiagnostics';
 
 export class CameraController {
     private scene: Phaser.Scene;
@@ -36,6 +37,12 @@ export class CameraController {
     /**
      * Set the local player ID for per-player camera state management
      */
+    /** Diagnostics only: whether GameScene's track drawing mode is on (D5). */
+    private diagIsDrawingMode(): boolean | null {
+        const trackManager = (this.scene as any).trackManager;
+        return trackManager ? !!trackManager.isInDrawingMode : null;
+    }
+
     public setLocalPlayerId(playerId: string | null): void {
         this.localPlayerId = playerId;
     }
@@ -81,6 +88,7 @@ export class CameraController {
                 (this.camera.height - 200) / mapHeight
             ) + 2 * this.ZOOM_STEP) * 1.3;
             this.camera.setZoom(fitZoom);
+            diag.log('camera', 'initialFitZoom', { fitZoom, camW: this.camera.width, camH: this.camera.height });
             this.camera.scrollX = (mapWidth - this.camera.width / fitZoom) / 2;
             this.camera.scrollY = (mapHeight - (this.camera.height - 200) / fitZoom) / 2;
         }
@@ -109,6 +117,11 @@ export class CameraController {
             
             if (hasUIElements) {
                 // There are UI elements under the pointer, don't start camera drag
+                diag.log('camera', 'pointerdownSkippedUi', {
+                    x: pointer.x,
+                    y: pointer.y,
+                    objects: objectsUnderPointer.slice(0, 3).map((o: any) => o.type + (o.name ? `:${o.name}` : '')),
+                });
                 return;
             }
             
@@ -129,6 +142,12 @@ export class CameraController {
             // Only start dragging if we've moved a significant amount
             if (!this.isDragging && (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5)) {
                 this.isDragging = true;
+                diag.log('camera', 'dragStart', {
+                    wasTouch: pointer.wasTouch,
+                    isDrawingMode: this.diagIsDrawingMode(),
+                    pointer1Down: this.scene.input.pointer1?.isDown ?? null,
+                    pointer2Down: this.scene.input.pointer2?.isDown ?? null,
+                });
             }
             
             // If we're dragging, handle the camera movement
@@ -152,6 +171,14 @@ export class CameraController {
 
         // Handle pointer up event
         this.scene.input.on('pointerup', () => {
+            if (this.isDragging) {
+                diag.log('camera', 'dragEnd', {
+                    zoom: this.camera.zoom,
+                    scrollX: this.camera.scrollX,
+                    scrollY: this.camera.scrollY,
+                    isDrawingMode: this.diagIsDrawingMode(),
+                });
+            }
             this.isMouseDown = false;
             this.isDragging = false;
             this.requestRender();
@@ -170,9 +197,11 @@ export class CameraController {
             // But allow zoom if the only interactive object is the mapContainer itself
             const hasUIElements = gameObjects && gameObjects.some((obj: any) => obj !== this.mapContainer);
             if (hasUIElements) {
+                diag.log('camera', 'wheelSkipped', { reason: 'uiElements' });
                 return;
             }
             if (isWheelBlocked(pointer)) {
+                diag.log('camera', 'wheelSkipped', { reason: 'wheelBlocked' });
                 return;
             }
 
@@ -194,6 +223,7 @@ export class CameraController {
                 
                 const maxScrollY = this.mapHeight - ((this.camera.height - 200) / this.camera.zoom);
                 this.camera.scrollY = Math.min(maxScrollY, this.camera.scrollY);
+                diag.log('camera', 'wheelZoom', { from: zoom, to: this.camera.zoom, minZoom, maxZoom });
                 
                 lastWheelTime = now;
                 this.requestRender();
