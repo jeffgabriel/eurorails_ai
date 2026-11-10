@@ -14,6 +14,9 @@ import { onTurnChange as triggerBotTurn, onHumanReconnect, advanceTurnAfterBot }
 import { WhisperService } from './ai/WhisperService';
 import type { WhisperSubmitPayload } from '../../shared/types/WhisperTypes';
 import { ActiveEffectManager } from './ActiveEffectManager';
+import { PlayerService } from './playerService';
+import { isUuid } from '../utils/uuid';
+import { isOriginAllowed } from '../utils/corsOrigins';
 
 const activeEffectManagerInstance = new ActiveEffectManager();
 
@@ -59,6 +62,33 @@ export function clearAutoRun(gameId: string): void {
 function createDMRoomId(userId1: string, userId2: string, gameId: string): string {
   const sorted = [userId1, userId2].sort();
   return `game:${gameId}:dm:${sorted[0]}:${sorted[1]}`;
+}
+
+/**
+ * Gate for joining a game or lobby room. Emits `error` and returns null unless
+ * the socket is authenticated and its user is a non-deleted player in the game.
+ * Returns the verified userId on success.
+ */
+async function verifyMembership(
+  socket: Socket,
+  gameId: string,
+  userId: string | null,
+): Promise<string | null> {
+  if (!userId) {
+    socket.emit('error', { code: 'UNAUTHORIZED', message: 'Authentication required to join game' });
+    return null;
+  }
+  try {
+    if (!isUuid(gameId) || !(await PlayerService.isUserPlayerInGame(gameId, userId))) {
+      socket.emit('error', { code: 'FORBIDDEN', message: 'You are not a player in this game' });
+      return null;
+    }
+  } catch (err) {
+    console.error(`[socketService] Membership check failed for game ${gameId}:`, err);
+    socket.emit('error', { code: 'FORBIDDEN', message: 'You are not a player in this game' });
+    return null;
+  }
+  return userId;
 }
 
 async function nextServerSeq(gameId: string): Promise<number> {
@@ -110,9 +140,19 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
 
   io = new SocketIOServer(server, {
     cors: {
-      origin: process.env.CLIENT_URL || 'http://localhost:3000',
+      origin: (origin, callback) => callback(null, isOriginAllowed(origin)),
       methods: ['GET', 'POST'],
       credentials: true,
+    },
+    // CORS headers don't apply to the websocket upgrade, so check Origin
+    // explicitly; this hook runs for both polling requests and upgrades.
+    allowRequest: (req, callback) => {
+      const origin = req.headers.origin;
+      if (isOriginAllowed(origin)) {
+        return callback(null, true);
+      }
+      console.warn(`Socket.IO blocked origin: ${origin}`);
+      return callback('Origin not allowed', false);
     },
     transports: ['websocket'],
   });
@@ -219,23 +259,26 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
     });
 
     // Handle join lobby event
-    socket.on('join-lobby', (data: { gameId: string }) => {
+    socket.on('join-lobby', async (data: { gameId: string }) => {
       if (!data || !data.gameId || typeof data.gameId !== 'string' || data.gameId.trim() === '') {
         console.warn(`Invalid gameId from client ${socket.id} for join-lobby`);
         return;
       }
       const { gameId } = data;
-      socket.join(`lobby-${gameId}`);
-      if (userId) {
-        joinedGameIds.add(gameId);
-        db.query(
-          `UPDATE players
-           SET is_online = true,
-               last_seen_at = NOW()
-           WHERE game_id = $1 AND user_id = $2`,
-          [gameId, userId]
-        ).catch((err) => console.error('Failed to set presence on join-lobby:', err));
+      // lobby-updated carries every player's userId, so only members may listen.
+      const memberId = await verifyMembership(socket, gameId, userId);
+      if (!memberId) {
+        return;
       }
+      socket.join(`lobby-${gameId}`);
+      joinedGameIds.add(gameId);
+      db.query(
+        `UPDATE players
+         SET is_online = true,
+             last_seen_at = NOW()
+         WHERE game_id = $1 AND user_id = $2`,
+        [gameId, memberId]
+      ).catch((err) => console.error('Failed to set presence on join-lobby:', err));
       // Note: We don't emit lobby-updated here because the LobbyService
       // handles emitting proper events with player data when players actually join/leave
     });
@@ -261,44 +304,34 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         return;
       }
       const gameId = data.gameId;
-      socket.join(gameId);
-      if (userId) {
+
+      (async () => {
+        // Membership is checked BEFORE joining the room: the room receives every
+        // state:patch / turn:change / track:updated broadcast for the game.
+        const memberId = await verifyMembership(socket, gameId, userId);
+        if (!memberId) {
+          return;
+        }
+
+        // Join before snapshotting state so no broadcast falls between the
+        // snapshot's serverSeq and room membership.
+        socket.join(gameId);
         joinedGameIds.add(gameId);
         db.query(
           `UPDATE players
            SET is_online = true,
                last_seen_at = NOW()
            WHERE game_id = $1 AND user_id = $2`,
-          [gameId, userId]
+          [gameId, memberId]
         ).catch((err) => console.error('Failed to set presence on join:', err));
-      }
 
-      // Dequeue any pending bot turns now that a human has joined the game room
-      onHumanReconnect(gameId).catch((err) => {
-        console.error(`[socketService] onHumanReconnect error for game ${gameId}:`, err);
-      });
+        // Dequeue any pending bot turns now that a human has joined the game room
+        onHumanReconnect(gameId).catch((err) => {
+          console.error(`[socketService] onHumanReconnect error for game ${gameId}:`, err);
+        });
 
-      (async () => {
         try {
-          if (!userId) {
-            socket.emit('error', { code: 'UNAUTHORIZED', message: 'Authentication required to join game' });
-            return;
-          }
-
-          const membershipResult = await db.query(
-            'SELECT is_deleted FROM players WHERE game_id = $1 AND user_id = $2 LIMIT 1',
-            [gameId, userId]
-          );
-          if (membershipResult.rows.length === 0) {
-            socket.emit('error', { code: 'FORBIDDEN', message: 'You are not a player in this game' });
-            return;
-          }
-          if (membershipResult.rows[0].is_deleted === true) {
-            socket.emit('error', { code: 'FORBIDDEN', message: 'You no longer have access to this game' });
-            return;
-          }
-
-          const gameState = await GameService.getGame(gameId, userId);
+          const gameState = await GameService.getGame(gameId, memberId);
           if (!gameState) {
             socket.emit('error', { code: 'GAME_NOT_FOUND', message: 'Game not found' });
             return;
@@ -327,43 +360,6 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
           socket.emit('error', { code: 'STATE_INIT_FAILED', message: 'Failed to initialize game state' });
         }
       })();
-    });
-
-    socket.on('action', async (data: { gameId: string; type: string; payload: unknown; clientSeq: number }) => {
-      if (!data || !data.gameId || typeof data.gameId !== 'string' || data.gameId.trim() === '') {
-        console.warn(`Invalid gameId from client ${socket.id} for action`);
-        return;
-      }
-      if (!data.type || typeof data.type !== 'string') {
-        console.warn(`Invalid action type from client ${socket.id}`);
-        return;
-      }
-      if (userId) {
-        joinedGameIds.add(data.gameId);
-        // Best-effort heartbeat on activity
-        db.query(
-          `UPDATE players
-           SET is_online = true,
-               last_seen_at = NOW()
-           WHERE game_id = $1 AND user_id = $2`,
-          [data.gameId, userId]
-        ).catch(() => {});
-      }
-      try {
-        const serverSeq = await nextServerSeq(data.gameId);
-        // Forward action to other players in the game
-        socket.to(data.gameId).emit('state:patch', {
-          patch: data.payload as any,
-          serverSeq,
-        });
-      } catch (err) {
-        console.error('Failed to forward action as state:patch:', err);
-        // Notify the sending client; otherwise this failure is silent and the UI may assume success.
-        socket.emit('error', {
-          code: 'ACTION_PATCH_FAILED',
-          message: 'Failed to broadcast action update. Please retry.',
-        });
-      }
     });
 
     // ====== CHAT EVENTS ======
@@ -687,7 +683,7 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
       const { gameId } = data;
       try {
         const playerResult = await db.query(
-          'SELECT id FROM players WHERE game_id = $1 AND user_id = $2',
+          'SELECT id FROM players WHERE game_id = $1 AND user_id = $2 AND is_deleted = false',
           [gameId, userId],
         );
         if (playerResult.rows.length === 0) {

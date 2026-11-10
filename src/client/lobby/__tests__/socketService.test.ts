@@ -669,28 +669,8 @@ describe('SocketService', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('join', { gameId });
     });
 
-    it('should emit action event with correct parameters', () => {
-      const token = 'test-token';
-      const gameId = 'test-game-123';
-      const actionType = 'move';
-      const payload = { x: 1, y: 2 };
-      const clientSeq = 5;
-      
-      socketService.connect(token);
-      socketService.sendAction(gameId, actionType, payload, clientSeq);
-      
-      expect(mockSocket.emit).toHaveBeenCalledWith('action', {
-        gameId,
-        type: actionType,
-        payload,
-        clientSeq,
-      });
-    });
-
-    it('should throw error when sending action without connection', () => {
-      expect(() => {
-        socketService.sendAction('test-game', 'action', {}, 0);
-      }).toThrow('Socket not connected');
+    it('should not expose a client action relay', () => {
+      expect((socketService as unknown as Record<string, unknown>).sendAction).toBeUndefined();
     });
   });
 

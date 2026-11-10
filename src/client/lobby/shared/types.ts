@@ -82,7 +82,6 @@ export interface ApiError {
 // Socket.IO event types
 export interface ClientToServerEvents {
   join: (data: { gameId: ID }) => void;
-  action: (data: { gameId: ID; type: string; payload: unknown; clientSeq: number }) => void;
   'join-lobby': (data: { gameId: ID }) => void;
   'leave-lobby': (data: { gameId: ID }) => void;
   'join-game-chat': (data: { gameId: ID; userId: ID }) => void;

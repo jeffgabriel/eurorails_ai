@@ -20,7 +20,6 @@ interface GameStoreState {
   isConnected: boolean;
   isLoading: boolean;
   error: ApiError | null;
-  clientSeq: number;
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
   /** Active event effects currently in play */
   activeEffects: ActiveEffectSummary[];
@@ -37,7 +36,6 @@ interface GameStoreState {
 interface GameStoreActions {
   connect: (gameId: ID, token: string) => void;
   disconnect: () => void;
-  sendAction: (type: string, payload: unknown) => void;
   applyStateInit: (gameState: GameState, serverSeq: number) => void;
   applyStatePatch: (patch: Partial<GameState>, serverSeq: number) => void;
   applyTurnChange: (currentTurnUserId: ID, serverSeq: number) => void;
@@ -85,7 +83,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
   isConnected: false,
   isLoading: false,
   error: null,
-  clientSeq: 0,
   connectionStatus: 'disconnected',
   activeEffects: [],
   pendingEventOverlay: null,
@@ -185,31 +182,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
       isConnected: false,
       isLoading: false,
       connectionStatus: 'disconnected',
-      clientSeq: 0,
       pendingEventOverlay: null,
       eventOverlayQueue: [],
       pendingVisualUpdates: [],
       activeEffects: [],
     });
-  },
-
-  sendAction: (type: string, payload: unknown) => {
-    const gameState = get().gameState;
-    if (!gameState || !socketService.isConnected()) {
-      return;
-    }
-
-    const clientSeq = get().clientSeq + 1;
-    set({ clientSeq });
-
-    try {
-      socketService.sendAction(gameState.id, type, payload, clientSeq);
-    } catch (_error) {
-      get().setError({
-        error: 'ACTION_ERROR',
-        message: 'Failed to send action to server',
-      });
-    }
   },
 
   applyStateInit: (gameState: GameState) => {
