@@ -20,6 +20,11 @@ describe('TrackDrawingManager', () => {
             moveTo: jest.fn(),
             lineTo: jest.fn(),
             strokePath: jest.fn(),
+            // Start-milepost glow
+            fillStyle: jest.fn(),
+            fillCircle: jest.fn(),
+            strokeCircle: jest.fn(),
+            setAlpha: jest.fn(),
             clear: jest.fn()
         };
         // Provide a mock scene with events, input, and cameras for all tests
@@ -97,6 +102,11 @@ describe('TrackDrawingManager', () => {
             moveTo: jest.fn(),
             lineTo: jest.fn(),
             strokePath: jest.fn(),
+            // Start-milepost glow
+            fillStyle: jest.fn(),
+            fillCircle: jest.fn(),
+            strokeCircle: jest.fn(),
+            setAlpha: jest.fn(),
             clear: jest.fn()
         };
 
@@ -182,6 +192,11 @@ describe('TrackDrawingManager', () => {
                 moveTo: jest.fn(),
                 lineTo: jest.fn(),
                 strokePath: jest.fn(),
+                // Start-milepost glow
+                fillStyle: jest.fn(),
+                fillCircle: jest.fn(),
+                strokeCircle: jest.fn(),
+                setAlpha: jest.fn(),
                 clear: jest.fn()
             };
 
@@ -411,6 +426,11 @@ describe('TrackDrawingManager', () => {
                 moveTo: jest.fn(),
                 lineTo: jest.fn(),
                 strokePath: jest.fn(),
+                // Start-milepost glow
+                fillStyle: jest.fn(),
+                fillCircle: jest.fn(),
+                strokeCircle: jest.fn(),
+                setAlpha: jest.fn(),
                 clear: jest.fn()
             };
             const mockScene = {
@@ -566,6 +586,11 @@ describe('TrackDrawingManager', () => {
                 moveTo: jest.fn(),
                 lineTo: jest.fn(),
                 strokePath: jest.fn(),
+                // Start-milepost glow
+                fillStyle: jest.fn(),
+                fillCircle: jest.fn(),
+                strokeCircle: jest.fn(),
+                setAlpha: jest.fn(),
                 clear: jest.fn()
             };
             // Provide a mock scene with events, input, and cameras for all tests
@@ -893,7 +918,12 @@ describe('TrackDrawingManager', () => {
                 beginPath: jest.fn(),
                 moveTo: jest.fn(),
                 lineTo: jest.fn(),
-                strokePath: jest.fn()
+                strokePath: jest.fn(),
+                // Start-milepost glow
+                fillStyle: jest.fn(),
+                fillCircle: jest.fn(),
+                strokeCircle: jest.fn(),
+                setAlpha: jest.fn(),
             };
             (trackDrawingManager as any).previewGraphics = mockGraphics6;
             
@@ -939,7 +969,12 @@ describe('TrackDrawingManager', () => {
                 beginPath: jest.fn(),
                 moveTo: jest.fn(),
                 lineTo: jest.fn(),
-                strokePath: jest.fn()
+                strokePath: jest.fn(),
+                // Start-milepost glow
+                fillStyle: jest.fn(),
+                fillCircle: jest.fn(),
+                strokeCircle: jest.fn(),
+                setAlpha: jest.fn(),
             };
             (trackDrawingManager as any).previewGraphics = mockGraphics;
 
@@ -1021,7 +1056,7 @@ describe('State consistency on backend failure', () => {
 
         // Minimal scene and container mocks
         scene = {
-            add: { graphics: () => ({ setDepth: jest.fn(), destroy: jest.fn() }) },
+            add: { graphics: () => ({ setDepth: jest.fn(), destroy: jest.fn(), clear: jest.fn(), setAlpha: jest.fn() }) },
             events: { on: jest.fn(), off: jest.fn() },
             input: { on: jest.fn(), off: jest.fn() },
             cameras: { main: { getWorldPoint: jest.fn((x, y) => ({ x, y })) } },
@@ -1098,6 +1133,11 @@ describe('TrackDrawingManager - Shift+Click Mode', () => {
             moveTo: jest.fn(),
             lineTo: jest.fn(),
             strokePath: jest.fn(),
+            // Start-milepost glow
+            fillStyle: jest.fn(),
+            fillCircle: jest.fn(),
+            strokeCircle: jest.fn(),
+            setAlpha: jest.fn(),
             clear: jest.fn()
         };
 

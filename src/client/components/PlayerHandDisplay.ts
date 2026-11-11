@@ -12,6 +12,9 @@ import { authenticatedFetch } from "../services/authenticatedFetch";
 import { config } from "../config/apiConfig";
 import { diag } from "../utils/deviceDiagnostics";
 
+/** Height of the collapsed hand status bar at the bottom of the screen. */
+export const PLAYER_HAND_STATUS_BAR_HEIGHT = 50;
+
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
   private container: Phaser.GameObjects.Container;
@@ -26,7 +29,7 @@ export class PlayerHandDisplay {
   private cameraController?: CameraController;
 
   // Layout constants
-  private readonly STATUS_BAR_HEIGHT = 50; // Height when collapsed
+  private readonly STATUS_BAR_HEIGHT = PLAYER_HAND_STATUS_BAR_HEIGHT; // Height when collapsed
 
   // State management
   private isCollapsed: boolean = true; // Start collapsed

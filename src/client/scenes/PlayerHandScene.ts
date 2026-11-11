@@ -248,6 +248,12 @@ export class PlayerHandScene extends Phaser.Scene {
     this.setPanelScrollLeft(this.panelScrollLeft);
   }
 
+  /** Height of the open panel (px from the bottom of the screen), or 0 if not laid out. */
+  public getPanelHeight(): number {
+    const height = this.rootSizer?.height;
+    return typeof height === "number" && height > 0 ? height : 0;
+  }
+
   /** Objects that slide in/out together with the panel. */
   private getPanelTweenTargets(): any[] {
     return this.pinnedControlsSizer ? [this.rootSizer, this.pinnedControlsSizer] : [this.rootSizer];
