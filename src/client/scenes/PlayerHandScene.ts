@@ -2079,6 +2079,11 @@ export class PlayerHandScene extends Phaser.Scene {
 
       // Only proceed if CitySelectionManager was properly created
       if (this.citySelectionManager) {
+        // It is built with `new`, so it is not on the display list yet. Phaser ranks
+        // overlapping interactive objects by render order and only the top one gets
+        // input; off the display list it loses to the panel background, which is
+        // interactive on narrow screens, and taps never open the list.
+        this.add.existing(this.citySelectionManager);
         this.citySelectionManager.init();
         // Give it a stable footprint so the infoSizer can measure it.
         (this.citySelectionManager as any).setMinSize?.(220, 32);
