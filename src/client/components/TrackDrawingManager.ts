@@ -15,6 +15,17 @@ export class TrackDrawingManager {
     static readonly DEFAULT_BOTTOM_UI_HEIGHT = 200;
     /** Minimum time between drawing hints, so repeated misses don't stack toasts. */
     static readonly HINT_COOLDOWN_MS = 2500;
+    /** Start-milepost glow: colour, ring radii (world px, outer to inner) with their alphas, and pulse timing. */
+    static readonly START_GLOW_COLOR = 0xffd54a;
+    static readonly START_GLOW_HALO_RADIUS = 20;
+    static readonly START_GLOW_HALO_ALPHA = 0.18;
+    static readonly START_GLOW_CORE_RADIUS = 13;
+    static readonly START_GLOW_CORE_ALPHA = 0.35;
+    static readonly START_GLOW_RING_RADIUS = 9;
+    static readonly START_GLOW_RING_WIDTH = 3;
+    static readonly START_GLOW_RING_ALPHA = 0.95;
+    static readonly START_GLOW_PULSE_MIN_ALPHA = 0.45;
+    static readonly START_GLOW_PULSE_MS = 650;
     private scene: Phaser.Scene;
     private mapContainer: Phaser.GameObjects.Container;
     private drawingGraphics: Phaser.GameObjects.Graphics;
@@ -156,19 +167,20 @@ export class TrackDrawingManager {
         const g = this.startGlowGraphics;
         if (!g) return;
         this.clearStartGlow();
-        const color = 0xffd54a;
-        g.fillStyle(color, 0.18);
-        g.fillCircle(point.x, point.y, 20);
-        g.fillStyle(color, 0.35);
-        g.fillCircle(point.x, point.y, 13);
-        g.lineStyle(3, color, 0.95);
-        g.strokeCircle(point.x, point.y, 9);
+        const T = TrackDrawingManager;
+        const color = T.START_GLOW_COLOR;
+        g.fillStyle(color, T.START_GLOW_HALO_ALPHA);
+        g.fillCircle(point.x, point.y, T.START_GLOW_HALO_RADIUS);
+        g.fillStyle(color, T.START_GLOW_CORE_ALPHA);
+        g.fillCircle(point.x, point.y, T.START_GLOW_CORE_RADIUS);
+        g.lineStyle(T.START_GLOW_RING_WIDTH, color, T.START_GLOW_RING_ALPHA);
+        g.strokeCircle(point.x, point.y, T.START_GLOW_RING_RADIUS);
         g.setAlpha(1);
         if (this.scene.tweens) {
             this.startGlowTween = this.scene.tweens.add({
                 targets: g,
-                alpha: 0.45,
-                duration: 650,
+                alpha: T.START_GLOW_PULSE_MIN_ALPHA,
+                duration: T.START_GLOW_PULSE_MS,
                 ease: 'Sine.easeInOut',
                 yoyo: true,
                 repeat: -1,
