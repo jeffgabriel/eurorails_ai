@@ -32,8 +32,16 @@ export class ChatScene extends Phaser.Scene {
   /** DM mode: when set, we show DM with this player instead of game chat */
   private dmRecipientId: string | null = null;
   private dmRecipientName: string | null = null;
+  // Canvas size the UI was built for. The layout (incl. the DOM input) is positioned
+  // once in create(), so opening after a resize rebuilds the scene first.
+  private layoutWidth: number = 0;
+  private layoutHeight: number = 0;
+  // Set via restart data: what to open once the rebuilt create() finishes.
+  private openOnReady: { dm?: { userId: string; name: string } } | null = null;
   private messageUnsubscribe: (() => void) | null = null;
   private flaggedUnsubscribe: (() => void) | null = null;
+  private unreadUnsubscribe: (() => void) | null = null;
+  private errorUnsubscribe: (() => void) | null = null;
   private optimisticBubbleMap: Map<string, ChatMessageBubble> = new Map();
 
   // UI components
@@ -62,10 +70,11 @@ export class ChatScene extends Phaser.Scene {
     super({ key: 'ChatScene' });
   }
 
-  init(data: { gameId: string; userId: string }) {
+  init(data: { gameId: string; userId: string; openOnReady?: { dm?: { userId: string; name: string } } }) {
     this.gameId = data.gameId;
     this.userId = data.userId;
     this.isMobile = this.scale.width < 768;
+    this.openOnReady = data.openOnReady ?? null;
 
     // Re-create the promise only after a completed lifecycle, so whenReady()
     // reflects THIS lifecycle's create() rather than a stale promise resolved
@@ -120,9 +129,22 @@ export class ChatScene extends Phaser.Scene {
     // Start closed
     this.isOpen = false;
 
+    this.layoutWidth = this.scale.width;
+    this.layoutHeight = this.scale.height;
+
     // Mark scene as ready
     this.isReady = true;
     this._resolveWhenReady();
+
+    // Reopen after a layout rebuild (resize while open, or open after a resize).
+    // Done here, after `isOpen = false` above, so it can't be overwritten.
+    const reopen = this.openOnReady;
+    this.openOnReady = null;
+    if (reopen?.dm) {
+      void this.openDM(reopen.dm.userId, reopen.dm.name);
+    } else if (reopen) {
+      void this.open();
+    }
     diag.log('chat', 'created', {
       isMobile: this.isMobile,
       scale: { w: this.scale.width, h: this.scale.height },
@@ -259,6 +281,9 @@ export class ChatScene extends Phaser.Scene {
    * Create input area with text field and send button
    */
   private createInputArea(): void {
+    // The scene instance is reused across restarts; drop the previous DOM input.
+    this.inputField?.remove();
+    this.inputField = undefined;
     const width = this.isMobile ? this.scale.width : this.SIDEBAR_WIDTH_DESKTOP;
     const inputY = this.scale.height - this.INPUT_HEIGHT;
 
@@ -318,8 +343,13 @@ export class ChatScene extends Phaser.Scene {
     // Message listener is subscribed dynamically when joining game chat or opening DM
     this.subscribeToGameChat();
 
+    // create() runs again on every restart: replace listeners rather than stacking them.
+    this.unreadUnsubscribe?.();
+    this.errorUnsubscribe?.();
+    this.flaggedUnsubscribe?.();
+
     // Listen for unread count changes (handle both game chat and DM keys)
-    chatStateService.onUnreadCount((notifyKey: string, count: number) => {
+    this.unreadUnsubscribe = chatStateService.onUnreadCount((notifyKey: string, count: number) => {
       // Check if this is for the current view (game chat or active DM)
       const isCurrentGameChat = notifyKey === this.gameId && !this.dmRecipientId;
       const isCurrentDM = this.dmRecipientId && notifyKey === `dm:${this.gameId}:${this.dmRecipientId}`;
@@ -330,7 +360,7 @@ export class ChatScene extends Phaser.Scene {
     });
 
     // Listen for errors
-    chatStateService.onError((error) => {
+    this.errorUnsubscribe = chatStateService.onError((error) => {
       this.showError(error.message);
     });
 
@@ -370,9 +400,35 @@ export class ChatScene extends Phaser.Scene {
    * Set up window resize listener
    */
   private setupResizeListener(): void {
-    this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
-      this.handleResize(gameSize.width, gameSize.height);
-    });
+    // create() runs again on every restart; replace rather than stack the listener.
+    this.scale.off('resize', this.onScaleResize, this);
+    this.scale.on('resize', this.onScaleResize, this);
+  }
+
+  private onScaleResize(gameSize: Phaser.Structs.Size): void {
+    this.handleResize(gameSize.width, gameSize.height);
+  }
+
+  /** True when the canvas size differs from the one the UI was built for. */
+  private isLayoutStale(): boolean {
+    return this.scale.width !== this.layoutWidth || this.scale.height !== this.layoutHeight;
+  }
+
+  /**
+   * If the UI was built for a different canvas size, rebuild it and let create()
+   * reopen (optionally in a DM). Returns true when a rebuild was started, in which
+   * case the caller must not continue opening.
+   */
+  private rebuildIfStale(dm?: { userId: string; name: string }): boolean {
+    if (!this.isReady || !this.isLayoutStale()) return false;
+    this.rebuildAndOpen(dm);
+    return true;
+  }
+
+  /** Rebuild the UI for the current canvas size, then open (optionally in a DM). */
+  private rebuildAndOpen(dm?: { userId: string; name: string }): void {
+    diag.log('chat', 'rebuildAndOpen', { ...this.diagState(), dm: !!dm });
+    this.scene.restart({ gameId: this.gameId, userId: this.userId, openOnReady: dm ? { dm } : {} });
   }
 
   /**
@@ -551,16 +607,22 @@ export class ChatScene extends Phaser.Scene {
     diag.log('chat', 'handleResize', { ...this.diagState(), newW: width, newH: height });
     this.isMobile = width < 768;
 
-    // Rebuild UI for new dimensions
+    if (!this.isReady) return;
+
     if (this.isOpen) {
+      // Rebuild UI for new dimensions, then reopen in the same mode once create() finishes.
+      const dm = this.dmRecipientId && this.dmRecipientName
+        ? { userId: this.dmRecipientId, name: this.dmRecipientName }
+        : undefined;
       this.close();
-      this.time.delayedCall(this.ANIMATION_DURATION, () => {
-        diag.log('chat', 'restartScheduled', this.diagState());
-        this.scene.restart({ gameId: this.gameId, userId: this.userId });
-        this.open();
-        diag.log('chat', 'openAfterRestartCalled', this.diagState());
-      });
+      this.time.delayedCall(this.ANIMATION_DURATION, () => this.rebuildAndOpen(dm));
+      return;
     }
+
+    // Closed: keep the parked panel just off the right edge. It was placed at the
+    // creation-time width, so a wider canvas (e.g. closing DevTools) exposed it.
+    this.tweens.killTweensOf(this.container);
+    this.container.setX(width);
   }
 
   /**
@@ -568,6 +630,7 @@ export class ChatScene extends Phaser.Scene {
    */
   public async openDM(recipientUserId: string, recipientName: string): Promise<void> {
     diag.log('chat', 'openDM', this.diagState());
+    if (!this.isOpen && this.rebuildIfStale({ userId: recipientUserId, name: recipientName })) return;
     try {
       this.dmRecipientId = recipientUserId;
       this.dmRecipientName = recipientName;
@@ -623,6 +686,7 @@ export class ChatScene extends Phaser.Scene {
   public async open(): Promise<void> {
     diag.log('chat', 'open', this.diagState());
     if (this.isOpen) return;
+    if (this.rebuildIfStale()) return;
 
     this.isOpen = true;
     const targetX = this.isMobile ? 0 : this.scale.width - this.SIDEBAR_WIDTH_DESKTOP;
@@ -756,6 +820,10 @@ export class ChatScene extends Phaser.Scene {
     this.messageUnsubscribe = null;
     this.flaggedUnsubscribe?.();
     this.flaggedUnsubscribe = null;
+    this.unreadUnsubscribe?.();
+    this.unreadUnsubscribe = null;
+    this.errorUnsubscribe?.();
+    this.errorUnsubscribe = null;
     this.optimisticBubbleMap.clear();
 
     // Clean up tooltip
@@ -776,6 +844,6 @@ export class ChatScene extends Phaser.Scene {
     chatStateService.cleanup(this.gameId);
 
     // Remove resize listener
-    this.scale.off('resize');
+    this.scale.off('resize', this.onScaleResize, this);
   }
 }

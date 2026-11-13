@@ -106,6 +106,21 @@ export class CameraController {
         }
     }
 
+    /**
+     * True for the map container and anything nested inside it (mileposts' coordinate
+     * hit zones, etc.). These are part of the map, not UI, so they must not block
+     * camera drag or wheel zoom.
+     */
+    private isMapObject(obj: Phaser.GameObjects.GameObject): boolean {
+        if (!this.mapContainer) return false;
+        let current: Phaser.GameObjects.GameObject | null = obj;
+        while (current) {
+            if (current === this.mapContainer) return true;
+            current = current.parentContainer ?? null;
+        }
+        return false;
+    }
+
     /** Zoom limits shared by wheel and pinch zoom. */
     private getZoomLimits(): { minZoom: number; maxZoom: number } {
         const minZoom = Math.min(
@@ -191,10 +206,7 @@ export class CameraController {
             
             // If there are interactive objects under the pointer, don't start dragging
             // Exception: allow dragging if the only object is the map container itself
-            const hasUIElements = objectsUnderPointer.some(obj => {
-                // Ignore the map container - it's interactive but that's intentional for our pointerover detection
-                return obj !== this.mapContainer;
-            });
+            const hasUIElements = objectsUnderPointer.some(obj => !this.isMapObject(obj));
             
             if (hasUIElements) {
                 // There are UI elements under the pointer, don't start camera drag
@@ -285,7 +297,8 @@ export class CameraController {
         this.scene.input.on('wheel', (pointer: Phaser.Input.Pointer, gameObjects: any, deltaX: number, deltaY: number) => {
             // Skip zoom if pointer is over interactive UI elements (e.g., scrollable panels)
             // But allow zoom if the only interactive object is the mapContainer itself
-            const hasUIElements = gameObjects && gameObjects.some((obj: any) => obj !== this.mapContainer);
+            // or something inside it (e.g. the per-milepost coordinate hit zones).
+            const hasUIElements = gameObjects && gameObjects.some((obj: any) => !this.isMapObject(obj));
             if (hasUIElements) {
                 diag.log('camera', 'wheelSkipped', { reason: 'uiElements' });
                 return;

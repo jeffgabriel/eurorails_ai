@@ -17,6 +17,7 @@ import { RiverDebugOverlay } from "../components/RiverDebugOverlay";
 import { LLMTranscriptOverlay } from "../components/LLMTranscriptOverlay";
 import { BotTrainAnimator } from "../components/BotTrainAnimator";
 import { GameToastManager } from "../components/GameToastManager";
+import { PLAYER_HAND_STATUS_BAR_HEIGHT } from "../components/PlayerHandDisplay";
 import { WhisperPanel } from "../components/WhisperPanel";
 import { AutoRunBadge } from "../components/AutoRunBadge";
 import { MapHighlighter } from "../components/MapHighlighter";
@@ -450,6 +451,17 @@ export class GameScene extends Phaser.Scene {
 
     // Game event toast notifications
     this.gameToastManager = new GameToastManager(this);
+
+    // Track drawing: explain rejected clicks, and ignore clicks only over the bottom UI
+    // actually shown (open hand panel, else the collapsed status bar).
+    this.trackManager.setOnDrawingHint((message) => this.gameToastManager?.show(message));
+    this.trackManager.setBottomUiHeightProvider(() => {
+      const handScene = this.scene.get("PlayerHandScene") as { getPanelHeight?: () => number } | null;
+      if (handScene && this.scene.isActive("PlayerHandScene") && typeof handScene.getPanelHeight === "function") {
+        return Math.max(handScene.getPanelHeight(), PLAYER_HAND_STATUS_BAR_HEIGHT);
+      }
+      return PLAYER_HAND_STATUS_BAR_HEIGHT;
+    });
 
     // Whisper advice panel — only instantiate when bots are present
     const hasBots = this.gameState.players.some(p => p.isBot);

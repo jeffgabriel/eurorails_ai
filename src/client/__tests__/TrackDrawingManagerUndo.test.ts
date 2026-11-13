@@ -15,6 +15,11 @@ const mockGraphics = {
   moveTo: jest.fn(),
   lineTo: jest.fn(),
   strokePath: jest.fn(),
+  // Start-milepost glow
+  fillStyle: jest.fn(),
+  fillCircle: jest.fn(),
+  strokeCircle: jest.fn(),
+  setAlpha: jest.fn(),
 };
 const mockScene = {
   add: { graphics: () => mockGraphics },

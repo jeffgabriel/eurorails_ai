@@ -9,10 +9,35 @@ import { getMajorCityLookup } from '../../shared/services/majorCityGroups';
 import { diag } from '../utils/deviceDiagnostics';
 
 export class TrackDrawingManager {
+    /** Drawing snap radius (world px). Mileposts are 50×45 apart, so 15 left ~half the map unclickable. */
+    static readonly DRAW_SNAP_RADIUS = 25;
+    /** Bottom UI height used when no provider is set. */
+    static readonly DEFAULT_BOTTOM_UI_HEIGHT = 200;
+    /** Minimum time between drawing hints, so repeated misses don't stack toasts. */
+    static readonly HINT_COOLDOWN_MS = 2500;
+    /** Start-milepost glow: colour, ring radii (world px, outer to inner) with their alphas, and pulse timing. */
+    static readonly START_GLOW_COLOR = 0xffd54a;
+    static readonly START_GLOW_HALO_RADIUS = 20;
+    static readonly START_GLOW_HALO_ALPHA = 0.18;
+    static readonly START_GLOW_CORE_RADIUS = 13;
+    static readonly START_GLOW_CORE_ALPHA = 0.35;
+    static readonly START_GLOW_RING_RADIUS = 9;
+    static readonly START_GLOW_RING_WIDTH = 3;
+    static readonly START_GLOW_RING_ALPHA = 0.95;
+    static readonly START_GLOW_PULSE_MIN_ALPHA = 0.45;
+    static readonly START_GLOW_PULSE_MS = 650;
     private scene: Phaser.Scene;
     private mapContainer: Phaser.GameObjects.Container;
     private drawingGraphics: Phaser.GameObjects.Graphics;
     private previewGraphics: Phaser.GameObjects.Graphics;
+    // Glow marking the explicitly selected start milepost (cleared on commit / selection reset)
+    private startGlowGraphics: Phaser.GameObjects.Graphics | null = null;
+    private startGlowTween: Phaser.Tweens.Tween | null = null;
+    // Height of the bottom UI (hand panel or collapsed status bar); clicks over it are ignored
+    private bottomUiHeightProvider: (() => number) | null = null;
+    // Short user-facing hint for rejected clicks (e.g. a toast)
+    private onDrawingHint: ((message: string) => void) | null = null;
+    private lastHintAt: number = 0;
     private gameState: FullGameState;
     private playerTracks: Map<string, PlayerTrackState>;
     private gridPoints: GridPoint[][];
@@ -97,6 +122,10 @@ export class TrackDrawingManager {
         this.previewGraphics.setDepth(2);  // Set higher depth to appear above tracks
         this.mapContainer.add(this.previewGraphics);
 
+        this.startGlowGraphics = this.scene.add.graphics();
+        this.startGlowGraphics.setDepth(3);
+        this.mapContainer.add(this.startGlowGraphics);
+
         // Setup cost update handler
         this.setupCostUpdateHandler();
     }
@@ -107,6 +136,67 @@ export class TrackDrawingManager {
      */
     public setOnTrackSegmentAdded(callback: ((segment: TrackSegment) => void) | null): void {
         this.onTrackSegmentAdded = callback;
+    }
+
+    /**
+     * Provide the current height (px from the bottom of the screen) of the bottom UI —
+     * the open hand panel or the collapsed status bar. Drawing clicks over it are ignored.
+     */
+    public setBottomUiHeightProvider(provider: (() => number) | null): void {
+        this.bottomUiHeightProvider = provider;
+    }
+
+    /** Receive short hints explaining why a drawing click did nothing. */
+    public setOnDrawingHint(callback: ((message: string) => void) | null): void {
+        this.onDrawingHint = callback;
+    }
+
+    private getBottomUiHeight(): number {
+        return this.bottomUiHeightProvider ? this.bottomUiHeightProvider() : TrackDrawingManager.DEFAULT_BOTTOM_UI_HEIGHT;
+    }
+
+    private showDrawingHint(message: string): void {
+        const now = Date.now();
+        if (!this.onDrawingHint || now - this.lastHintAt < TrackDrawingManager.HINT_COOLDOWN_MS) return;
+        this.lastHintAt = now;
+        this.onDrawingHint(message);
+    }
+
+    /** Highlight the selected start milepost with a pulsing glow. */
+    private showStartGlow(point: GridPoint): void {
+        const g = this.startGlowGraphics;
+        if (!g) return;
+        this.clearStartGlow();
+        const T = TrackDrawingManager;
+        const color = T.START_GLOW_COLOR;
+        g.fillStyle(color, T.START_GLOW_HALO_ALPHA);
+        g.fillCircle(point.x, point.y, T.START_GLOW_HALO_RADIUS);
+        g.fillStyle(color, T.START_GLOW_CORE_ALPHA);
+        g.fillCircle(point.x, point.y, T.START_GLOW_CORE_RADIUS);
+        g.lineStyle(T.START_GLOW_RING_WIDTH, color, T.START_GLOW_RING_ALPHA);
+        g.strokeCircle(point.x, point.y, T.START_GLOW_RING_RADIUS);
+        g.setAlpha(1);
+        if (this.scene.tweens) {
+            this.startGlowTween = this.scene.tweens.add({
+                targets: g,
+                alpha: T.START_GLOW_PULSE_MIN_ALPHA,
+                duration: T.START_GLOW_PULSE_MS,
+                ease: 'Sine.easeInOut',
+                yoyo: true,
+                repeat: -1,
+            });
+        }
+    }
+
+    private clearStartGlow(): void {
+        if (this.startGlowTween) {
+            this.startGlowTween.stop();
+            this.startGlowTween = null;
+        }
+        if (this.startGlowGraphics) {
+            this.startGlowGraphics.clear();
+            this.startGlowGraphics.setAlpha(1);
+        }
     }
 
     /**
@@ -155,6 +245,7 @@ export class TrackDrawingManager {
 
         // Clear click anchor so next build starts cleanly
         this.lastClickedPoint = null;
+        this.clearStartGlow();
 
         // Update cost display (include any previously committed cost this turn)
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
@@ -489,6 +580,7 @@ export class TrackDrawingManager {
         this.currentSegments = [];
         this.lastClickedPoint = null;
         this.lastHoverPoint = null;
+        this.clearStartGlow();
         
         // Clear performance caches
         this.networkNodesCache.clear();
@@ -558,6 +650,7 @@ export class TrackDrawingManager {
         this.currentSegments = [];
         this.lastClickedPoint = null;
         this.lastHoverPoint = null;
+        this.clearStartGlow();
         this.turnBuildCost = 0;
         
         // Clear performance caches
@@ -596,15 +689,16 @@ export class TrackDrawingManager {
             return;
         }
 
-        // Ignore clicks in UI area
-        if (pointer.y > this.scene.scale.height - 200) {
-            diag.log('draw', 'click', { ...diagBase, result: 'uiArea', scaleHeight: this.scene.scale.height });
+        // Ignore clicks over the bottom UI (open hand panel or collapsed status bar)
+        const bottomUiHeight = this.getBottomUiHeight();
+        if (pointer.y > this.scene.scale.height - bottomUiHeight) {
+            diag.log('draw', 'click', { ...diagBase, result: 'uiArea', scaleHeight: this.scene.scale.height, bottomUiHeight });
             return;
         }
 
         const clickedPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
         // Find the grid point at this position
-        const gridPoint = this.getGridPointAtPosition(clickedPoint.x, clickedPoint.y);
+        const gridPoint = this.getGridPointAtPosition(clickedPoint.x, clickedPoint.y, TrackDrawingManager.DRAW_SNAP_RADIUS);
         if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
             if (diag.isEnabled()) {
                 const nearestWorld = this.diagNearestGridDistance(clickedPoint.x, clickedPoint.y);
@@ -613,7 +707,7 @@ export class TrackDrawingManager {
                     result: gridPoint ? 'water' : 'noGridPoint',
                     nearestWorldPx: nearestWorld,
                     nearestScreenPx: nearestWorld !== null ? nearestWorld * this.scene.cameras.main.zoom : null,
-                    snapRadiusScreenPx: 15 * this.scene.cameras.main.zoom,
+                    snapRadiusScreenPx: TrackDrawingManager.DRAW_SNAP_RADIUS * this.scene.cameras.main.zoom,
                 });
             }
             return;
@@ -637,10 +731,12 @@ export class TrackDrawingManager {
                     isConnectedPointOfMajorCity,
                     isConnectedToNetwork,
                 });
+                this.showDrawingHint('Start building from a major city or your existing track');
                 return;
             }
             
             this.lastClickedPoint = gridPoint;
+            this.showStartGlow(gridPoint);
             this.updateValidConnectionPoints();
             diag.log('draw', 'click', {
                 ...diagBase,
@@ -681,6 +777,7 @@ export class TrackDrawingManager {
                 diag.log('draw', 'click', { ...diagBase, result: 'invalidCost', totalPathCost });
                 return;
             }
+            this.clearStartGlow();
             diag.log('draw', 'click', {
                 ...diagBase,
                 result: 'committed',
@@ -814,25 +911,20 @@ export class TrackDrawingManager {
         this.diagHoverCount++;
         this.diagLastHoverAt = Date.now();
         if (!this.isDrawingMode || !this.lastClickedPoint) {
-            this.previewGraphics.clear();
-            this.previewPath = [];
-            // this.updateCostDisplayToCommitted();
+            this.clearHoverPreview();
             return;
         }
 
         const hoverPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
-        const gridPoint = this.getGridPointAtPosition(hoverPoint.x, hoverPoint.y);
+        const gridPoint = this.getGridPointAtPosition(hoverPoint.x, hoverPoint.y, TrackDrawingManager.DRAW_SNAP_RADIUS);
         if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
-            this.previewGraphics.clear();
-            this.previewPath = [];
-            // this.updateCostDisplayToCommitted();
+            this.clearHoverPreview();
             return;
         }
 
         // Skip if hovering over the last clicked point - compare coordinates instead of object reference
         if (gridPoint.row === this.lastClickedPoint.row && gridPoint.col === this.lastClickedPoint.col) {
-            this.previewGraphics.clear();
-            this.previewPath = [];
+            this.clearHoverPreview();
             // this.updateCostDisplayToCommitted();
             return;
         }
@@ -862,6 +954,18 @@ export class TrackDrawingManager {
                 this.pendingHoverPoint = null;
             }
         }, 16); // Reduced to ~60fps for smoother updates
+    }
+
+    /**
+     * Clear the hover preview AND the hover cache. The "same point as last hover"
+     * short-circuit must not survive a cleared preview: otherwise moving off a milepost
+     * and back onto it leaves the preview empty, and the next click silently does nothing.
+     */
+    private clearHoverPreview(): void {
+        this.previewGraphics.clear();
+        this.previewPath = [];
+        this.lastHoverPoint = null;
+        this.pendingHoverPoint = null;
     }
 
     private processHoverUpdate(gridPoint: GridPoint): void {
@@ -983,12 +1087,13 @@ export class TrackDrawingManager {
         return isShiftMode ? 0xffa500 : 0x00ff00;
     }
 
-    public getGridPointAtPosition(worldX: number, worldY: number): GridPoint | null {
-        // Define maximum distance for point selection
-        const MAX_DISTANCE = 15; // pixels
-        
+    /**
+     * Nearest non-water milepost within `maxDistance` world px of (worldX, worldY).
+     * Default 15 is used by train movement; drawing passes DRAW_SNAP_RADIUS.
+     */
+    public getGridPointAtPosition(worldX: number, worldY: number, maxDistance: number = 15): GridPoint | null {
         let closestPoint: GridPoint | null = null;
-        let minDistance = MAX_DISTANCE;
+        let minDistance = maxDistance;
         // Check points in a 3x3 grid area around the cursor
         const GRID_MARGIN = MapRenderer.GRID_MARGIN; 
         const VERTICAL_SPACING = MapRenderer.VERTICAL_SPACING;
@@ -1649,6 +1754,9 @@ export class TrackDrawingManager {
         this.lastClickedPoint = null;
         this.lastHoverPoint = null;
         this.pendingHoverPoint = null;
+        this.clearStartGlow();
+        this.startGlowGraphics?.destroy();
+        this.startGlowGraphics = null;
         this.segmentsDrawnThisTurn = [];
     }
 
