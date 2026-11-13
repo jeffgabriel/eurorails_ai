@@ -414,6 +414,17 @@ export class ChatScene extends Phaser.Scene {
     return this.scale.width !== this.layoutWidth || this.scale.height !== this.layoutHeight;
   }
 
+  /**
+   * If the UI was built for a different canvas size, rebuild it and let create()
+   * reopen (optionally in a DM). Returns true when a rebuild was started, in which
+   * case the caller must not continue opening.
+   */
+  private rebuildIfStale(dm?: { userId: string; name: string }): boolean {
+    if (!this.isReady || !this.isLayoutStale()) return false;
+    this.rebuildAndOpen(dm);
+    return true;
+  }
+
   /** Rebuild the UI for the current canvas size, then open (optionally in a DM). */
   private rebuildAndOpen(dm?: { userId: string; name: string }): void {
     diag.log('chat', 'rebuildAndOpen', { ...this.diagState(), dm: !!dm });
@@ -619,10 +630,7 @@ export class ChatScene extends Phaser.Scene {
    */
   public async openDM(recipientUserId: string, recipientName: string): Promise<void> {
     diag.log('chat', 'openDM', this.diagState());
-    if (this.isReady && !this.isOpen && this.isLayoutStale()) {
-      this.rebuildAndOpen({ userId: recipientUserId, name: recipientName });
-      return;
-    }
+    if (!this.isOpen && this.rebuildIfStale({ userId: recipientUserId, name: recipientName })) return;
     try {
       this.dmRecipientId = recipientUserId;
       this.dmRecipientName = recipientName;
@@ -678,11 +686,7 @@ export class ChatScene extends Phaser.Scene {
   public async open(): Promise<void> {
     diag.log('chat', 'open', this.diagState());
     if (this.isOpen) return;
-    if (this.isReady && this.isLayoutStale()) {
-      // Built for a different canvas size: rebuild first; create() reopens.
-      this.rebuildAndOpen();
-      return;
-    }
+    if (this.rebuildIfStale()) return;
 
     this.isOpen = true;
     const targetX = this.isMobile ? 0 : this.scale.width - this.SIDEBAR_WIDTH_DESKTOP;
