@@ -2,6 +2,7 @@ import express from 'express';
 import { DemandDeckService } from '../services/demandDeckService';
 import { db } from '../db/index';
 import { authenticateToken } from '../middleware/authMiddleware';
+import { DEBUG_SECRET_HEADER, isDebugRouteRequestAllowed } from '../utils/debugAccess';
 
 const router = express.Router();
 
@@ -95,11 +96,12 @@ router.get('/events', authenticateToken, (req, res) => {
 // per-game decks (test hygiene) and therefore takes no gameId.
 // ---------------------------------------------------------------------------
 
-/** Guards a request to test/debug-only endpoints. */
+/**
+ * Guards a request to test/debug-only endpoints: allowed under NODE_ENV=test
+ * or development, or when DEBUG_ROUTES_SECRET is configured and the request header matches it.
+ */
 function isTestOrDebugRequest(req: express.Request): boolean {
-  const testSecret = req.headers['x-test-secret'] as string;
-  const isTestEnvironment = process.env.NODE_ENV === 'test';
-  return isTestEnvironment || testSecret === 'test-reset-secret';
+  return isDebugRouteRequestAllowed(req.headers[DEBUG_SECRET_HEADER]);
 }
 
 // Test-only endpoint: clear every game's in-memory deck so a fresh test run

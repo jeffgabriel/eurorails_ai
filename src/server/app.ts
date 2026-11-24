@@ -10,7 +10,7 @@ import trackRoutes from './routes/trackRoutes';
 import deckRoutes from './routes/deckRoutes';
 import chatRoutes from './routes/chatRoutes';
 import clientDiagRoutes from './routes/clientDiagRoutes';
-import logRoutes, { llmRouter } from './routes/logRoutes';
+import { mountLogViewers } from './routes/logRoutes';
 import { 
   addRequestId, 
   errorHandler, 
@@ -58,9 +58,8 @@ app.use('/api/loads', loadRoutes);
 app.use('/api/lobby', lobbyRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/diag', clientDiagRoutes);
-app.use('/logs', logRoutes);
-app.use('/log', logRoutes);
-app.use('/llm', llmRouter);
+// Log/LLM viewers (no auth) — served only in development or with ENABLE_DEBUG_VIEWERS=true
+mountLogViewers(app);
 
 // Catch-all handler for client-side routing (only for non-API, non-static routes)
 app.get('*', (req, res, next) => {
