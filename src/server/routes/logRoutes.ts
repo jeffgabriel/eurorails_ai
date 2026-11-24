@@ -23,6 +23,7 @@ import {
 import { GameTurnLogEntry } from '../services/ai/GameLogger';
 import { LLMTranscriptEntry } from '../services/ai/LLMTranscriptLogger';
 import { areDebugViewersEnabled } from '../utils/debugAccess';
+import { escapeHtml } from '../utils/escapeHtml';
 
 const router = express.Router();
 
@@ -469,20 +470,6 @@ const handleLLMViewer: express.RequestHandler = (req, res) => {
 router.get('/llm/:gameId', handleLLMViewer);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * Escape a value for interpolation into HTML text or a quoted attribute.
- * Accepts any value: log entries are parsed JSON, so a field typed as a number
- * may hold an arbitrary string at runtime.
- */
-function escapeHtml(value: unknown): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
   const name = entry.playerName ?? entry.playerId;

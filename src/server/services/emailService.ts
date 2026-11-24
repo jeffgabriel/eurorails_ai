@@ -1,26 +1,12 @@
 import nodemailer, { type Transporter } from 'nodemailer';
 import { Resend } from 'resend';
+import { escapeHtml } from '../utils/escapeHtml';
 
 /**
  * Email service interface for sending verification emails
  */
 export interface EmailService {
   sendVerificationEmail(email: string, username: string, verificationUrl: string): Promise<void>;
-}
-
-/**
- * Escapes HTML to prevent XSS attacks
- */
-function escapeHtml(text: string): string {
-  const htmlEscapeMap: { [key: string]: string } = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#x27;',
-    '/': '&#x2F;',
-  };
-  return text.replace(/[&<>"'/]/g, (char) => htmlEscapeMap[char]);
 }
 
 /**

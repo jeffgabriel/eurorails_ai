@@ -72,8 +72,14 @@ describe('debug surfaces (#299)', () => {
       expect(isDebugRouteRequestAllowed(undefined)).toBe(false);
     });
 
-    it('rejects the old hardcoded secret in production', () => {
+    it('rejects every request in production when no secret is configured', () => {
       setEnv({ NODE_ENV: 'production' });
+      expect(isDebugRouteRequestAllowed(OLD_HARDCODED_SECRET)).toBe(false);
+      expect(isDebugRouteRequestAllowed('anything-else')).toBe(false);
+    });
+
+    it('rejects the old hardcoded secret when a different secret is configured', () => {
+      setEnv({ NODE_ENV: 'production', DEBUG_ROUTES_SECRET: 's3cret-value' });
       expect(isDebugRouteRequestAllowed(OLD_HARDCODED_SECRET)).toBe(false);
     });
 
@@ -215,7 +221,7 @@ describe('debug surfaces (#299)', () => {
       expect(response.status).toBe(200);
       expect(response.text).not.toContain('<script>alert(1)</script>');
       expect(response.text).not.toContain('<img src=x');
-      expect(response.text).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+      expect(response.text).toContain('&lt;script&gt;alert(1)&lt;&#x2F;script&gt;');
       expect(response.text).toContain('&lt;img src=x onerror=&quot;alert(2)&quot;&gt;');
     });
   });
