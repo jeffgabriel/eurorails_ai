@@ -5,6 +5,9 @@
 // Set NODE_ENV to test before any imports
 process.env.NODE_ENV = 'test';
 
+// Bind test servers on OS-assigned ports to 127.0.0.1 (see the file for why)
+import './setupLoopbackListen';
+
 // Load environment variables if .env file exists
 import dotenv from 'dotenv';
 dotenv.config();
