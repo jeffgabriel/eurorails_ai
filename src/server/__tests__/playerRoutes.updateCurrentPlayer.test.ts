@@ -11,6 +11,7 @@ import express from 'express';
 jest.mock('../services/playerService', () => ({
   PlayerService: {
     endTurnForUser: jest.fn(),
+    settleBuildCostForUser: jest.fn(),
     getPlayers: jest.fn(),
   },
 }));
@@ -42,6 +43,7 @@ import { TurnGuardError, TurnGuardErrorCode } from '../services/turnGuard';
 import playerRoutes from '../routes/playerRoutes';
 
 const mockEndTurnForUser = PlayerService.endTurnForUser as jest.Mock;
+const mockSettleBuildCostForUser = PlayerService.settleBuildCostForUser as jest.Mock;
 const mockGetPlayers = PlayerService.getPlayers as jest.Mock;
 const mockEmitStatePatch = emitStatePatch as jest.Mock;
 const mockGetSocketIO = getSocketIO as jest.Mock;
@@ -66,7 +68,8 @@ describe('POST /api/players/updateCurrentPlayer', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.spyOn(console, 'error').mockImplementation(() => undefined);
-    mockEndTurnForUser.mockResolvedValue({ playerId, currentPlayerIndex: 1 });
+    mockEndTurnForUser.mockResolvedValue({ playerId, turnNumber: 4, currentPlayerIndex: 1 });
+    mockSettleBuildCostForUser.mockResolvedValue({ playerId, charged: 7, money: 43 });
     mockGetPlayers.mockResolvedValue([{ id: playerId, turnNumber: 4 }, { id: 'player-2', turnNumber: 3 }]);
     mockEmitStatePatch.mockResolvedValue(undefined);
     mockGetSocketIO.mockReturnValue({ to: jest.fn().mockReturnValue({ emit: mockRoomEmit }) });
@@ -97,14 +100,14 @@ describe('POST /api/players/updateCurrentPlayer', () => {
       const response = await endTurn({ gameId }).expect(200);
 
       expect(mockEndTurnForUser).toHaveBeenCalledWith(gameId, userId);
-      expect(response.body).toEqual({ currentPlayerIndex: 1 });
+      expect(response.body).toEqual({ currentPlayerIndex: 1, playerId, turnNumber: 4 });
     });
 
     it('should ignore a currentPlayerIndex sent by the client', async () => {
       const response = await endTurn({ gameId, currentPlayerIndex: 5 }).expect(200);
 
       expect(mockEndTurnForUser).toHaveBeenCalledWith(gameId, userId);
-      expect(response.body).toEqual({ currentPlayerIndex: 1 });
+      expect(response.body).toEqual({ currentPlayerIndex: 1, playerId, turnNumber: 4 });
     });
 
     it('should broadcast the reset track state and the ending player', async () => {
@@ -114,6 +117,7 @@ describe('POST /api/players/updateCurrentPlayer', () => {
         'track:updated',
         expect.objectContaining({ gameId, playerId }),
       );
+      expect(mockGetPlayers).toHaveBeenCalledWith(gameId, userId);
       expect(mockEmitStatePatch).toHaveBeenCalledWith(gameId, {
         players: [{ id: playerId, turnNumber: 4 }],
       });
@@ -169,5 +173,69 @@ describe('POST /api/players/updateCurrentPlayer', () => {
 
       expect(response.body.error).toBe('Server error');
     });
+  });
+});
+
+describe('POST /api/players/settle-build-cost', () => {
+  function settle(body: Record<string, unknown>, asUser: string | null = userId): request.Test {
+    const req = request(app).post('/api/players/settle-build-cost');
+    if (asUser) {
+      req.set('x-test-user', asUser);
+    }
+    return req.send(body);
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockSettleBuildCostForUser.mockResolvedValue({ playerId, charged: 7, money: 43 });
+    mockGetPlayers.mockResolvedValue([{ id: playerId, money: 43 }]);
+    mockEmitStatePatch.mockResolvedValue(undefined);
+    mockGetSocketIO.mockReturnValue({ to: jest.fn().mockReturnValue({ emit: mockRoomEmit }) });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('should return 401 without a token', async () => {
+    await settle({ gameId }, null).expect(401);
+
+    expect(mockSettleBuildCostForUser).not.toHaveBeenCalled();
+  });
+
+  it('should return 400 when gameId is missing', async () => {
+    await settle({}).expect(400);
+
+    expect(mockSettleBuildCostForUser).not.toHaveBeenCalled();
+  });
+
+  it('should settle for the authenticated user and broadcast the charge', async () => {
+    const response = await settle({ gameId }).expect(200);
+
+    expect(mockSettleBuildCostForUser).toHaveBeenCalledWith(gameId, userId);
+    expect(response.body).toEqual({ charged: 7, money: 43 });
+    expect(mockRoomEmit).toHaveBeenCalledWith('track:updated', expect.objectContaining({ gameId, playerId }));
+    expect(mockEmitStatePatch).toHaveBeenCalledWith(gameId, { players: [{ id: playerId, money: 43 }] });
+  });
+
+  it('should not broadcast when nothing was charged', async () => {
+    mockSettleBuildCostForUser.mockResolvedValueOnce({ playerId, charged: 0, money: 50 });
+
+    const response = await settle({ gameId }).expect(200);
+
+    expect(response.body).toEqual({ charged: 0, money: 50 });
+    expect(mockRoomEmit).not.toHaveBeenCalled();
+    expect(mockEmitStatePatch).not.toHaveBeenCalled();
+  });
+
+  it('should return 403 when the caller is not the current player', async () => {
+    mockSettleBuildCostForUser.mockRejectedValueOnce(
+      new TurnGuardError(TurnGuardErrorCode.NotYourTurn, 'Not your turn'),
+    );
+
+    const response = await settle({ gameId }).expect(403);
+
+    expect(response.body.code).toBe('NotYourTurn');
   });
 });

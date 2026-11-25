@@ -2123,9 +2123,9 @@ describe('PlayerService Integration Tests', () => {
             return { userIds, playerIds };
         }
 
-        async function readState(playerId: string): Promise<{ index: number; turnNumber: number; turnBuildCost: number }> {
+        async function readState(playerId: string): Promise<{ index: number; turnNumber: number; turnBuildCost: number; money: number }> {
             const game = await db.query('SELECT current_player_index FROM games WHERE id = $1', [gameId]);
-            const player = await db.query('SELECT current_turn_number FROM players WHERE id = $1', [playerId]);
+            const player = await db.query('SELECT current_turn_number, money FROM players WHERE id = $1', [playerId]);
             const track = await db.query(
                 'SELECT turn_build_cost FROM player_tracks WHERE game_id = $1 AND player_id = $2',
                 [gameId, playerId]
@@ -2134,20 +2134,45 @@ describe('PlayerService Integration Tests', () => {
                 index: Number(game.rows[0].current_player_index),
                 turnNumber: Number(player.rows[0].current_turn_number),
                 turnBuildCost: Number(track.rows[0].turn_build_cost),
+                money: Number(player.rows[0].money),
             };
         }
 
-        it('should advance the turn, increment the turn number and reset the build cost', async () => {
+        it('should advance the turn, increment the turn number, and charge and reset the build cost', async () => {
             const { userIds, playerIds } = await createTwoPlayers();
 
             const result = await PlayerService.endTurnForUser(gameId, userIds[0]);
 
-            expect(result).toEqual({ playerId: playerIds[0], currentPlayerIndex: 1 });
-            expect(await readState(playerIds[0])).toEqual({ index: 1, turnNumber: 2, turnBuildCost: 0 });
+            expect(result).toEqual({ playerId: playerIds[0], turnNumber: 2, currentPlayerIndex: 1 });
+            expect(await readState(playerIds[0])).toEqual({ index: 1, turnNumber: 2, turnBuildCost: 0, money: 43 });
             // The next player's bookkeeping is untouched.
-            const next = await readState(playerIds[1]);
-            expect(next.turnNumber).toBe(1);
-            expect(next.turnBuildCost).toBe(7);
+            expect(await readState(playerIds[1])).toEqual({ index: 1, turnNumber: 1, turnBuildCost: 7, money: 50 });
+        });
+
+        it('should charge the build cost once when it is settled before the turn ends', async () => {
+            const { userIds, playerIds } = await createTwoPlayers();
+
+            const first = await PlayerService.settleBuildCostForUser(gameId, userIds[0]);
+            expect(first).toEqual({ playerId: playerIds[0], charged: 7, money: 43 });
+            // The turn has not ended: only money and the build cost moved.
+            expect(await readState(playerIds[0])).toEqual({ index: 0, turnNumber: 1, turnBuildCost: 0, money: 43 });
+
+            // A retry (e.g. after a failed end-turn request and a page reload) charges nothing.
+            const second = await PlayerService.settleBuildCostForUser(gameId, userIds[0]);
+            expect(second).toEqual({ playerId: playerIds[0], charged: 0, money: 43 });
+
+            await PlayerService.endTurnForUser(gameId, userIds[0]);
+            expect(await readState(playerIds[0])).toEqual({ index: 1, turnNumber: 2, turnBuildCost: 0, money: 43 });
+        });
+
+        it('should refuse to settle the build cost of a player who is not the current player', async () => {
+            const { userIds, playerIds } = await createTwoPlayers();
+
+            await expect(
+                PlayerService.settleBuildCostForUser(gameId, userIds[1])
+            ).rejects.toMatchObject({ code: TurnGuardErrorCode.NotYourTurn, httpStatus: 403 });
+
+            expect(await readState(playerIds[1])).toEqual({ index: 0, turnNumber: 1, turnBuildCost: 7, money: 50 });
         });
 
         it('should reject a player who is not the current player and change nothing', async () => {
@@ -2161,7 +2186,7 @@ describe('PlayerService Integration Tests', () => {
                 httpStatus: 403,
             });
 
-            expect(await readState(playerIds[1])).toEqual({ index: 0, turnNumber: 1, turnBuildCost: 7 });
+            expect(await readState(playerIds[1])).toEqual({ index: 0, turnNumber: 1, turnBuildCost: 7, money: 50 });
         });
 
         it('should reject a second end-turn from the same player', async () => {
@@ -2192,7 +2217,7 @@ describe('PlayerService Integration Tests', () => {
 
             const afterP2 = await PlayerService.endTurnForUser(gameId, userIds[1]);
             expect(afterP2.currentPlayerIndex).toBe(0);
-            expect(await readState(playerIds[1])).toEqual({ index: 0, turnNumber: 2, turnBuildCost: 0 });
+            expect(await readState(playerIds[1])).toEqual({ index: 0, turnNumber: 2, turnBuildCost: 0, money: 43 });
 
             const afterP1 = await PlayerService.endTurnForUser(gameId, userIds[0]);
             expect(afterP1.currentPlayerIndex).toBe(0);

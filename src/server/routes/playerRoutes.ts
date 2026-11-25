@@ -186,15 +186,19 @@ router.post('/updateCurrentPlayer', authenticateToken, async (req, res) => {
             });
         }
 
-        // Broadcast the ending player's new turn number (the client's
-        // /players/update call used to trigger this patch).
-        const updatedPlayers = await PlayerService.getPlayers(gameId, '');
+        // Broadcast the ending player's new turn number and settled money (the
+        // client's /players/update calls used to trigger this patch).
+        const updatedPlayers = await PlayerService.getPlayers(gameId, userId);
         const endingPlayer = updatedPlayers.find(p => p.id === result.playerId);
         if (endingPlayer) {
             await emitStatePatch(gameId, { players: [endingPlayer] } as any);
         }
 
-        return res.status(200).json({ currentPlayerIndex: result.currentPlayerIndex });
+        return res.status(200).json({
+            currentPlayerIndex: result.currentPlayerIndex,
+            playerId: result.playerId,
+            turnNumber: result.turnNumber,
+        });
     } catch (error: any) {
         if (error instanceof TurnGuardError) {
             return res.status(error.httpStatus).json(error.toResponseBody());
@@ -207,6 +211,60 @@ router.post('/updateCurrentPlayer', authenticateToken, async (req, res) => {
         }
         console.error('Error in /updateCurrentPlayer route:', error);
         return res.status(500).json({ 
+            error: 'Server error',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
+// Settle the caller's build cost for this turn (authenticated, server-authoritative).
+// Charges money for turn_build_cost and resets it, atomically and idempotently.
+// The client calls it before its end-of-turn victory check; ending the turn
+// settles again, so nothing is ever charged twice or left unpaid.
+router.post('/settle-build-cost', authenticateToken, async (req, res) => {
+    try {
+        const { gameId } = req.body as { gameId?: string };
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!gameId) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'Game ID is required'
+            });
+        }
+
+        const result = await PlayerService.settleBuildCostForUser(gameId, userId);
+
+        if (result.charged !== 0) {
+            const io = getSocketIO();
+            if (io) {
+                io.to(gameId).emit('track:updated', {
+                    gameId,
+                    playerId: result.playerId,
+                    timestamp: Date.now()
+                });
+            }
+            const updatedPlayers = await PlayerService.getPlayers(gameId, userId);
+            const updatedPlayer = updatedPlayers.find(p => p.id === result.playerId);
+            if (updatedPlayer) {
+                await emitStatePatch(gameId, { players: [updatedPlayer] } as any);
+            }
+        }
+
+        return res.status(200).json({ charged: result.charged, money: result.money });
+    } catch (error: any) {
+        if (error instanceof TurnGuardError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+        console.error('Error in /settle-build-cost route:', error);
+        return res.status(500).json({
             error: 'Server error',
             details: error.message || 'An unexpected error occurred'
         });

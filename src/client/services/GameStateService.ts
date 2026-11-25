@@ -127,9 +127,13 @@ export class GameStateService {
     }
     
     /**
-     * Deduct the turn's build cost from the player whose turn is ending. Must
+     * Charge the turn's build cost to the player whose turn is ending. Must
      * run BEFORE the victory eligibility check — eligibility reads
      * post-deduction money.
+     *
+     * For the local player the server does the charge (and resets its recorded
+     * build cost) in one idempotent step. If that call fails the turn still
+     * proceeds: ending the turn settles whatever is outstanding.
      */
     public async applyBuildCostDeduction(player: Player, buildCost: number): Promise<void> {
         if (buildCost <= 0) {
@@ -137,16 +141,15 @@ export class GameStateService {
         }
 
         const isLocalPlayer = this.playerStateService?.getLocalPlayerId() === player.id;
-        const newMoney = player.money - buildCost;
         try {
             if (isLocalPlayer && this.playerStateService) {
-                await this.playerStateService.updatePlayerMoney(newMoney, this.gameState.id);
+                await this.playerStateService.settleBuildCost(this.gameState.id);
             } else {
                 // Non-local player - update in shared state for display purposes
-                player.money = newMoney;
+                player.money = player.money - buildCost;
             }
         } catch (error) {
-            console.error('Error updating player money:', error);
+            console.error('Error settling build cost:', error);
         }
     }
 
@@ -159,8 +162,6 @@ export class GameStateService {
      * PlayerStateService focuses on local player operations only.
      */
     public async nextPlayerTurn(): Promise<void> {
-        const endingPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-
         try {
             // Use authenticatedFetch for automatic token refresh
             const { authenticatedFetch } = await import('./authenticatedFetch');
@@ -182,10 +183,14 @@ export class GameStateService {
             // Only update local state after API succeeds
             const updatedState = await response.json();
 
-            // Mirror the server's end-of-turn increment for the player whose turn
-            // just ended (the server owns the persisted value).
-            if (endingPlayer) {
-                endingPlayer.turnNumber = (endingPlayer.turnNumber ?? 1) + 1;
+            // Apply the turn number the server assigned to the player whose turn
+            // ended. The server names that player (it is the authenticated
+            // caller), so a stale local currentPlayerIndex cannot mis-target it.
+            if (typeof updatedState.turnNumber === 'number') {
+                const endedPlayer = this.gameState.players.find(p => p.id === updatedState.playerId);
+                if (endedPlayer) {
+                    endedPlayer.turnNumber = updatedState.turnNumber;
+                }
             }
 
             if (updatedState.currentPlayerIndex !== undefined) {
