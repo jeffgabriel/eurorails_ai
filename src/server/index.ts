@@ -17,6 +17,7 @@ import { mountLogViewers } from './routes/logRoutes';
 import { checkDatabase, db } from './db';
 import { PlayerService } from './services/playerService';
 import { AuthService } from './services/authService';
+import { configureTrustProxy } from './middleware/authRateLimit';
 import { addRequestId } from './middleware/errorHandler';
 import { initializeSocketIO } from './services/socketService';
 import { initializeCleanupJobs } from './cron/cleanupJobs';
@@ -24,6 +25,8 @@ import { moderationService } from './services/moderationService';
 import { isOriginAllowed } from './utils/corsOrigins';
 
 const app = express();
+// Resolve req.ip through the platform proxy so per-IP rate limits key on the client
+configureTrustProxy(app);
 // Railway provides PORT env var, fallback to 3000 for consistency with Docker health check
 const port = parseInt(process.env.PORT || '3001', 10);
 

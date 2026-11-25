@@ -2,7 +2,7 @@ import { db } from '../db';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
-import { User, UserRow, LoginForm, RegisterForm, AuthResult, JWTPayload } from '../../shared/types/AuthTypes';
+import { User, UserRow, LoginForm, RegisterForm, AuthResult, JWTPayload, RefreshTokenPayload } from '../../shared/types/AuthTypes';
 
 export class AuthService {
   private static readonly SALT_ROUNDS = 12;
@@ -72,14 +72,41 @@ export class AuthService {
   }
 
   /**
-   * Verify and decode JWT token
+   * Verify the signature and expiry of a token of either kind
    */
-  static verifyToken(token: string): JWTPayload | null {
+  private static decodeToken(token: string): Record<string, unknown> | null {
     try {
-      return jwt.verify(token, this.JWT_SECRET) as JWTPayload;
+      const decoded = jwt.verify(token, this.JWT_SECRET);
+      return typeof decoded === 'object' && decoded !== null ? decoded as Record<string, unknown> : null;
     } catch (error) {
       return null;
     }
+  }
+
+  /**
+   * Verify and decode an access token.
+   *
+   * Refresh tokens are signed with the same secret and carry the same userId,
+   * so they must be turned away here: otherwise a 7-day refresh token works as
+   * an access token on every JWT route and on the socket handshake.
+   */
+  static verifyToken(token: string): JWTPayload | null {
+    const decoded = this.decodeToken(token);
+    if (!decoded || decoded.type === 'refresh' || typeof decoded.userId !== 'string') {
+      return null;
+    }
+    return decoded as unknown as JWTPayload;
+  }
+
+  /**
+   * Verify and decode a refresh token. Access tokens are rejected.
+   */
+  static verifyRefreshToken(token: string): RefreshTokenPayload | null {
+    const decoded = this.decodeToken(token);
+    if (!decoded || decoded.type !== 'refresh' || typeof decoded.userId !== 'string') {
+      return null;
+    }
+    return decoded as unknown as RefreshTokenPayload;
   }
 
   /**
@@ -280,9 +307,9 @@ export class AuthService {
    */
   static async refreshAccessToken(refreshToken: string): Promise<{ token: string; refreshToken: string }> {
     try {
-      const decoded = jwt.verify(refreshToken, this.JWT_SECRET) as any;
-      if (decoded.type !== 'refresh') {
-        throw new Error('Invalid refresh token');
+      const decoded = this.verifyRefreshToken(refreshToken);
+      if (!decoded) {
+        throw new Error('Not a valid, unexpired refresh token');
       }
 
       // Generate new tokens

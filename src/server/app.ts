@@ -17,8 +17,11 @@ import {
   notFoundHandler 
 } from './middleware/errorHandler';
 import { requestLoggingMiddleware } from './middleware/requestLogger';
+import { configureTrustProxy } from './middleware/authRateLimit';
 
 const app = express();
+// Resolve req.ip through the platform proxy so per-IP rate limits key on the client
+configureTrustProxy(app);
 
 // Request ID middleware (must be first)
 app.use(addRequestId);

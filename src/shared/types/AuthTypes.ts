@@ -48,6 +48,14 @@ export interface JWTPayload {
   exp: number;
 }
 
+// Refresh token payload: only good for POST /api/auth/refresh, never as an access token
+export interface RefreshTokenPayload {
+  type: 'refresh';
+  userId: string;
+  iat: number;
+  exp: number;
+}
+
 // Database row interface for users table
 export interface UserRow {
   id: string;

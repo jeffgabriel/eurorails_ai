@@ -63,13 +63,16 @@ function isApiError(error: unknown): error is ApiError {
  * falls back to when a non-JSON error response can't be parsed (e.g. a
  * proxy/server outage in front of the route), which represents server
  * unavailability rather than a rejected token and must stay transient too.
+ * So must a 429 from the route's rate limiter: the refresh token was never
+ * examined, so the session is still good once the window passes.
  */
 function isDefinitiveRefreshRejection(error: unknown): boolean {
   if (!isApiError(error)) {
     return false;
   }
   const isServerOutageFallback = /^HTTP_5\d{2}$/.test(error.error);
-  return !isServerOutageFallback;
+  const isRateLimited = error.error === 'RATE_LIMIT_EXCEEDED' || error.error === 'HTTP_429';
+  return !isServerOutageFallback && !isRateLimited;
 }
 
 export const useAuthStore = create<AuthStore>((set, get) => ({

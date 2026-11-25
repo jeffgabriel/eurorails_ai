@@ -104,6 +104,22 @@ describe('useAuthStore.refreshAccessToken', () => {
     expect(mockedToast.error).not.toHaveBeenCalled();
   });
 
+  it.each(['RATE_LIMIT_EXCEEDED', 'HTTP_429'])(
+    'returns false and does NOT log out when the refresh is rate limited (%s), keeping tokens',
+    async (errorCode: string) => {
+      seedAuthenticatedState();
+      mockedApi.refreshToken.mockRejectedValue({ error: errorCode, message: 'Too many requests' });
+
+      const result = await useAuthStore.getState().refreshAccessToken();
+
+      expect(result).toBe(false);
+      expect(localStorage.getItem(JWT_STORAGE_KEY)).toBe('old-access-token');
+      expect(localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY)).toBe('old-refresh-token');
+      expect(useAuthStore.getState().isAuthenticated).toBe(true);
+      expect(mockedToast.error).not.toHaveBeenCalled();
+    },
+  );
+
   it('logs out, clears tokens, and shows a session-expired toast on a definitive 401 rejection', async () => {
     seedAuthenticatedState();
     mockedApi.refreshToken.mockRejectedValue({
