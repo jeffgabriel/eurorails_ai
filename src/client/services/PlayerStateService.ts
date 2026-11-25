@@ -445,46 +445,6 @@ export class PlayerStateService {
     }
 
     /**
-     * Update local player's turn number (per-player turns taken).
-     * Server-authoritative: API call first, update local state only after success.
-     *
-     * IMPORTANT: Don't send trainState.position here; position is managed separately.
-     */
-    public async updatePlayerTurnNumber(newTurnNumber: number, gameId: string): Promise<boolean> {
-        if (!this.localPlayer) {
-            console.error('Cannot update turn number: no local player');
-            return false;
-        }
-
-        try {
-            const playerWithoutPosition = this.createPlayerWithoutPosition(this.localPlayer);
-
-            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
-                method: 'POST',
-                body: JSON.stringify({
-                    gameId: gameId,
-                    player: {
-                        ...playerWithoutPosition,
-                        turnNumber: newTurnNumber
-                    }
-                })
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                console.error('Failed to update player turn number:', errorData);
-                return false;
-            }
-
-            this.localPlayer.turnNumber = newTurnNumber;
-            return true;
-        } catch (error) {
-            console.error('Error updating player turn number:', error);
-            return false;
-        }
-    }
-
-    /**
      * Deliver a load:
      * - Server-authoritative: compute payment + validate demand server-side
      * - Updates local state only after success

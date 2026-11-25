@@ -157,8 +157,17 @@ export class TrackService {
         });
     }
 
-    static async clearTurnBuildCost(gameId: string, playerId: string): Promise<void> {
-        await db.query(
+    /**
+     * Reset a player's per-turn build spend. Called by the server when the
+     * player's turn ends. If a transaction client is provided, it is used.
+     */
+    static async clearTurnBuildCost(
+        gameId: string,
+        playerId: string,
+        client?: { query: (text: string, params?: any[]) => Promise<any> }
+    ): Promise<void> {
+        const q = client && typeof client.query === 'function' ? client : db;
+        await q.query(
             `UPDATE player_tracks
              SET turn_build_cost = 0
              WHERE game_id = $1 AND player_id = $2`,

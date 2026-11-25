@@ -25,6 +25,7 @@ import {
 } from "./restrictionPredicates";
 import { cleanupGameState } from "./gameCleanupService";
 import { lockPlayerForUserTurn } from "./turnGuard";
+import { InitialBuildService } from "./InitialBuildService";
 
 /**
  * Statuses for the actions the hand UI offers from the first build turn on:
@@ -903,6 +904,83 @@ export class PlayerService {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * End the calling user's turn (server-authoritative, issue #304).
+   *
+   * In ONE transaction: confirms the user is the current player (row locks via
+   * `lockPlayerForUserTurn`), increments that player's `current_turn_number`,
+   * resets their `turn_build_cost`, and advances the turn — through
+   * `InitialBuildService` during `initialBuild`, or the transactional
+   * `updateCurrentPlayerIndex` path while `active`.
+   *
+   * The bookkeeping lives here rather than in `advanceTurn` because bots do
+   * their own at the START of their turn (`BotTurnTrigger.onTurnChange`) and
+   * then call `advanceTurn`; doing it there would count bot turns twice.
+   *
+   * The turn number is incremented BEFORE the advance so effect expiry
+   * (`cleanupExpiredEffects`) sees the same post-increment number it did when
+   * the client persisted the increment ahead of the end-turn call.
+   *
+   * @returns the ending player's id and the new current player index.
+   * @throws TurnGuardError when the user may not end the turn.
+   */
+  static async endTurnForUser(
+    gameId: string,
+    userId: string,
+  ): Promise<{ playerId: string; currentPlayerIndex: number }> {
+    const client = await db.connect();
+    let playerId: string;
+    let emitAfterCommit: (() => Promise<void>) | undefined;
+    try {
+      await client.query("BEGIN");
+
+      const { player, currentPlayerIndex, gameStatus } = await lockPlayerForUserTurn(
+        client,
+        gameId,
+        userId,
+        { allowedStatuses: ["active", "initialBuild"] },
+      );
+      playerId = player.id;
+
+      await client.query(
+        `UPDATE players
+         SET current_turn_number = COALESCE(current_turn_number, 1) + 1
+         WHERE game_id = $1 AND id = $2`,
+        [gameId, playerId],
+      );
+      await TrackService.clearTurnBuildCost(gameId, playerId, client);
+
+      if (gameStatus === "initialBuild") {
+        emitAfterCommit = await InitialBuildService.advanceTurnWithClient(
+          client,
+          gameId,
+          currentPlayerIndex,
+        );
+      } else {
+        const countResult = await client.query(
+          "SELECT COUNT(*)::int AS count FROM players WHERE game_id = $1",
+          [gameId],
+        );
+        const playerCount: number = countResult.rows[0]?.count || 1;
+        const nextIndex = (currentPlayerIndex + 1) % playerCount;
+        await PlayerService.updateCurrentPlayerIndex(gameId, nextIndex, client, currentPlayerIndex);
+      }
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    if (emitAfterCommit) {
+      await emitAfterCommit();
+    }
+    const gameState = await PlayerService.getGameState(gameId);
+    return { playerId, currentPlayerIndex: gameState.currentPlayerIndex };
   }
 
   /**

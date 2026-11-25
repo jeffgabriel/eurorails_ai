@@ -660,13 +660,10 @@ export class GameScene extends Phaser.Scene {
 
     // Always end-turn cleanup (even if buildCost was 0) so per-turn UI state resets
     // and undo state doesn't leak across turns (e.g., 0-cost ferry builds).
-    // This can throw and abort the turn; the turn-number increment below must
-    // stay after it so a failed/retried End Turn does not skip turn numbers.
-    await this.trackManager.endTurnCleanup(currentPlayer.id);
+    // Local only: the server resets the persisted build cost and increments the
+    // turn number when it ends the turn (gameStateService.nextPlayerTurn below).
+    this.trackManager.endTurnCleanup(currentPlayer.id);
     this.uiManager.clearTurnUndoStack();
-
-    // Increment the ending player's turn number only after cleanup succeeded.
-    await this.gameStateService.applyTurnNumberIncrement(currentPlayer);
 
     // Check victory conditions for local player ending their turn
     // Only check if victory hasn't been triggered yet

@@ -51,7 +51,6 @@ describe('GameStateService turn-end accounting', () => {
     playerStateService = {
       getLocalPlayerId: jest.fn().mockReturnValue('local-1'),
       updatePlayerMoney: jest.fn().mockResolvedValue(true),
-      updatePlayerTurnNumber: jest.fn().mockResolvedValue(true),
     } as unknown as jest.Mocked<PlayerStateService>;
     service.setPlayerStateService(playerStateService);
   });
@@ -100,43 +99,61 @@ describe('GameStateService turn-end accounting', () => {
     });
   });
 
-  describe('applyTurnNumberIncrement', () => {
-    it('persists the incremented turn number for the local player via the API', async () => {
-      // Server-authoritative: the local turnNumber is advanced inside
-      // updatePlayerTurnNumber on success, not before the await.
-      await service.applyTurnNumberIncrement(localPlayer);
+  describe('nextPlayerTurn', () => {
+    const { authenticatedFetch } = jest.requireMock('../services/authenticatedFetch') as {
+      authenticatedFetch: jest.Mock;
+    };
 
-      expect(playerStateService.updatePlayerTurnNumber).toHaveBeenCalledWith(4, 'game-1');
+    function respond(ok: boolean, body: unknown): void {
+      authenticatedFetch.mockResolvedValueOnce({ ok, json: async () => body });
+    }
+
+    it('asks the server to end the turn without choosing the next player', async () => {
+      respond(true, { currentPlayerIndex: 1 });
+
+      await service.nextPlayerTurn();
+
+      expect(authenticatedFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = authenticatedFetch.mock.calls[0];
+      expect(url).toBe('http://test/api/players/updateCurrentPlayer');
+      expect(JSON.parse(init.body)).toEqual({ gameId: 'game-1' });
     });
 
-    it('increments a non-local player directly without persisting', async () => {
-      await service.applyTurnNumberIncrement(otherPlayer);
+    it('applies the server index and mirrors the turn-number increment on success', async () => {
+      respond(true, { currentPlayerIndex: 1 });
 
-      expect(otherPlayer.turnNumber).toBe(3);
-      expect(playerStateService.updatePlayerTurnNumber).not.toHaveBeenCalled();
+      await service.nextPlayerTurn();
+
+      expect(service.getGameState().currentPlayerIndex).toBe(1);
+      expect(localPlayer.turnNumber).toBe(4);
+      expect(otherPlayer.turnNumber).toBe(2);
     });
 
     it('defaults a missing turn number to 1 before incrementing', async () => {
-      const freshPlayer = createPlayer('other-1', 40, undefined);
-      await service.applyTurnNumberIncrement(freshPlayer);
+      localPlayer.turnNumber = undefined as unknown as number;
+      respond(true, { currentPlayerIndex: 1 });
 
-      expect(freshPlayer.turnNumber).toBe(2);
+      await service.nextPlayerTurn();
+
+      expect(localPlayer.turnNumber).toBe(2);
     });
 
-    it('does not advance the local turn number when persistence fails', async () => {
-      playerStateService.updatePlayerTurnNumber.mockResolvedValueOnce(false);
-
-      await service.applyTurnNumberIncrement(localPlayer);
-
-      // Local state stays in sync with the server (no premature increment).
-      expect(localPlayer.turnNumber).toBe(3);
-    });
-
-    it('does not throw when the update rejects', async () => {
+    it('changes nothing locally when the server refuses', async () => {
       const errorSpy = jest.spyOn(console, 'error').mockImplementation();
-      playerStateService.updatePlayerTurnNumber.mockRejectedValueOnce(new Error('api down'));
+      respond(false, { error: 'Forbidden', code: 'NotYourTurn' });
 
-      await expect(service.applyTurnNumberIncrement(localPlayer)).resolves.toBeUndefined();
+      await service.nextPlayerTurn();
+
+      expect(service.getGameState().currentPlayerIndex).toBe(0);
+      expect(localPlayer.turnNumber).toBe(3);
+      errorSpy.mockRestore();
+    });
+
+    it('does not throw or change local state when the request rejects', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+      authenticatedFetch.mockRejectedValueOnce(new Error('api down'));
+
+      await expect(service.nextPlayerTurn()).resolves.toBeUndefined();
       expect(localPlayer.turnNumber).toBe(3);
       expect(errorSpy).toHaveBeenCalled();
       errorSpy.mockRestore();

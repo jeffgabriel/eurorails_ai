@@ -5,9 +5,7 @@ import { requireGameMembership } from '../middleware/gameMembership';
 import { emitStatePatch, getSocketIO } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
-import { InitialBuildService } from '../services/InitialBuildService';
 import { TurnGuardError } from '../services/turnGuard';
-import { db } from '../db';
 
 const router = express.Router();
 
@@ -153,65 +151,60 @@ router.get('/:gameId', authenticateToken, requireGameMembership('gameId'), async
     }
 });
 
-// Update current player
-router.post('/updateCurrentPlayer', async (req, res) => {
+// End the caller's turn (authenticated, server-authoritative).
+// The server decides who is next and owns the end-of-turn bookkeeping (turn
+// number, build-cost reset); any `currentPlayerIndex` in the body is ignored.
+router.post('/updateCurrentPlayer', authenticateToken, async (req, res) => {
     try {
-        const { gameId, currentPlayerIndex } = req.body;
+        const { gameId } = req.body as { gameId?: string };
+        const userId = req.user?.id;
 
-        // Validate request
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
         if (!gameId) {
-            console.error('Invalid request - missing gameId:', req.body);
-            return res.status(400).json({ 
+            return res.status(400).json({
                 error: 'Validation error',
                 details: 'Game ID is required'
             });
         }
 
-        if (typeof currentPlayerIndex !== 'number') {
-            console.error('Invalid request - missing or invalid currentPlayerIndex:', req.body);
-            return res.status(400).json({ 
-                error: 'Validation error',
-                details: 'Current player index must be a number'
+        const result = await PlayerService.endTurnForUser(gameId, userId);
+
+        // The ending player's turn_build_cost was reset; tell clients to refresh
+        // that player's track state (the client's /tracks/save clear used to do this).
+        const io = getSocketIO();
+        if (io) {
+            io.to(gameId).emit('track:updated', {
+                gameId,
+                playerId: result.playerId,
+                timestamp: Date.now()
             });
         }
 
-        // Check game status for phase-aware routing
-        const gameResult = await db.query(
-            'SELECT status, current_player_index FROM games WHERE id = $1',
-            [gameId],
-        );
-        const gameRow = gameResult.rows[0];
-        const gameStatus = gameRow?.status;
-
-        if (gameStatus === 'initialBuild') {
-            // During initial build phase, use InitialBuildService for turn advancement.
-            // Pass the DB's current_player_index so advanceTurn can detect stale/duplicate
-            // requests inside its serialised transaction (the client sends the *next* index,
-            // so we cannot compare it here — the check lives inside the FOR UPDATE lock).
-            try {
-                await InitialBuildService.advanceTurn(gameId, gameRow.current_player_index);
-            } catch (err: any) {
-                if (err.stale) {
-                    return res.status(409).json({
-                        error: 'Conflict',
-                        details: err.message,
-                    });
-                }
-                throw err;
-            }
-            const gameState = await PlayerService.getGameState(gameId);
-            return res.status(200).json(gameState);
+        // Broadcast the ending player's new turn number (the client's
+        // /players/update call used to trigger this patch).
+        const updatedPlayers = await PlayerService.getPlayers(gameId, '');
+        const endingPlayer = updatedPlayers.find(p => p.id === result.playerId);
+        if (endingPlayer) {
+            await emitStatePatch(gameId, { players: [endingPlayer] } as any);
         }
 
-        // Active phase: advanceTurn handles the transaction, effect cleanup,
-        // turn-skip logic, and turn-change emit internally.
-        await PlayerService.advanceTurn(gameId);
-
-        // Get the updated game state
-        const gameState = await PlayerService.getGameState(gameId);
-
-        return res.status(200).json(gameState);
+        return res.status(200).json({ currentPlayerIndex: result.currentPlayerIndex });
     } catch (error: any) {
+        if (error instanceof TurnGuardError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+        if (error?.stale) {
+            return res.status(409).json({
+                error: 'Conflict',
+                details: error.message,
+            });
+        }
         console.error('Error in /updateCurrentPlayer route:', error);
         return res.status(500).json({ 
             error: 'Server error',

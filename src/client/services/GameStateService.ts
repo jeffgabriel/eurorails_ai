@@ -151,43 +151,16 @@ export class GameStateService {
     }
 
     /**
-     * Increment the per-player turn count at END of the active player's turn.
-     * Do NOT increment the next active player; that incorrectly advances
-     * players on their first activation. Must run only AFTER end-of-turn
-     * cleanup succeeds — otherwise a failed/retried End Turn skips turn numbers.
-     */
-    public async applyTurnNumberIncrement(player: Player): Promise<void> {
-        const isLocalPlayer = this.playerStateService?.getLocalPlayerId() === player.id;
-        const newTurnNumber = (player.turnNumber ?? 1) + 1;
-        try {
-            if (isLocalPlayer && this.playerStateService) {
-                // Server-authoritative: updatePlayerTurnNumber updates local state
-                // only after the API succeeds, so on failure local stays in sync
-                // with the server (no premature increment).
-                await this.playerStateService.updatePlayerTurnNumber(
-                    newTurnNumber,
-                    this.gameState.id
-                );
-            } else {
-                // Non-local player - update shared state for display purposes.
-                player.turnNumber = newTurnNumber;
-            }
-        } catch (error) {
-            console.error('Error updating player turn number:', error);
-        }
-    }
-
-    /**
-     * Move to the next player's turn
-     * Server-authoritative: API call first, update local state only after success
+     * End the current player's turn.
+     * Server-authoritative: the server checks the caller is the current player,
+     * increments their turn number, resets their per-turn build cost and picks
+     * the next player. Local state is updated only after the API succeeds.
      * Note: getCurrentPlayer() is about turn management (shared state), so it belongs in GameStateService.
      * PlayerStateService focuses on local player operations only.
      */
     public async nextPlayerTurn(): Promise<void> {
-        // Calculate next player index (for API call only, not for local state)
-        const nextPlayerIndex = (this.gameState.currentPlayerIndex + 1) % this.gameState.players.length;
-        
-        // Server-authoritative: Make API call first
+        const endingPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+
         try {
             // Use authenticatedFetch for automatic token refresh
             const { authenticatedFetch } = await import('./authenticatedFetch');
@@ -195,8 +168,7 @@ export class GameStateService {
             const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/updateCurrentPlayer`, {
                 method: 'POST',
                 body: JSON.stringify({
-                    gameId: this.gameState.id,
-                    currentPlayerIndex: nextPlayerIndex
+                    gameId: this.gameState.id
                 })
             });
 
@@ -209,6 +181,13 @@ export class GameStateService {
 
             // Only update local state after API succeeds
             const updatedState = await response.json();
+
+            // Mirror the server's end-of-turn increment for the player whose turn
+            // just ended (the server owns the persisted value).
+            if (endingPlayer) {
+                endingPlayer.turnNumber = (endingPlayer.turnNumber ?? 1) + 1;
+            }
+
             if (updatedState.currentPlayerIndex !== undefined) {
                 this.gameState.currentPlayerIndex = updatedState.currentPlayerIndex;
                 // Notify listeners of turn change

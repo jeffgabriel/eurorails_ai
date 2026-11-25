@@ -205,7 +205,7 @@ describe('TrackDrawingManager Undo Feature', () => {
     const playerId = mockGameState.players[0].id;
     expect(manager.getLastBuildCost(playerId)).toBeGreaterThan(0);
     // Call endTurnCleanup
-    await manager.endTurnCleanup(playerId);
+    manager.endTurnCleanup(playerId);
     expect(manager.segmentsDrawnThisTurn).toEqual([]);
     expect(manager.getLastBuildCost(playerId)).toBe(0);
   });
@@ -351,7 +351,7 @@ describe('TrackDrawingManager Undo Feature', () => {
     expect(manager.segmentsDrawnThisTurn).toEqual([segment1]);
     // End turn (simulate turn change)
     const playerId = mockGameState.players[0].id;
-    await manager.endTurnCleanup(playerId);
+    manager.endTurnCleanup(playerId);
     expect(manager.segmentsDrawnThisTurn).toEqual([]);
     // Try to undo (should do nothing)
     await manager.undoLastSegment();
