@@ -292,6 +292,7 @@ export function getErrorMessage(error: ApiError): string {
     EMAIL_NOT_VERIFIED: 'Email verification required',
     INVALID_REFRESH_TOKEN: 'Invalid or expired refresh token',
     PASSWORD_CHANGE_FAILED: 'Password change failed',
+    RATE_LIMIT_EXCEEDED: 'Too many attempts. Please wait a few minutes and try again.',
     
     // Game errors
     GAME_NOT_FOUND: 'Game not found',

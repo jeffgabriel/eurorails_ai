@@ -63,13 +63,26 @@ function isApiError(error: unknown): error is ApiError {
  * falls back to when a non-JSON error response can't be parsed (e.g. a
  * proxy/server outage in front of the route), which represents server
  * unavailability rather than a rejected token and must stay transient too.
+ * So must a 429 from the route's rate limiter: the refresh token was never
+ * examined, so the session is still good once the window passes.
  */
 function isDefinitiveRefreshRejection(error: unknown): boolean {
   if (!isApiError(error)) {
     return false;
   }
   const isServerOutageFallback = /^HTTP_5\d{2}$/.test(error.error);
-  return !isServerOutageFallback;
+  const isRateLimited = error.error === 'RATE_LIMIT_EXCEEDED' || error.error === 'HTTP_429';
+  return !isServerOutageFallback && !isRateLimited;
+}
+
+/** Parse the user persisted in localStorage; null if it is missing or corrupt. */
+function parsePersistedUser(userJson: string): User | null {
+  try {
+    const parsed: unknown = JSON.parse(userJson);
+    return typeof parsed === 'object' && parsed !== null ? (parsed as User) : null;
+  } catch {
+    return null;
+  }
 }
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
@@ -312,6 +325,26 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
             get().logout();
             return;
           }
+        }
+
+        // refreshAccessToken() returns false for both a definitive rejection
+        // (it has already logged out and cleared the persisted tokens) and a
+        // transient failure such as a 429 from the refresh rate limiter or a
+        // server outage (tokens retained). In the transient case the refresh
+        // token is still good, so keep the persisted session rather than
+        // deleting it: the next 401 or socket auth retry refreshes again.
+        const persistedUser = parsePersistedUser(userJson);
+        if (localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY) && persistedUser) {
+          console.warn('Token refresh failed transiently while loading persisted auth; retaining session');
+          set({
+            user: persistedUser,
+            token,
+            refreshToken,
+            isAuthenticated: true,
+            isLoading: false,
+            error: null,
+          });
+          return;
         }
       }
       

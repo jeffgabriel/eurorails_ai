@@ -3,6 +3,7 @@ import { AuthService } from '../services/authService';
 import { VerificationService } from '../services/verificationService';
 import { asyncHandler } from '../middleware/errorHandler';
 import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
+import { loginRateLimiter, registerRateLimiter, refreshRateLimiter } from '../middleware/authRateLimit';
 import { LoginForm, RegisterForm, User } from '../../shared/types/AuthTypes';
 
 const router = express.Router();
@@ -46,7 +47,7 @@ function validateEmail(email: string): boolean {
  * POST /api/auth/register
  * Register a new user
  */
-router.post('/register', asyncHandler(async (req: Request, res: Response) => {
+router.post('/register', registerRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const { username, email, password, confirmPassword }: RegisterRequest = req.body;
 
   // Validate required fields
@@ -111,7 +112,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
  * POST /api/auth/login
  * Login user
  */
-router.post('/login', asyncHandler(async (req: Request, res: Response) => {
+router.post('/login', loginRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const { email, password }: LoginRequest = req.body;
 
   // Validate required fields
@@ -171,7 +172,7 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
  * POST /api/auth/refresh
  * Refresh access token using refresh token
  */
-router.post('/refresh', asyncHandler(async (req: Request, res: Response) => {
+router.post('/refresh', refreshRateLimiter, asyncHandler(async (req: Request, res: Response) => {
   const { refreshToken }: RefreshTokenRequest = req.body;
 
   // Validate required fields
