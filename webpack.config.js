@@ -133,7 +133,9 @@ module.exports = {
         ws: true
       },
       {
-        context: ['/logs', '/log', '/llm'],
+        // Debug viewers. Match whole path segments: a plain '/log' prefix also
+        // captures '/login', sending its document request to the API server.
+        context: (pathname) => /^\/(logs|log|llm)(\/|$)/.test(pathname),
         target: 'http://localhost:3001',
         secure: false,
         changeOrigin: true
