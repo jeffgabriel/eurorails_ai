@@ -3,6 +3,7 @@ import { LoadType } from '../../shared/types/LoadTypes';
 import { loadService } from '../services/loadService';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { PlayerService } from '../services/playerService';
+import { assertUserTurn, TurnGuardError } from '../services/turnGuard';
 import { emitStatePatch } from '../services/socketService';
 import { db } from '../db';
 
@@ -66,13 +67,8 @@ const handleLoadPickup: RequestHandler = async (req: Request, res: Response) => 
       });
     }
 
-    const isPlayer = await PlayerService.isUserPlayerInGame(gameId, req.user.id);
-    if (!isPlayer) {
-      return res.status(403).json({ 
-        error: 'FORBIDDEN',
-        details: 'You are not a player in this game' 
-      });
-    }
+    // Membership, game status and turn (replaced by server-side load actions in #310).
+    await assertUserTurn(gameId, req.user.id);
 
     const result = await loadService.pickupDroppedLoad(city, loadType, gameId);
     
@@ -85,6 +81,9 @@ const handleLoadPickup: RequestHandler = async (req: Request, res: Response) => 
     
     res.json(result);
   } catch (error) {
+    if (error instanceof TurnGuardError) {
+      return res.status(error.httpStatus).json(error.toResponseBody());
+    }
     console.error('Error picking up load:', error);
     res.status(500).json({ error: 'Failed to pick up load' });
   }
@@ -107,13 +106,8 @@ const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => 
       });
     }
 
-    const isPlayer = await PlayerService.isUserPlayerInGame(gameId, req.user.id);
-    if (!isPlayer) {
-      return res.status(403).json({ 
-        error: 'FORBIDDEN',
-        details: 'You are not a player in this game' 
-      });
-    }
+    // Membership, game status and turn (replaced by server-side load actions in #310).
+    await assertUserTurn(gameId, req.user.id);
     
     if (city === undefined || city === null || city === '') {
       // If this game currently has a dropped load chip of this type, we must have a city to clear it.
@@ -144,6 +138,9 @@ const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => 
     
     res.json(result);
   } catch (error) {
+    if (error instanceof TurnGuardError) {
+      return res.status(error.httpStatus).json(error.toResponseBody());
+    }
     console.error('Error returning load:', error);
     res.status(500).json({ error: 'Failed to return load' });
   }
@@ -166,13 +163,8 @@ const handleSetLoadInCity: RequestHandler = async (req: Request, res: Response) 
       });
     }
 
-    const isPlayer = await PlayerService.isUserPlayerInGame(gameId, req.user.id);
-    if (!isPlayer) {
-      return res.status(403).json({ 
-        error: 'FORBIDDEN',
-        details: 'You are not a player in this game' 
-      });
-    }
+    // Membership, game status and turn (replaced by server-side load actions in #310).
+    await assertUserTurn(gameId, req.user.id);
 
     const result = await loadService.setLoadInCity(city, loadType, gameId);
     
@@ -183,6 +175,9 @@ const handleSetLoadInCity: RequestHandler = async (req: Request, res: Response) 
     
     res.json(result);
   } catch (error) {
+    if (error instanceof TurnGuardError) {
+      return res.status(error.httpStatus).json(error.toResponseBody());
+    }
     console.error('Error setting load in city:', error);
     res.status(500).json({ error: 'Failed to set load in city' });
   }

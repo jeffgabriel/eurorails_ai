@@ -9,6 +9,7 @@ import express from 'express';
 import playerRoutes from '../routes/playerRoutes';
 import { PlayerService } from '../services/playerService';
 import { AuthService } from '../services/authService';
+import { TurnGuardError, TurnGuardErrorCode } from '../services/turnGuard';
 import * as socketService from '../services/socketService';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -228,7 +229,9 @@ describe('POST /api/players/borrow - Mercy Borrowing', () => {
     });
 
     it('should return 403 when it is not the player\'s turn', async () => {
-      mockPlayerService.borrowForUser.mockRejectedValue(new Error('Not your turn'));
+      mockPlayerService.borrowForUser.mockRejectedValue(
+        new TurnGuardError(TurnGuardErrorCode.NotYourTurn, 'Not your turn')
+      );
 
       const response = await request(app)
         .post('/api/players/borrow')
@@ -244,14 +247,16 @@ describe('POST /api/players/borrow - Mercy Borrowing', () => {
     });
   });
 
-  describe('Not Found (404)', () => {
+  describe('Not a member (403)', () => {
     beforeEach(() => {
       mockAuthService.verifyToken.mockReturnValue(mockTokenPayload);
       mockAuthService.findUserById.mockResolvedValue(mockUser);
     });
 
-    it('should return 404 when player is not found in the game', async () => {
-      mockPlayerService.borrowForUser.mockRejectedValue(new Error('Player not found in game'));
+    it('should return 403 when the user has no player in the game', async () => {
+      mockPlayerService.borrowForUser.mockRejectedValue(
+        new TurnGuardError(TurnGuardErrorCode.NotAMember, 'Player not found in game')
+      );
 
       const response = await request(app)
         .post('/api/players/borrow')
@@ -260,10 +265,36 @@ describe('POST /api/players/borrow - Mercy Borrowing', () => {
           gameId: testGameId,
           amount: 10
         })
-        .expect(404);
+        .expect(403);
 
-      expect(response.body.error).toBe('Not found');
+      expect(response.body.error).toBe('Forbidden');
+      expect(response.body.code).toBe('NotAMember');
       expect(response.body.details).toBe('Player not found in game');
+    });
+  });
+
+  describe('Wrong game status (409)', () => {
+    beforeEach(() => {
+      mockAuthService.verifyToken.mockReturnValue(mockTokenPayload);
+      mockAuthService.findUserById.mockResolvedValue(mockUser);
+    });
+
+    it('should return 409 when the game is not in a playable status', async () => {
+      mockPlayerService.borrowForUser.mockRejectedValue(
+        new TurnGuardError(TurnGuardErrorCode.WrongStatus, 'Action not allowed while the game is completed')
+      );
+
+      const response = await request(app)
+        .post('/api/players/borrow')
+        .set('Authorization', 'Bearer valid.token.here')
+        .send({
+          gameId: testGameId,
+          amount: 10
+        })
+        .expect(409);
+
+      expect(response.body.error).toBe('Conflict');
+      expect(response.body.code).toBe('WrongStatus');
     });
   });
 

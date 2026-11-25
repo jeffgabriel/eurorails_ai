@@ -263,7 +263,7 @@ describe('PlayerService.deliverLoadForUser × EventCardService (BE-005)', () => 
       }
       // Game row for current_player_index
       if (sql.includes('SELECT current_player_index')) {
-        return Promise.resolve({ rows: [{ current_player_index: 0 }] });
+        return Promise.resolve({ rows: [{ current_player_index: 0, status: 'active' }] });
       }
       // Active player query
       if (sql.includes('SELECT id FROM players WHERE game_id')) {

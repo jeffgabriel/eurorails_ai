@@ -427,7 +427,7 @@ describe('PlayerService.discardHandForUser — regression', () => {
       // Game state
       if (sql.includes('SELECT current_player_index')) {
         return Promise.resolve({
-          rows: [{ current_player_index: 0 }],
+          rows: [{ current_player_index: 0, status: 'active' }],
         });
       }
       // Active player check
@@ -511,7 +511,7 @@ describe('PlayerService.discardHandForUser — regression', () => {
         });
       }
       if (sql.includes('SELECT current_player_index')) {
-        return Promise.resolve({ rows: [{ current_player_index: 0 }] });
+        return Promise.resolve({ rows: [{ current_player_index: 0, status: 'active' }] });
       }
       if (sql.includes('SELECT id FROM players') && sql.includes('OFFSET')) {
         return Promise.resolve({ rows: [{ id: 'different-player' }] });
