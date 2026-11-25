@@ -13,7 +13,7 @@ import authRoutes from './routes/authRoutes';
 import chatRoutes from './routes/chatRoutes';
 import clientDiagRoutes from './routes/clientDiagRoutes';
 import whisperRoutes from './routes/whisperRoutes';
-import logRoutes, { llmRouter } from './routes/logRoutes';
+import { mountLogViewers } from './routes/logRoutes';
 import { checkDatabase, db } from './db';
 import { PlayerService } from './services/playerService';
 import { AuthService } from './services/authService';
@@ -65,10 +65,8 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/diag', clientDiagRoutes);
 app.use('/api/games', whisperRoutes);
 
-// Log viewer routes (dev tool — no auth)
-app.use('/logs', logRoutes);
-app.use('/log', logRoutes);
-app.use('/llm', llmRouter);
+// Log/LLM viewers (no auth) — served only in development or with ENABLE_DEBUG_VIEWERS=true
+mountLogViewers(app);
 
 // Static file serving
 app.use(express.static(path.join(__dirname, '../../dist/client')));

@@ -1,8 +1,11 @@
 /**
  * logRoutes — Express routes for browsing game logs and LLM transcripts.
  *
- * Dev-only debugging tool. No auth required. All HTML is self-contained
- * with inline CSS and vanilla JS.
+ * Dev-only debugging tool with no auth: mount it through mountLogViewers(),
+ * which serves it only in development or with ENABLE_DEBUG_VIEWERS=true.
+ * All HTML is self-contained with inline CSS and vanilla JS. Log content is
+ * player- and LLM-controlled, so every interpolated value goes through
+ * escapeHtml().
  */
 
 import express from 'express';
@@ -19,6 +22,8 @@ import {
 } from '../services/logParser';
 import { GameTurnLogEntry } from '../services/ai/GameLogger';
 import { LLMTranscriptEntry } from '../services/ai/LLMTranscriptLogger';
+import { areDebugViewersEnabled } from '../utils/debugAccess';
+import { escapeHtml } from '../utils/escapeHtml';
 
 const router = express.Router();
 
@@ -29,12 +34,12 @@ router.get('/', (req, res) => {
     const logs = listGameLogs();
     const rows = logs.map(log => `
       <tr>
-        <td><a href="/logs/${log.gameId}">${log.gameId.slice(0, 8)}…</a></td>
-        <td>${log.turnCount}</td>
-        <td>${log.players.join(', ')}</td>
-        <td>${log.models.join(', ') || '—'}</td>
-        <td>${log.lastModified.toLocaleDateString()} ${log.lastModified.toLocaleTimeString()}</td>
-        <td><a href="/logs/llm/${log.gameId}">LLM</a></td>
+        <td><a href="/logs/${escapeHtml(log.gameId)}">${escapeHtml(log.gameId.slice(0, 8))}…</a></td>
+        <td>${escapeHtml(log.turnCount)}</td>
+        <td>${escapeHtml(log.players.join(', '))}</td>
+        <td>${escapeHtml(log.models.join(', ') || '—')}</td>
+        <td>${escapeHtml(log.lastModified.toLocaleDateString())} ${escapeHtml(log.lastModified.toLocaleTimeString())}</td>
+        <td><a href="/logs/llm/${escapeHtml(log.gameId)}">LLM</a></td>
       </tr>
     `).join('');
 
@@ -115,7 +120,7 @@ router.get('/:gameId', (req, res) => {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Game ${gameId.slice(0, 8)} — Turn Viewer</title>
+<title>Game ${escapeHtml(gameId.slice(0, 8))} — Turn Viewer</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #1a1a2e; color: #eee; display: flex; min-height: 100vh; }
@@ -160,7 +165,7 @@ router.get('/:gameId', (req, res) => {
 <div class="sidebar">
   <h2>Filters</h2>
   <a href="/logs">← All Games</a>
-  <br><a href="/logs/llm/${gameId}">View LLM Transcript →</a>
+  <br><a href="/logs/llm/${escapeHtml(gameId)}">View LLM Transcript →</a>
 
   <label for="f-player">Player</label>
   <select id="f-player"><option value="">All</option>${players.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('')}</select>
@@ -183,12 +188,12 @@ router.get('/:gameId', (req, res) => {
   <div class="stats">
     <h2>Stats</h2>
     <div>Turns: <span>${entries.length}</span></div>
-    <div>LLM Calls: <span>${stats.llmCalls}</span></div>
-    <div>Tokens In: <span>${fmt(stats.tokensIn)}</span></div>
-    <div>Tokens Out: <span>${fmt(stats.tokensOut)}</span></div>
-    <div>Avg Latency: <span>${stats.avgLatency}</span></div>
-    <div>Deliveries: <span>${stats.deliveries}</span></div>
-    <div>Errors: <span>${stats.errors}</span></div>
+    <div>LLM Calls: <span>${escapeHtml(stats.llmCalls)}</span></div>
+    <div>Tokens In: <span>${escapeHtml(fmt(stats.tokensIn))}</span></div>
+    <div>Tokens Out: <span>${escapeHtml(fmt(stats.tokensOut))}</span></div>
+    <div>Avg Latency: <span>${escapeHtml(stats.avgLatency)}</span></div>
+    <div>Deliveries: <span>${escapeHtml(stats.deliveries)}</span></div>
+    <div>Errors: <span>${escapeHtml(stats.errors)}</span></div>
   </div>
 </div>
 <div class="main">
@@ -307,7 +312,7 @@ const handleLLMViewer: express.RequestHandler = (req, res) => {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LLM Transcript — Game ${gameId.slice(0, 8)}</title>
+<title>LLM Transcript — Game ${escapeHtml(gameId.slice(0, 8))}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #1a1a2e; color: #eee; display: flex; min-height: 100vh; }
@@ -352,7 +357,7 @@ const handleLLMViewer: express.RequestHandler = (req, res) => {
 <div class="sidebar">
   <h2>Filters</h2>
   <a href="/logs">← All Games</a>
-  <br><a href="/logs/${gameId}">View Game Turns →</a>
+  <br><a href="/logs/${escapeHtml(gameId)}">View Game Turns →</a>
 
   <label for="f-player">Player</label>
   <select id="f-player"><option value="">All</option>${players.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('')}</select>
@@ -375,7 +380,7 @@ const handleLLMViewer: express.RequestHandler = (req, res) => {
     <div>Successes: <span>${entries.filter(e => e.status === 'success').length}</span></div>
     <div>Errors: <span>${entries.filter(e => e.status !== 'success').length}</span></div>
     <div>Unique Turns: <span>${turns.length}</span></div>
-    <div>Avg Latency: <span>${entries.length > 0 ? secs(entries.reduce((s, e) => s + e.latencyMs, 0) / entries.length) : 'N/A'}</span></div>
+    <div>Avg Latency: <span>${entries.length > 0 ? escapeHtml(secs(entries.reduce((s, e) => s + e.latencyMs, 0) / entries.length)) : 'N/A'}</span></div>
   </div>
 </div>
 <div class="main">
@@ -466,10 +471,6 @@ router.get('/llm/:gameId', handleLLMViewer);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
 function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
   const name = entry.playerName ?? entry.playerId;
   const source = inferDecisionSource(entry);
@@ -513,9 +514,9 @@ function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
       tp.stops ??
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ((tp as any).candidates?.[(tp as any).chosen]?.stops as string[] | undefined);
-    sections += `<details><summary>Trip Planning (${secs(tp.llmLatencyMs)})</summary><div class="section">`;
+    sections += `<details><summary>Trip Planning (${escapeHtml(secs(tp.llmLatencyMs))})</summary><div class="section">`;
     sections += `Trigger: ${escapeHtml(tp.trigger)}\n`;
-    if (stopsArr && stopsArr.length > 0) sections += `Route: ${stopsArr.join('→')}\n`;
+    if (stopsArr && stopsArr.length > 0) sections += `Route: ${escapeHtml(stopsArr.join('→'))}\n`;
     if (tp.llmReasoning) sections += `Reasoning: ${escapeHtml(tp.llmReasoning)}\n`;
     sections += `</div></details>`;
     // Short-circuit diagnostic (no_actionable_options / keep_current_plan)
@@ -528,10 +529,10 @@ function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
 
   // Build Advisor
   if (entry.advisorAction) {
-    sections += `<details><summary>Build Advisor${entry.advisorLatencyMs ? ` (${secs(entry.advisorLatencyMs)})` : ''}</summary><div class="section">`;
+    sections += `<details><summary>Build Advisor${entry.advisorLatencyMs ? ` (${escapeHtml(secs(entry.advisorLatencyMs))})` : ''}</summary><div class="section">`;
     sections += `Action: ${escapeHtml(entry.advisorAction)}\n`;
     if (entry.advisorReasoning) sections += `Reasoning: ${escapeHtml(entry.advisorReasoning)}\n`;
-    if (entry.solvencyRetries && entry.solvencyRetries > 0) sections += `Solvency retries: ${entry.solvencyRetries}\n`;
+    if (entry.solvencyRetries && entry.solvencyRetries > 0) sections += `Solvency retries: ${escapeHtml(entry.solvencyRetries)}\n`;
     sections += `</div></details>`;
   }
 
@@ -539,7 +540,7 @@ function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
   if (entry.turnValidation) {
     const tv = entry.turnValidation;
     const icon = tv.outcome === 'passed' ? '✓' : '✗';
-    sections += `<details><summary>Validation ${icon} ${tv.outcome}${tv.recomposeCount > 0 ? ` (${tv.recomposeCount} recompositions)` : ''}</summary><div class="section">`;
+    sections += `<details><summary>Validation ${icon} ${escapeHtml(tv.outcome)}${tv.recomposeCount > 0 ? ` (${escapeHtml(tv.recomposeCount)} recompositions)` : ''}</summary><div class="section">`;
     for (const gate of tv.hardGates) {
       sections += `${gate.passed ? '✓' : '✗'} ${escapeHtml(gate.gate)}${gate.detail ? ` — ${escapeHtml(gate.detail)}` : ''}\n`;
     }
@@ -549,19 +550,19 @@ function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
   // Composition Trace
   if (entry.composition) {
     const c = entry.composition;
-    sections += `<details><summary>Composition (budget: ${c.moveBudget.used}/${c.moveBudget.total}, wasted: ${c.moveBudget.wasted})</summary><div class="section">`;
-    sections += `Input: ${c.inputPlan.join(' → ')}\nOutput: ${c.outputPlan.join(' → ')}\n`;
-    sections += `A1: ${c.a1.citiesScanned} cities, ${c.a1.opportunitiesFound} opportunities\n`;
-    sections += `A2: ${c.a2.iterations} iterations, ${c.a2.terminationReason}\n`;
-    if (c.build.target) sections += `Build: ${c.build.target} (${c.build.cost}M)\n`;
+    sections += `<details><summary>Composition (budget: ${escapeHtml(c.moveBudget.used)}/${escapeHtml(c.moveBudget.total)}, wasted: ${escapeHtml(c.moveBudget.wasted)})</summary><div class="section">`;
+    sections += `Input: ${escapeHtml(c.inputPlan.join(' → '))}\nOutput: ${escapeHtml(c.outputPlan.join(' → '))}\n`;
+    sections += `A1: ${escapeHtml(c.a1.citiesScanned)} cities, ${escapeHtml(c.a1.opportunitiesFound)} opportunities\n`;
+    sections += `A2: ${escapeHtml(c.a2.iterations)} iterations, ${escapeHtml(c.a2.terminationReason)}\n`;
+    if (c.build.target) sections += `Build: ${escapeHtml(c.build.target)} (${escapeHtml(c.build.cost)}M)\n`;
     sections += `</div></details>`;
   }
 
   // Demand Ranking
   if (entry.demandRanking?.length) {
-    sections += `<details><summary>Demand Ranking (${entry.demandRanking.length} demands)</summary><div class="section">`;
+    sections += `<details><summary>Demand Ranking (${escapeHtml(entry.demandRanking.length)} demands)</summary><div class="section">`;
     for (const d of entry.demandRanking) {
-      sections += `#${d.rank} ${d.loadType}: ${d.supplyCity}→${d.deliveryCity} ${d.payout}M (score: ${d.score.toFixed(1)}${d.estimatedTurns ? `, ~${d.estimatedTurns}T` : ''})\n`;
+      sections += `#${escapeHtml(d.rank)} ${escapeHtml(d.loadType)}: ${escapeHtml(d.supplyCity)}→${escapeHtml(d.deliveryCity)} ${escapeHtml(d.payout)}M (score: ${escapeHtml(Number(d.score).toFixed(1))}${d.estimatedTurns ? `, ~${escapeHtml(d.estimatedTurns)}T` : ''})\n`;
     }
     sections += `</div></details>`;
   }
@@ -570,7 +571,7 @@ function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
   if (entry.initialBuildOptions?.length || entry.initialBuildPairings?.length) {
     sections += `<details><summary>Initial Build Options</summary><div class="section">`;
     if (entry.initialBuildOptions?.length) {
-      sections += `<strong>Single Delivery Options (${entry.initialBuildOptions.length})</strong><br>`;
+      sections += `<strong>Single Delivery Options (${escapeHtml(entry.initialBuildOptions.length)})</strong><br>`;
       sections += `<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:8px;">`;
       sections += `<tr style="color:#9ca3af;border-bottom:1px solid rgba(255,255,255,0.1);">` +
         `<th style="text-align:left;padding:2px 4px;">#</th>` +
@@ -585,19 +586,19 @@ function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
         const isTop = o.rank === 1;
         const rowStyle = isTop ? 'color:#34d399;font-weight:bold;' : '';
         sections += `<tr style="${rowStyle}">` +
-          `<td style="padding:2px 4px;">${o.rank}</td>` +
+          `<td style="padding:2px 4px;">${escapeHtml(o.rank)}</td>` +
           `<td style="padding:2px 4px;">${escapeHtml(o.loadType)}</td>` +
           `<td style="padding:2px 4px;">${escapeHtml(o.supplyCity)}→${escapeHtml(o.deliveryCity)}</td>` +
           `<td style="padding:2px 4px;">${escapeHtml(o.startingCity)}</td>` +
-          `<td style="text-align:right;padding:2px 4px;">${o.payout}M</td>` +
-          `<td style="text-align:right;padding:2px 4px;">${o.totalBuildCost}M</td>` +
-          `<td style="text-align:right;padding:2px 4px;">${o.estimatedTurns}</td>` +
-          `<td style="text-align:right;padding:2px 4px;">${o.efficiency}</td></tr>`;
+          `<td style="text-align:right;padding:2px 4px;">${escapeHtml(o.payout)}M</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${escapeHtml(o.totalBuildCost)}M</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${escapeHtml(o.estimatedTurns)}</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${escapeHtml(o.efficiency)}</td></tr>`;
       }
       sections += `</table>`;
     }
     if (entry.initialBuildPairings?.length) {
-      sections += `<strong>Double Delivery Pairings (${entry.initialBuildPairings.length})</strong><br>`;
+      sections += `<strong>Double Delivery Pairings (${escapeHtml(entry.initialBuildPairings.length)})</strong><br>`;
       sections += `<table style="width:100%;font-size:12px;border-collapse:collapse;">`;
       sections += `<tr style="color:#9ca3af;border-bottom:1px solid rgba(255,255,255,0.1);">` +
         `<th style="text-align:left;padding:2px 4px;">#</th>` +
@@ -613,15 +614,15 @@ function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
         const isTop = p.rank === 1;
         const rowStyle = isTop ? 'color:#34d399;font-weight:bold;' : '';
         sections += `<tr style="${rowStyle}">` +
-          `<td style="padding:2px 4px;">${p.rank}</td>` +
+          `<td style="padding:2px 4px;">${escapeHtml(p.rank)}</td>` +
           `<td style="padding:2px 4px;">${escapeHtml(p.firstLoad)} ${escapeHtml(p.firstRoute)}</td>` +
           `<td style="padding:2px 4px;">${escapeHtml(p.secondLoad)} ${escapeHtml(p.secondRoute)}</td>` +
           `<td style="padding:2px 4px;">${p.sharedHub ? escapeHtml(p.sharedHub) : '—'}</td>` +
-          `<td style="text-align:right;padding:2px 4px;">${p.chainDistance}</td>` +
-          `<td style="text-align:right;padding:2px 4px;">${p.totalBuildCost}M</td>` +
-          `<td style="text-align:right;padding:2px 4px;">${p.totalPayout}M</td>` +
-          `<td style="text-align:right;padding:2px 4px;">${p.estimatedTurns}</td>` +
-          `<td style="text-align:right;padding:2px 4px;">${p.pairingScore}</td></tr>`;
+          `<td style="text-align:right;padding:2px 4px;">${escapeHtml(p.chainDistance)}</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${escapeHtml(p.totalBuildCost)}M</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${escapeHtml(p.totalPayout)}M</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${escapeHtml(p.estimatedTurns)}</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${escapeHtml(p.pairingScore)}</td></tr>`;
       }
       sections += `</table>`;
     }
@@ -633,14 +634,14 @@ function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
     sections += `<details><summary>Strategy Reasoning</summary><div class="section">${escapeHtml(entry.reasoning)}</div></details>`;
   }
 
-  return `<div class="turn-card ${cardClass}" data-turn="${entry.turn}" data-player="${escapeHtml(name)}" data-phase="${escapeHtml(entry.gamePhase ?? '')}" data-source="${escapeHtml(source)}" data-model="${escapeHtml(entry.llmModel ?? '')}">
+  return `<div class="turn-card ${cardClass}" data-turn="${escapeHtml(entry.turn)}" data-player="${escapeHtml(name)}" data-phase="${escapeHtml(entry.gamePhase ?? '')}" data-source="${escapeHtml(source)}" data-model="${escapeHtml(entry.llmModel ?? '')}">
   <div class="turn-header" onclick="this.parentElement.querySelector('.turn-body').classList.toggle('hidden')">
-    <h3>Turn ${entry.turn} | ${escapeHtml(name)} | ${escapeHtml(entry.action)}${entry.gamePhase ? ` | ${escapeHtml(entry.gamePhase)}` : ''}</h3>
+    <h3>Turn ${escapeHtml(entry.turn)} | ${escapeHtml(name)} | ${escapeHtml(entry.action)}${entry.gamePhase ? ` | ${escapeHtml(entry.gamePhase)}` : ''}</h3>
     <div class="badges">${badges.join('')}</div>
   </div>
   <div class="turn-body hidden">
-    <div class="context-line">${escapeHtml(start)} → ${escapeHtml(end)} | ${escapeHtml(loads)}${entry.cash != null ? ` | Cash: ${entry.cash}M` : ''}${entry.train ? ` | ${escapeHtml(entry.train)}` : ''}</div>
-    <div class="context-line">Source: ${escapeHtml(source)} | Duration: ${secs(entry.durationMs)}${entry.llmLatencyMs ? ` | LLM: ${secs(entry.llmLatencyMs)}` : ''}</div>
+    <div class="context-line">${escapeHtml(start)} → ${escapeHtml(end)} | ${escapeHtml(loads)}${entry.cash != null ? ` | Cash: ${escapeHtml(entry.cash)}M` : ''}${entry.train ? ` | ${escapeHtml(entry.train)}` : ''}</div>
+    <div class="context-line">Source: ${escapeHtml(source)} | Duration: ${escapeHtml(secs(entry.durationMs))}${entry.llmLatencyMs ? ` | LLM: ${escapeHtml(secs(entry.llmLatencyMs))}` : ''}</div>
     ${results.length > 0 ? `<div class="result-line">→ ${escapeHtml(results.join(' | '))}</div>` : ''}
     ${hasError ? `<div class="error-line">✗ ${escapeHtml(entry.error!)}</div>` : ''}
     ${sections}
@@ -695,29 +696,29 @@ function renderLLMCallCards(entries: LLMTranscriptEntry[], gameId: string): stri
       : entry.status === 'validation_error' ? 'badge-validation'
       : 'badge-error';
 
-    const cardClass = `${entry.status}${isRetry ? ' retry' : ''}`;
+    const cardClass = `${escapeHtml(entry.status)}${isRetry ? ' retry' : ''}`;
 
     let sections = '';
 
     // System prompt
-    sections += `<details><summary>System Prompt (${fmt(entry.systemPrompt.length)} chars)</summary><div class="section">${escapeHtml(entry.systemPrompt)}</div></details>`;
+    sections += `<details><summary>System Prompt (${escapeHtml(fmt(entry.systemPrompt.length))} chars)</summary><div class="section">${escapeHtml(entry.systemPrompt)}</div></details>`;
 
     // User prompt — with diff if retry
     if (isRetry && prev) {
       const diff = computeLineDiff(prev.userPrompt, entry.userPrompt);
       if (diff.hasChanges) {
-        sections += `<details><summary>User Prompt — diff from attempt #${entry.attemptNumber - 1} (${fmt(entry.userPrompt.length)} chars)</summary><div class="section">${diff.html}</div></details>`;
+        sections += `<details><summary>User Prompt — diff from attempt #${escapeHtml(entry.attemptNumber - 1)} (${escapeHtml(fmt(entry.userPrompt.length))} chars)</summary><div class="section">${diff.html}</div></details>`;
       } else {
-        sections += `<details><summary>User Prompt (${fmt(entry.userPrompt.length)} chars, unchanged)</summary><div class="section">${escapeHtml(entry.userPrompt)}</div></details>`;
+        sections += `<details><summary>User Prompt (${escapeHtml(fmt(entry.userPrompt.length))} chars, unchanged)</summary><div class="section">${escapeHtml(entry.userPrompt)}</div></details>`;
       }
     } else {
-      sections += `<details><summary>User Prompt (${fmt(entry.userPrompt.length)} chars)</summary><div class="section">${escapeHtml(entry.userPrompt)}</div></details>`;
+      sections += `<details><summary>User Prompt (${escapeHtml(fmt(entry.userPrompt.length))} chars)</summary><div class="section">${escapeHtml(entry.userPrompt)}</div></details>`;
     }
 
     // Response — with pretty-print toggle for JSON
     const isJson = entry.responseText.trimStart().startsWith('{') || entry.responseText.trimStart().startsWith('[');
     const toggleBtn = isJson ? ' <span class="pretty-toggle">pretty</span>' : '';
-    sections += `<details><summary>Response (${fmt(entry.responseText.length)} chars)${toggleBtn}</summary><div class="section${isJson ? ' json' : ''}">${escapeHtml(entry.responseText)}</div></details>`;
+    sections += `<details><summary>Response (${escapeHtml(fmt(entry.responseText.length))} chars)${toggleBtn}</summary><div class="section${isJson ? ' json' : ''}">${escapeHtml(entry.responseText)}</div></details>`;
 
     // Error detail
     if (entry.error) {
@@ -736,25 +737,25 @@ function renderLLMCallCards(entries: LLMTranscriptEntry[], gameId: string): stri
     if (isRetry && prev) {
       const sysDiff = computeLineDiff(prev.systemPrompt, entry.systemPrompt);
       if (sysDiff.hasChanges) {
-        sections += `<details><summary>System Prompt Diff (from attempt #${entry.attemptNumber - 1})</summary><div class="section">${sysDiff.html}</div></details>`;
+        sections += `<details><summary>System Prompt Diff (from attempt #${escapeHtml(entry.attemptNumber - 1)})</summary><div class="section">${sysDiff.html}</div></details>`;
       }
     }
 
-    const tokens = entry.tokenUsage ? `${fmt(entry.tokenUsage.input)} in / ${fmt(entry.tokenUsage.output)} out` : '';
+    const tokens = entry.tokenUsage ? `${escapeHtml(fmt(entry.tokenUsage.input))} in / ${escapeHtml(fmt(entry.tokenUsage.output))} out` : '';
 
     const displayName = entry.playerName || entry.playerId;
-    cards.push(`<div class="call-card ${cardClass}" data-turn="${entry.turn}" data-player="${escapeHtml(displayName)}" data-caller="${escapeHtml(entry.caller)}" data-status="${escapeHtml(entry.status)}" data-model="${escapeHtml(entry.model)}">
+    cards.push(`<div class="call-card ${cardClass}" data-turn="${escapeHtml(entry.turn)}" data-player="${escapeHtml(displayName)}" data-caller="${escapeHtml(entry.caller)}" data-status="${escapeHtml(entry.status)}" data-model="${escapeHtml(entry.model)}">
   <div class="call-header" onclick="this.parentElement.querySelector('.call-body').classList.toggle('hidden')">
-    <h3>Turn ${entry.turn} | ${escapeHtml(displayName)} | ${escapeHtml(entry.caller)} | #${entry.attemptNumber}/${entry.totalAttempts}
-      <a href="/logs/${gameId}?turns=${entry.turn}" style="font-size:12px;color:#0f9ef7;margin-left:8px;">→ game turn</a>
+    <h3>Turn ${escapeHtml(entry.turn)} | ${escapeHtml(displayName)} | ${escapeHtml(entry.caller)} | #${escapeHtml(entry.attemptNumber)}/${escapeHtml(entry.totalAttempts)}
+      <a href="/logs/${escapeHtml(gameId)}?turns=${escapeHtml(encodeURIComponent(String(entry.turn)))}" style="font-size:12px;color:#0f9ef7;margin-left:8px;">→ game turn</a>
     </h3>
     <div class="meta">
-      ${escapeHtml(entry.model)} | ${secs(entry.latencyMs)}${tokens ? ` | ${tokens}` : ''}
-      <span class="badge ${statusBadgeClass}">${entry.status}</span>
+      ${escapeHtml(entry.model)} | ${escapeHtml(secs(entry.latencyMs))}${tokens ? ` | ${tokens}` : ''}
+      <span class="badge ${statusBadgeClass}">${escapeHtml(entry.status)}</span>
     </div>
   </div>
   <div class="call-body hidden">
-    <div style="font-size:12px;color:#888;margin-bottom:4px;">${escapeHtml(displayName)}${entry.playerName ? ` (${escapeHtml(entry.playerId)})` : ''} | ${entry.timestamp} | ${escapeHtml(entry.method)}</div>
+    <div style="font-size:12px;color:#888;margin-bottom:4px;">${escapeHtml(displayName)}${entry.playerName ? ` (${escapeHtml(entry.playerId)})` : ''} | ${escapeHtml(entry.timestamp)} | ${escapeHtml(entry.method)}</div>
     ${sections}
   </div>
 </div>`);
@@ -824,6 +825,32 @@ llmRouter.get('/api/:gameId', (req, res) => {
 llmRouter.get('/:gameId', handleLLMViewer);
 
 export default router;
+
+/** Paths the viewers answer on; anything under them is debug-only. */
+const LOG_VIEWER_MOUNTS: ReadonlyArray<{ path: string; router: express.Router }> = [
+  { path: '/logs', router },
+  { path: '/log', router },
+  { path: '/llm', router: llmRouter },
+];
+
+/**
+ * Mount the log/LLM viewers on `app`, used by both server entrypoints so they
+ * cannot drift. The viewers are unauthenticated, so they are served only when
+ * areDebugViewersEnabled() says so. Otherwise the same paths answer 404
+ * outright — without that, the SPA fallback would reply 200 with index.html.
+ */
+export function mountLogViewers(app: express.Express): void {
+  const enabled = areDebugViewersEnabled();
+  for (const { path, router: viewerRouter } of LOG_VIEWER_MOUNTS) {
+    if (enabled) {
+      app.use(path, viewerRouter);
+    } else {
+      app.use(path, (_req: express.Request, res: express.Response) => {
+        res.status(404).json({ error: 'NOT_FOUND', details: 'Not found' });
+      });
+    }
+  }
+}
 
 /**
  * JIRA-194: Test helpers — exported for unit-testing viewer rendering logic.

@@ -138,9 +138,11 @@ beforeEach(async () => {
   try {
     const response = await fetch(`${config.apiBaseUrl}/api/deck/reset`, {
       method: 'POST',
-      headers: { 
+      // The server allows this under NODE_ENV=test or development; against any other server it
+      // needs the DEBUG_ROUTES_SECRET that server was started with.
+      headers: {
         'Content-Type': 'application/json',
-        'x-test-secret': 'test-reset-secret'
+        ...(process.env.DEBUG_ROUTES_SECRET ? { 'x-test-secret': process.env.DEBUG_ROUTES_SECRET } : {}),
       }
     });
     if (!response.ok) {
