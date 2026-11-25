@@ -10,7 +10,6 @@ jest.mock('../services/verificationService');
 
 import request from 'supertest';
 import express, { Express, Request, Response } from 'express';
-import authRoutes from '../routes/authRoutes';
 import { AuthService } from '../services/authService';
 import { addRequestId } from '../middleware/errorHandler';
 import {
@@ -19,16 +18,30 @@ import {
   isAuthRateLimitEnabled,
 } from '../middleware/authRateLimit';
 
-const mockAuthService = AuthService as jest.Mocked<typeof AuthService>;
+type MockedAuthService = jest.Mocked<typeof AuthService>;
 
 const ENV_KEYS = ['AUTH_RATE_LIMIT_ENABLED', 'TRUST_PROXY', 'NODE_ENV'] as const;
 
-function buildAuthApp(): Express {
+/**
+ * Build an app around a freshly loaded auth router. The route limiters are
+ * module-level singletons with in-memory counters, so each test loads its own
+ * copy: no test depends on, or is broken by, the budget another one spent.
+ * Returns that copy's (auto-mocked) AuthService, primed to fail every call.
+ */
+async function buildAuthApp(): Promise<{ app: Express; mockAuthService: MockedAuthService }> {
+  jest.resetModules();
+  const { default: authRoutes } = await import('../routes/authRoutes');
+  const { AuthService: FreshAuthService } = await import('../services/authService');
+  const mockAuthService = FreshAuthService as MockedAuthService;
+  mockAuthService.login.mockRejectedValue(new Error('Invalid email or password'));
+  mockAuthService.register.mockRejectedValue(new Error('Username is already taken'));
+  mockAuthService.refreshAccessToken.mockRejectedValue(new Error('Invalid refresh token'));
+
   const app = express();
   app.use(express.json());
   app.use(addRequestId);
   app.use('/api/auth', authRoutes);
-  return app;
+  return { app, mockAuthService };
 }
 
 /** POST `body` to `path` `count` times, one after another; returns each status. */
@@ -54,9 +67,6 @@ describe('auth rate limiting (#300)', () => {
     jest.clearAllMocks();
     consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-    mockAuthService.login.mockRejectedValue(new Error('Invalid email or password'));
-    mockAuthService.register.mockRejectedValue(new Error('Username is already taken'));
-    mockAuthService.refreshAccessToken.mockRejectedValue(new Error('Invalid refresh token'));
   });
 
   afterEach(() => {
@@ -98,13 +108,14 @@ describe('auth rate limiting (#300)', () => {
 
     it('does not limit when disabled (the default under NODE_ENV=test)', async () => {
       delete process.env.AUTH_RATE_LIMIT_ENABLED;
-      const statuses = await postTimes(buildAuthApp(), '/api/auth/login', loginBody, 12);
+      const { app } = await buildAuthApp();
+      const statuses = await postTimes(app, '/api/auth/login', loginBody, 12);
       expect(statuses).toEqual(Array(12).fill(401));
     });
 
     it('answers 429 after 10 failed logins', async () => {
       process.env.AUTH_RATE_LIMIT_ENABLED = 'true';
-      const app = buildAuthApp();
+      const { app, mockAuthService } = await buildAuthApp();
 
       const statuses = await postTimes(app, '/api/auth/login', loginBody, 10);
       expect(statuses).toEqual(Array(10).fill(401));
@@ -125,7 +136,7 @@ describe('auth rate limiting (#300)', () => {
 
     it('answers 429 after 20 registration attempts', async () => {
       process.env.AUTH_RATE_LIMIT_ENABLED = 'true';
-      const app = buildAuthApp();
+      const { app, mockAuthService } = await buildAuthApp();
 
       const statuses = await postTimes(app, '/api/auth/register', registerBody, 20);
       expect(statuses).toEqual(Array(20).fill(400));
@@ -138,7 +149,7 @@ describe('auth rate limiting (#300)', () => {
 
     it('answers 429 after 30 refresh attempts', async () => {
       process.env.AUTH_RATE_LIMIT_ENABLED = 'true';
-      const app = buildAuthApp();
+      const { app, mockAuthService } = await buildAuthApp();
 
       const statuses = await postTimes(app, '/api/auth/refresh', refreshBody, 30);
       expect(statuses).toEqual(Array(30).fill(401));
@@ -150,10 +161,21 @@ describe('auth rate limiting (#300)', () => {
     });
 
     it('keeps a separate budget per route', async () => {
-      // The login budget was spent above; an unrelated auth route still answers.
       process.env.AUTH_RATE_LIMIT_ENABLED = 'true';
-      const res = await request(buildAuthApp()).post('/api/auth/logout');
-      expect(res.status).toBe(401);
+      const { app, mockAuthService } = await buildAuthApp();
+
+      // Spend the whole login budget, then show login is blocked...
+      const loginStatuses = await postTimes(app, '/api/auth/login', loginBody, 11);
+      expect(loginStatuses).toEqual([...Array(10).fill(401), 429]);
+
+      // ...while register and refresh, each with its own limiter, still reach
+      // their handlers (400 and 401 from the failing mocked service).
+      const register = await request(app).post('/api/auth/register').send(registerBody);
+      const refresh = await request(app).post('/api/auth/refresh').send(refreshBody);
+      expect(register.status).toBe(400);
+      expect(refresh.status).toBe(401);
+      expect(mockAuthService.register).toHaveBeenCalledTimes(1);
+      expect(mockAuthService.refreshAccessToken).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -202,9 +224,12 @@ describe('auth rate limiting (#300)', () => {
       expect(trustProxySetting()).toBe(false);
     });
 
-    it('rejects a TRUST_PROXY that is not a hop count', () => {
-      process.env.TRUST_PROXY = 'true';
-      expect(() => trustProxySetting()).toThrow('TRUST_PROXY must be');
-    });
+    it.each(['true', '1e3', '0x10', '2.0', '-1', ' 1', '  '])(
+      'rejects TRUST_PROXY=%p, which is not a plain hop count',
+      (value: string) => {
+        process.env.TRUST_PROXY = value;
+        expect(() => trustProxySetting()).toThrow('TRUST_PROXY must be');
+      },
+    );
   });
 });

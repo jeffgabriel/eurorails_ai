@@ -75,6 +75,16 @@ function isDefinitiveRefreshRejection(error: unknown): boolean {
   return !isServerOutageFallback && !isRateLimited;
 }
 
+/** Parse the user persisted in localStorage; null if it is missing or corrupt. */
+function parsePersistedUser(userJson: string): User | null {
+  try {
+    const parsed: unknown = JSON.parse(userJson);
+    return typeof parsed === 'object' && parsed !== null ? (parsed as User) : null;
+  } catch {
+    return null;
+  }
+}
+
 export const useAuthStore = create<AuthStore>((set, get) => ({
   // Initial state
   user: null,
@@ -315,6 +325,26 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
             get().logout();
             return;
           }
+        }
+
+        // refreshAccessToken() returns false for both a definitive rejection
+        // (it has already logged out and cleared the persisted tokens) and a
+        // transient failure such as a 429 from the refresh rate limiter or a
+        // server outage (tokens retained). In the transient case the refresh
+        // token is still good, so keep the persisted session rather than
+        // deleting it: the next 401 or socket auth retry refreshes again.
+        const persistedUser = parsePersistedUser(userJson);
+        if (localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY) && persistedUser) {
+          console.warn('Token refresh failed transiently while loading persisted auth; retaining session');
+          set({
+            user: persistedUser,
+            token,
+            refreshToken,
+            isAuthenticated: true,
+            isLoading: false,
+            error: null,
+          });
+          return;
         }
       }
       

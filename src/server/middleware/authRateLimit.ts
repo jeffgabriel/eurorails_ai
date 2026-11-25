@@ -88,9 +88,10 @@ export function configureTrustProxy(app: Express): void {
   if (raw === 'false') {
     return;
   }
-  const hops = Number(raw);
-  if (!Number.isInteger(hops) || hops < 0) {
+  // Digits only: Number() alone would also accept "1e3", "0x10" or "  ", and
+  // an over-large hop count makes req.ip spoofable via X-Forwarded-For.
+  if (!/^\d+$/.test(raw)) {
     throw new Error(`TRUST_PROXY must be a non-negative integer or "false", got "${raw}"`);
   }
-  app.set('trust proxy', hops);
+  app.set('trust proxy', Number(raw));
 }

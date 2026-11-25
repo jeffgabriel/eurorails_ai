@@ -183,3 +183,83 @@ describe('useAuthStore.refreshAccessToken', () => {
     expect(mockedApi.refreshToken).not.toHaveBeenCalled();
   });
 });
+
+describe('useAuthStore.loadPersistedAuth with an expired access token', () => {
+  let consoleWarnSpy: jest.SpyInstance;
+  let consoleErrorSpy: jest.SpyInstance;
+
+  /** A reload: tokens and user are in localStorage, the in-memory store is empty. */
+  function seedPersistedOnly(): void {
+    localStorage.setItem(JWT_STORAGE_KEY, 'old-access-token');
+    localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, 'old-refresh-token');
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify({ id: 'u1', username: 'u' }));
+  }
+
+  beforeEach(() => {
+    installFakeLocalStorage();
+    jest.clearAllMocks();
+    consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    useAuthStore.setState({
+      user: null,
+      token: null,
+      refreshToken: null,
+      isAuthenticated: false,
+      isLoading: false,
+      error: null,
+    });
+    seedPersistedOnly();
+    // The access token has expired: /me answers 401.
+    mockedApi.getCurrentUser.mockRejectedValue({ error: 'UNAUTHORIZED', message: 'Invalid or expired token' });
+  });
+
+  afterEach(() => {
+    consoleWarnSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it.each(['RATE_LIMIT_EXCEEDED', 'HTTP_429', 'HTTP_503'])(
+    'keeps the persisted session when the refresh fails transiently (%s)',
+    async (errorCode: string) => {
+      mockedApi.refreshToken.mockRejectedValue({ error: errorCode, message: 'Try again later' });
+
+      await useAuthStore.getState().loadPersistedAuth();
+
+      expect(localStorage.getItem(JWT_STORAGE_KEY)).toBe('old-access-token');
+      expect(localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY)).toBe('old-refresh-token');
+      expect(useAuthStore.getState()).toMatchObject({
+        user: { id: 'u1', username: 'u' },
+        token: 'old-access-token',
+        refreshToken: 'old-refresh-token',
+        isAuthenticated: true,
+        isLoading: false,
+      });
+      expect(mockedToast.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it('logs out and clears tokens when the refresh token is definitively rejected', async () => {
+    mockedApi.refreshToken.mockRejectedValue({
+      error: 'INVALID_REFRESH_TOKEN',
+      message: 'Invalid or expired refresh token',
+    });
+
+    await useAuthStore.getState().loadPersistedAuth();
+
+    expect(localStorage.getItem(JWT_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY)).toBeNull();
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+  });
+
+  it('restores the session when the refresh succeeds', async () => {
+    mockedApi.refreshToken.mockResolvedValue({ token: 'new-access-token', refreshToken: 'new-refresh-token' });
+    mockedApi.getCurrentUser
+      .mockRejectedValueOnce({ error: 'UNAUTHORIZED', message: 'Invalid or expired token' })
+      .mockResolvedValueOnce({ id: 'u1', username: 'u' } as any);
+
+    await useAuthStore.getState().loadPersistedAuth();
+
+    expect(localStorage.getItem(JWT_STORAGE_KEY)).toBe('new-access-token');
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+  });
+});
