@@ -24,6 +24,13 @@ import {
   isPickupDeliveryBlocked,
 } from "./restrictionPredicates";
 import { cleanupGameState } from "./gameCleanupService";
+import { lockPlayerForUserTurn } from "./turnGuard";
+
+/**
+ * Statuses for the actions the hand UI offers from the first build turn on:
+ * train purchase, discard hand, borrow and restart.
+ */
+const MERCY_ACTION_STATUSES: readonly GameStatus[] = ["initialBuild", "active"];
 
 // ── Event-card restriction errors ────────────────────────────────
 
@@ -1124,24 +1131,14 @@ export class PlayerService {
     try {
       await client.query("BEGIN");
 
-      const playerRowResult = await client.query(
-        `SELECT id, money, debt_owed as "debtOwed", hand, loads, current_turn_number as "turnNumber"
-         FROM players
-         WHERE game_id = $1 AND user_id = $2
-         LIMIT 1
-         FOR UPDATE`,
-        [gameId, userId]
-      );
-      if (playerRowResult.rows.length === 0) {
-        throw new Error("Player not found in game");
-      }
+      const { player: playerRow } = await lockPlayerForUserTurn(client, gameId, userId);
 
-      const playerId: string = playerRowResult.rows[0].id as string;
-      const currentMoney: number = playerRowResult.rows[0].money as number;
-      const currentDebtOwed: number = Number(playerRowResult.rows[0].debtOwed ?? 0);
-      const currentHand: unknown = playerRowResult.rows[0].hand;
-      const currentLoads: unknown = playerRowResult.rows[0].loads;
-      const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
+      const playerId: string = playerRow.id;
+      const currentMoney: number = playerRow.money;
+      const currentDebtOwed: number = Number(playerRow.debtOwed ?? 0);
+      const currentHand: unknown = playerRow.hand;
+      const currentLoads: unknown = playerRow.loads;
+      const turnNumber: number = Number(playerRow.turnNumber ?? 1);
 
       const handIds: number[] = Array.isArray(currentHand)
         ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
@@ -1149,30 +1146,6 @@ export class PlayerService {
       const loads: LoadType[] = Array.isArray(currentLoads)
         ? (currentLoads as unknown[]).filter((v): v is LoadType => typeof v === "string") as LoadType[]
         : [];
-
-      const gameRow = await client.query(
-        `SELECT current_player_index
-         FROM games
-         WHERE id = $1
-         LIMIT 1
-         FOR UPDATE`,
-        [gameId]
-      );
-      if (gameRow.rows.length === 0) {
-        throw new Error("Game not found");
-      }
-      const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
-      const currentPlayerQuery = await client.query(
-        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, currentPlayerIndex]
-      );
-      const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
-      if (!activePlayerId) {
-        throw new Error("Game has no active player");
-      }
-      if (activePlayerId !== playerId) {
-        throw new Error("Not your turn");
-      }
 
       // ── Event card restriction checks ─────────────────────────────────────
       // Check pickup/delivery restrictions from active event effects (coastal Strike)
@@ -1333,47 +1306,14 @@ export class PlayerService {
         throw new Error("Amount must be between 1 and 20");
       }
 
-      // Fetch player with row lock
-      const playerRowResult = await client.query(
-        `SELECT id, money, debt_owed as "debtOwed", current_turn_number as "turnNumber"
-         FROM players
-         WHERE game_id = $1 AND user_id = $2
-         LIMIT 1
-         FOR UPDATE`,
-        [gameId, userId]
-      );
-      if (playerRowResult.rows.length === 0) {
-        throw new Error("Player not found in game");
-      }
+      // Mercy borrowing is offered from the first build turn, so allow initialBuild too.
+      const { player: playerRow } = await lockPlayerForUserTurn(client, gameId, userId, {
+        allowedStatuses: MERCY_ACTION_STATUSES,
+      });
 
-      const playerId: string = playerRowResult.rows[0].id as string;
-      const currentMoney: number = Number(playerRowResult.rows[0].money ?? 0);
-      const currentDebtOwed: number = Number(playerRowResult.rows[0].debtOwed ?? 0);
-
-      // Validate game exists + determine whose turn it is
-      const gameRow = await client.query(
-        `SELECT current_player_index
-         FROM games
-         WHERE id = $1
-         LIMIT 1
-         FOR UPDATE`,
-        [gameId]
-      );
-      if (gameRow.rows.length === 0) {
-        throw new Error("Game not found");
-      }
-      const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
-      const currentPlayerQuery = await client.query(
-        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, currentPlayerIndex]
-      );
-      const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
-      if (!activePlayerId) {
-        throw new Error("Game has no active player");
-      }
-      if (activePlayerId !== playerId) {
-        throw new Error("Not your turn");
-      }
+      const playerId: string = playerRow.id;
+      const currentMoney: number = Number(playerRow.money ?? 0);
+      const currentDebtOwed: number = Number(playerRow.debtOwed ?? 0);
 
       // Calculate new values
       const debtIncurred = amount * 2;
@@ -1434,26 +1374,16 @@ export class PlayerService {
     try {
       await client.query("BEGIN");
 
-      const playerRowResult = await client.query(
-        `SELECT id, money, position_row, position_col, position_x, position_y, current_turn_number as "turnNumber"
-         FROM players
-         WHERE game_id = $1 AND user_id = $2
-         LIMIT 1
-         FOR UPDATE`,
-        [gameId, userId]
-      );
-      if (playerRowResult.rows.length === 0) {
-        throw new Error("Player not found in game");
-      }
+      const { player: playerRow } = await lockPlayerForUserTurn(client, gameId, userId);
 
-      const playerId: string = playerRowResult.rows[0].id as string;
-      const currentMoney: number = Number(playerRowResult.rows[0].money ?? 0);
-      const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
+      const playerId: string = playerRow.id;
+      const currentMoney: number = Number(playerRow.money ?? 0);
+      const turnNumber: number = Number(playerRow.turnNumber ?? 1);
 
-      const fromRow = playerRowResult.rows[0].position_row;
-      const fromCol = playerRowResult.rows[0].position_col;
-      const fromX = playerRowResult.rows[0].position_x;
-      const fromY = playerRowResult.rows[0].position_y;
+      const fromRow = playerRow.position_row;
+      const fromCol = playerRow.position_col;
+      const fromX = playerRow.position_x;
+      const fromY = playerRow.position_y;
       const from =
         fromRow != null && fromCol != null
           ? {
@@ -1463,31 +1393,6 @@ export class PlayerService {
               y: fromY != null && Number.isFinite(Number(fromY)) ? Number(fromY) : undefined,
             }
           : null;
-
-      // Validate game exists + determine whose turn it is
-      const gameRow = await client.query(
-        `SELECT current_player_index
-         FROM games
-         WHERE id = $1
-         LIMIT 1
-         FOR UPDATE`,
-        [gameId]
-      );
-      if (gameRow.rows.length === 0) {
-        throw new Error("Game not found");
-      }
-      const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
-      const currentPlayerQuery = await client.query(
-        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, currentPlayerIndex]
-      );
-      const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
-      if (!activePlayerId) {
-        throw new Error("Game has no active player");
-      }
-      if (activePlayerId !== playerId) {
-        throw new Error("Not your turn");
-      }
 
       // ── Event card restriction checks ─────────────────────────────────────
       // Check movement restrictions from active event effects (Snow, Rail Strike)
@@ -1750,24 +1655,14 @@ export class PlayerService {
     try {
       await client.query("BEGIN");
 
-      const playerRowResult = await client.query(
-        `SELECT id, money, debt_owed as "debtOwed", hand, loads, current_turn_number as "turnNumber", position_row, position_col, position_x, position_y
-         FROM players
-         WHERE game_id = $1 AND user_id = $2
-         LIMIT 1
-         FOR UPDATE`,
-        [gameId, userId]
-      );
-      if (playerRowResult.rows.length === 0) {
-        throw new Error("Player not found in game");
-      }
+      const { player: playerRow } = await lockPlayerForUserTurn(client, gameId, userId);
 
-      const playerId: string = playerRowResult.rows[0].id as string;
-      const currentMoney: number = playerRowResult.rows[0].money as number;
-      const currentDebtOwed: number = Number(playerRowResult.rows[0].debtOwed ?? 0);
-      const currentHand: unknown = playerRowResult.rows[0].hand;
-      const currentLoads: unknown = playerRowResult.rows[0].loads;
-      const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
+      const playerId: string = playerRow.id;
+      const currentMoney: number = playerRow.money;
+      const currentDebtOwed: number = Number(playerRow.debtOwed ?? 0);
+      const currentHand: unknown = playerRow.hand;
+      const currentLoads: unknown = playerRow.loads;
+      const turnNumber: number = Number(playerRow.turnNumber ?? 1);
 
       const handIds: number[] = Array.isArray(currentHand)
         ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
@@ -1775,30 +1670,6 @@ export class PlayerService {
       const loads: LoadType[] = Array.isArray(currentLoads)
         ? (currentLoads as unknown[]).filter((v): v is LoadType => typeof v === "string") as LoadType[]
         : [];
-
-      const gameRow = await client.query(
-        `SELECT current_player_index
-         FROM games
-         WHERE id = $1
-         LIMIT 1
-         FOR UPDATE`,
-        [gameId]
-      );
-      if (gameRow.rows.length === 0) {
-        throw new Error("Game not found");
-      }
-      const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
-      const currentPlayerQuery = await client.query(
-        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, currentPlayerIndex]
-      );
-      const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
-      if (!activePlayerId) {
-        throw new Error("Game has no active player");
-      }
-      if (activePlayerId !== playerId) {
-        throw new Error("Not your turn");
-      }
 
       const actionsResult = await client.query(
         `SELECT actions
@@ -2110,49 +1981,16 @@ export class PlayerService {
     try {
       await client.query("BEGIN");
 
-      const playerRowResult = await client.query(
-        `SELECT id, hand, current_turn_number as "turnNumber"
-         FROM players
-         WHERE game_id = $1 AND user_id = $2
-         LIMIT 1
-         FOR UPDATE`,
-        [gameId, userId]
-      );
-      if (playerRowResult.rows.length === 0) {
-        throw new Error("Player not found in game");
-      }
+      const { player: playerRow, currentPlayerIndex } = await lockPlayerForUserTurn(client, gameId, userId, {
+        allowedStatuses: MERCY_ACTION_STATUSES,
+      });
 
-      const playerId: string = playerRowResult.rows[0].id as string;
-      const currentHand: unknown = playerRowResult.rows[0].hand;
-      const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
+      const playerId: string = playerRow.id;
+      const currentHand: unknown = playerRow.hand;
+      const turnNumber: number = Number(playerRow.turnNumber ?? 1);
       const handIds: number[] = Array.isArray(currentHand)
         ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
         : [];
-
-      const gameStateResult = await client.query(
-        `SELECT current_player_index
-         FROM games
-         WHERE id = $1
-         FOR UPDATE`,
-        [gameId]
-      );
-      if (gameStateResult.rows.length === 0) {
-        throw new Error("Game not found");
-      }
-      const currentPlayerIndex = Number(gameStateResult.rows[0].current_player_index ?? 0);
-
-      // Determine active player by ordering (must match getPlayers ordering).
-      const activePlayerQuery = await client.query(
-        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, currentPlayerIndex]
-      );
-      const activePlayerId = activePlayerQuery.rows[0]?.id as string | undefined;
-      if (!activePlayerId) {
-        throw new Error("Game has no active player");
-      }
-      if (activePlayerId !== playerId) {
-        throw new Error("Not your turn");
-      }
 
       // Start-of-turn constraint: no track spend this turn (server-side).
       const trackRow = await client.query(
@@ -2275,49 +2113,16 @@ export class PlayerService {
     try {
       await client.query("BEGIN");
 
-      const playerRowResult = await client.query(
-        `SELECT id, hand, current_turn_number as "turnNumber"
-         FROM players
-         WHERE game_id = $1 AND user_id = $2
-         LIMIT 1
-         FOR UPDATE`,
-        [gameId, userId]
-      );
-      if (playerRowResult.rows.length === 0) {
-        throw new Error("Player not found in game");
-      }
+      const { player: playerRow } = await lockPlayerForUserTurn(client, gameId, userId, {
+        allowedStatuses: MERCY_ACTION_STATUSES,
+      });
 
-      const playerId: string = playerRowResult.rows[0].id as string;
-      const currentHand: unknown = playerRowResult.rows[0].hand;
-      const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
+      const playerId: string = playerRow.id;
+      const currentHand: unknown = playerRow.hand;
+      const turnNumber: number = Number(playerRow.turnNumber ?? 1);
       const handIds: number[] = Array.isArray(currentHand)
         ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
         : [];
-
-      const gameStateResult = await client.query(
-        `SELECT current_player_index
-         FROM games
-         WHERE id = $1
-         FOR UPDATE`,
-        [gameId]
-      );
-      if (gameStateResult.rows.length === 0) {
-        throw new Error("Game not found");
-      }
-      const currentPlayerIndex = Number(gameStateResult.rows[0].current_player_index ?? 0);
-
-      // Determine active player by ordering (must match getPlayers ordering).
-      const activePlayerQuery = await client.query(
-        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, currentPlayerIndex]
-      );
-      const activePlayerId = activePlayerQuery.rows[0]?.id as string | undefined;
-      if (!activePlayerId) {
-        throw new Error("Game has no active player");
-      }
-      if (activePlayerId !== playerId) {
-        throw new Error("Not your turn");
-      }
 
       // Start-of-turn constraint: no track spend this turn (server-side).
       const trackRow = await client.query(
@@ -2436,36 +2241,15 @@ export class PlayerService {
     try {
       await client.query("BEGIN");
 
-      // Find the requesting user's player in this game
-      const playerRowResult = await client.query(
-        `SELECT id, money, train_type as "trainType", loads
-         FROM players
-         WHERE game_id = $1 AND user_id = $2
-         LIMIT 1`,
-        [gameId, userId]
-      );
-      if (playerRowResult.rows.length === 0) {
-        throw new Error("Player not found in game");
-      }
-      const playerId: string = playerRowResult.rows[0].id;
-      const currentMoney: number = playerRowResult.rows[0].money;
-      const currentTrainType: TrainType = playerRowResult.rows[0].trainType as TrainType;
-      const currentLoads: unknown = playerRowResult.rows[0].loads;
+      // Locks the player row, so a double submit cannot race the funds check.
+      const { player: playerRow } = await lockPlayerForUserTurn(client, gameId, userId, {
+        allowedStatuses: MERCY_ACTION_STATUSES,
+      });
+      const playerId: string = playerRow.id;
+      const currentMoney: number = playerRow.money;
+      const currentTrainType: TrainType = playerRow.trainType as TrainType;
+      const currentLoads: unknown = playerRow.loads;
       const currentLoadCount = Array.isArray(currentLoads) ? currentLoads.length : 0;
-
-      // Validate game exists + determine whose turn it is
-      const gameState = await this.getGameState(gameId);
-      const currentPlayerQuery = await client.query(
-        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, gameState.currentPlayerIndex]
-      );
-      const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
-      if (!activePlayerId) {
-        throw new Error("Game has no active player");
-      }
-      if (activePlayerId !== playerId) {
-        throw new Error("Not your turn");
-      }
 
       // Track spend this turn (server-side)
       const trackState = await TrackService.getTrackState(gameId, playerId);

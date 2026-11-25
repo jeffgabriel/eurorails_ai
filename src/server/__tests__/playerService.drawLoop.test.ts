@@ -256,7 +256,7 @@ describe('PlayerService.deliverLoadForUser — draw loop addActiveEffect', () =>
       }
       // Game current_player_index
       if (sql.includes('current_player_index') && sql.includes('games')) {
-        return Promise.resolve({ rows: [{ current_player_index: 0 }] });
+        return Promise.resolve({ rows: [{ current_player_index: 0, status: 'active' }] });
       }
       // Active player lookup
       if (sql.includes('ORDER BY created_at ASC LIMIT 1 OFFSET')) {

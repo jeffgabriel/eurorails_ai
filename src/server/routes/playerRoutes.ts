@@ -6,6 +6,7 @@ import { emitStatePatch, getSocketIO } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { InitialBuildService } from '../services/InitialBuildService';
+import { TurnGuardError } from '../services/turnGuard';
 import { db } from '../db';
 
 const router = express.Router();
@@ -288,13 +289,11 @@ router.post('/upgrade-train', authenticateToken, async (req, res) => {
     } catch (error: any) {
         console.error('Error in /upgrade-train route:', error);
 
+        if (error instanceof TurnGuardError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+
         const message = error?.message || 'An unexpected error occurred';
-        if (message === 'Not your turn') {
-            return res.status(403).json({ error: 'Forbidden', details: message });
-        }
-        if (message === 'Player not found in game') {
-            return res.status(404).json({ error: 'Not found', details: message });
-        }
         if (
             message.includes('Invalid') ||
             message.includes('Illegal') ||
@@ -367,16 +366,14 @@ router.post('/deliver-load', authenticateToken, async (req, res) => {
 
         return res.status(200).json(result);
     } catch (error: any) {
+        if (error instanceof TurnGuardError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+
         const message = error?.message || 'An unexpected error occurred';
 
         if (message === 'UNAUTHORIZED') {
             return res.status(401).json({ error: 'UNAUTHORIZED', details: message });
-        }
-        if (message === 'Player not found in game') {
-            return res.status(404).json({ error: 'Not found', details: message });
-        }
-        if (message === 'Not your turn') {
-            return res.status(403).json({ error: 'Forbidden', details: message });
         }
         if (
             message.includes('Demand') ||
@@ -437,14 +434,12 @@ router.post('/move-train', authenticateToken, async (req, res) => {
 
         return res.status(200).json(result);
     } catch (error: any) {
+        if (error instanceof TurnGuardError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+
         const message = error?.message || 'An unexpected error occurred';
 
-        if (message === 'Player not found in game') {
-            return res.status(404).json({ error: 'Not found', details: message });
-        }
-        if (message === 'Not your turn') {
-            return res.status(403).json({ error: 'Forbidden', details: message });
-        }
         if (message.includes('Insufficient') || message.includes('Invalid') || message.includes('No valid path')) {
             return res.status(400).json({ error: 'Validation error', details: message });
         }
@@ -505,14 +500,12 @@ router.post('/undo-last-action', authenticateToken, async (req, res) => {
 
         return res.status(200).json(result);
     } catch (error: any) {
+        if (error instanceof TurnGuardError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+
         const message = error?.message || 'An unexpected error occurred';
 
-        if (message === 'Player not found in game') {
-            return res.status(404).json({ error: 'Not found', details: message });
-        }
-        if (message === 'Not your turn') {
-            return res.status(403).json({ error: 'Forbidden', details: message });
-        }
         if (message.includes('No undoable') || message.includes('not undoable') || message.includes('Invalid') || message.includes('Failed')) {
             return res.status(400).json({ error: 'Validation error', details: message });
         }
@@ -559,14 +552,12 @@ router.post('/discard-hand', authenticateToken, async (req, res) => {
             nextPlayerName: result.nextPlayerName,
         });
     } catch (error: any) {
+        if (error instanceof TurnGuardError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+
         const message = error?.message || 'An unexpected error occurred';
 
-        if (message === 'Player not found in game') {
-            return res.status(404).json({ error: 'Not found', details: message });
-        }
-        if (message === 'Not your turn') {
-            return res.status(403).json({ error: 'Forbidden', details: message });
-        }
         if (
             message.includes('Cannot discard') ||
             message.includes('Failed to draw') ||
@@ -618,17 +609,12 @@ router.post('/restart', authenticateToken, async (req, res) => {
 
         return res.status(200).json({ player: updatedPlayer });
     } catch (error: any) {
+        if (error instanceof TurnGuardError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+
         const message = error?.message || 'An unexpected error occurred';
 
-        if (message === 'Game not found') {
-            return res.status(404).json({ error: 'Not found', details: message });
-        }
-        if (message === 'Player not found in game') {
-            return res.status(404).json({ error: 'Not found', details: message });
-        }
-        if (message === 'Not your turn') {
-            return res.status(403).json({ error: 'Forbidden', details: message });
-        }
         if (
             message.includes('Cannot restart') ||
             message.includes('Invalid') ||
@@ -682,14 +668,12 @@ router.post('/borrow', authenticateToken, async (req, res) => {
 
         return res.status(200).json(result);
     } catch (error: any) {
+        if (error instanceof TurnGuardError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+
         const message = error?.message || 'An unexpected error occurred';
 
-        if (message === 'Player not found in game') {
-            return res.status(404).json({ error: 'Not found', details: message });
-        }
-        if (message === 'Not your turn') {
-            return res.status(403).json({ error: 'Forbidden', details: message });
-        }
         if (
             message.includes('Amount must be') ||
             message.includes('Invalid') ||

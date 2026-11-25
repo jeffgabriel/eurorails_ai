@@ -7,6 +7,7 @@ import { cleanDatabase } from '../db/index';
 import { TerrainType, TrainType } from '../../shared/types/GameTypes';
 import { DemandDeckService } from '../services/demandDeckService';
 import { TrackService } from '../services/trackService';
+import { TurnGuardError, TurnGuardErrorCode } from '../services/turnGuard';
 
 // Force Jest to run this test file serially
 export const test = { concurrent: false };
@@ -35,7 +36,7 @@ describe('PlayerService Integration Tests', () => {
         await runQuery(async (client) => {
             await client.query(
                 'INSERT INTO games (id, status, current_player_index, max_players) VALUES ($1, $2, $3, $4)',
-                [gameId, 'setup', 0, 6]
+                [gameId, 'active', 0, 6]
             );
         });
     });
@@ -2006,6 +2007,84 @@ describe('PlayerService Integration Tests', () => {
             await expect(
                 PlayerService.borrowForUser(gameId, userId, 10)
             ).rejects.toThrow('Player not found in game');
+        });
+    });
+
+    describe('Turn guard (shared by the *ForUser actions)', () => {
+        async function createSoloPlayer(): Promise<{ userId: string; playerId: string }> {
+            const userId = uuidv4();
+            const playerId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'Solo',
+                color: '#AA0000',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: { position: { x: 0, y: 0, row: 0, col: 0 }, movementHistory: [], remainingMovement: 9, loads: [] as LoadType[] },
+                hand: []
+            } as any);
+            return { userId, playerId };
+        }
+
+        it.each(['setup', 'completed', 'abandoned'])(
+            'should reject an action with a typed 409 while the game is %s',
+            async (status) => {
+                const { userId, playerId } = await createSoloPlayer();
+                await db.query('UPDATE games SET status = $1 WHERE id = $2', [status, gameId]);
+
+                await expect(
+                    PlayerService.borrowForUser(gameId, userId, 10)
+                ).rejects.toMatchObject({
+                    name: 'TurnGuardError',
+                    code: TurnGuardErrorCode.WrongStatus,
+                    httpStatus: 409,
+                });
+
+                const row = await db.query('SELECT money, debt_owed FROM players WHERE id = $1', [playerId]);
+                expect(row.rows[0].money).toBe(50);
+                expect(Number(row.rows[0].debt_owed)).toBe(0);
+            }
+        );
+
+        it('should allow mercy actions during initialBuild but not movement', async () => {
+            const { userId } = await createSoloPlayer();
+            await db.query('UPDATE games SET status = $1 WHERE id = $2', ['initialBuild', gameId]);
+
+            const borrowed = await PlayerService.borrowForUser(gameId, userId, 5);
+            expect(borrowed.updatedMoney).toBe(55);
+
+            await expect(
+                PlayerService.moveTrainForUser({ gameId, userId, to: { row: 1, col: 1 } })
+            ).rejects.toMatchObject({ code: TurnGuardErrorCode.WrongStatus });
+        });
+
+        it('should reject a soft-deleted player with a typed 403', async () => {
+            const { userId, playerId } = await createSoloPlayer();
+            await db.query('UPDATE players SET is_deleted = true WHERE id = $1', [playerId]);
+
+            await expect(
+                PlayerService.borrowForUser(gameId, userId, 10)
+            ).rejects.toMatchObject({
+                name: 'TurnGuardError',
+                code: TurnGuardErrorCode.NotAMember,
+                httpStatus: 403,
+            });
+        });
+
+        it('should reject a train purchase when it is not the player\'s turn', async () => {
+            const { userId } = await createSoloPlayer();
+            // Index 1 points past the only player, so nobody is the current player.
+            await db.query('UPDATE games SET current_player_index = 1 WHERE id = $1', [gameId]);
+
+            await expect(
+                PlayerService.purchaseTrainType(gameId, userId, 'upgrade', TrainType.FastFreight)
+            ).rejects.toBeInstanceOf(TurnGuardError);
         });
     });
 

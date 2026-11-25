@@ -511,7 +511,7 @@ describe('PlayerService.deliverLoadForUser — delivery restrictions', () => {
         });
       }
       if (sql.includes('FROM games') && sql.includes('FOR UPDATE')) {
-        return Promise.resolve({ rows: [{ current_player_index: 0 }] });
+        return Promise.resolve({ rows: [{ current_player_index: 0, status: 'active' }] });
       }
       if (sql.includes('FROM players') && sql.includes('ORDER BY created_at ASC')) {
         return Promise.resolve({ rows: [{ id: PLAYER_ID }] });
@@ -553,7 +553,7 @@ describe('PlayerService.deliverLoadForUser — delivery restrictions', () => {
         });
       }
       if (sql.includes('FROM games') && sql.includes('FOR UPDATE')) {
-        return Promise.resolve({ rows: [{ current_player_index: 0 }] });
+        return Promise.resolve({ rows: [{ current_player_index: 0, status: 'active' }] });
       }
       if (sql.includes('FROM players') && sql.includes('ORDER BY created_at ASC')) {
         return Promise.resolve({ rows: [{ id: PLAYER_ID }] });
@@ -618,7 +618,7 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
         });
       }
       if (sql.includes('FROM games') && sql.includes('FOR UPDATE')) {
-        return Promise.resolve({ rows: [{ current_player_index: 0 }] });
+        return Promise.resolve({ rows: [{ current_player_index: 0, status: 'active' }] });
       }
       if (sql.includes('FROM players') && sql.includes('ORDER BY created_at ASC LIMIT 1 OFFSET')) {
         return Promise.resolve({ rows: [{ id: playerId }] });
@@ -667,7 +667,7 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
       }
       // Game row
       if (sql.includes('FROM games') && sql.includes('FOR UPDATE')) {
-        return Promise.resolve({ rows: [{ current_player_index: 0 }] });
+        return Promise.resolve({ rows: [{ current_player_index: 0, status: 'active' }] });
       }
       // Active player lookup
       if (sql.includes('FROM players') && sql.includes('ORDER BY created_at ASC LIMIT 1 OFFSET')) {
