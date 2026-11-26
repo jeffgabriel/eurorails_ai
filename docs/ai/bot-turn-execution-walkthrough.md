@@ -313,8 +313,8 @@ dispatches to the appropriate handler based on `plan.type`:
   with refreshed player data.
 - **PickupLoad:** Checks train capacity (both in-memory and DB with
   `FOR UPDATE` lock). Appends load to `players.loads` array in a transaction.
-  If the load was a dropped load at the city, clears it via
-  `LoadService.pickupDroppedLoad()`. Post-commit: audit, socket emit,
+  If the load was a dropped load at the city, clears it in the same
+  transaction (`pickupLoadInTransaction`). Post-commit: audit, socket emit,
   `turn_actions` record.
 - **DeliverLoad:** Resolves city name from bot position. Calls
   `PlayerService.deliverLoadForUser()` which handles validation, payment (with

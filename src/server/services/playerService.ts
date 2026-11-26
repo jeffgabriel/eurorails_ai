@@ -1,13 +1,12 @@
 import { db } from "../db/index";
 import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES, TRACK_USAGE_FEE, TerrainType } from "../../shared/types/GameTypes";
 import { getTrainCapacity } from "../../shared/services/trainProperties";
-import { LoadService } from "./loadService";
 import { PoolClient, QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { DemandDeckService } from "./demandDeckService";
 import { TrackService, getRiverEdgeKeys, segmentCrossesRiver, areSegmentsEqual } from "./trackService";
 import { DemandCard } from "../../shared/types/DemandCard";
-import { LoadType } from "../../shared/types/LoadTypes";
+import { LoadActionResult, LoadType } from "../../shared/types/LoadTypes";
 import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
 import { loadGridPoints } from "./MapTopology";
 import { getFerryEdges } from "../../shared/services/majorCityGroups";
@@ -26,6 +25,17 @@ import {
 import { cleanupGameState } from "./gameCleanupService";
 import { lockPlayerForUserTurn } from "./turnGuard";
 import { InitialBuildService } from "./InitialBuildService";
+import {
+  appendTurnAction,
+  dropLoadInTransaction,
+  getDroppedLoadsInTransaction,
+  pickupLoadInTransaction,
+  trayChangesForDrop,
+  trayChangesForPickup,
+  undoLoadActionInTransaction,
+  TurnActionDrop,
+  TurnActionPickup,
+} from "./loadActions";
 
 /**
  * Statuses for the actions the hand UI offers from the first build turn on:
@@ -1781,6 +1791,7 @@ export class PlayerService {
   ): Promise<
     | { kind: "deliver"; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; restoredCard: DemandCard; removedCardId: number }
     | { kind: "move"; updatedMoney: number; restoredPosition: { row: number; col: number; x?: number; y?: number }; ownersReversed: Array<{ playerId: string; amount: number }>; feeTotal: number }
+    | ({ kind: "pickup" | "drop" } & LoadActionResult)
   > {
     const client = await db.connect();
     try {
@@ -1816,6 +1827,26 @@ export class PlayerService {
       }
 
       const last = actions[actions.length - 1] as (TurnActionDeliver | TurnActionMove | any);
+      if (last && (last.kind === "pickup" || last.kind === "drop")) {
+        // Load pickup/drop (#310): put the train's loads and the city's chips back.
+        const loadAction = last as TurnActionPickup | TurnActionDrop;
+        const undone = await undoLoadActionInTransaction(client, {
+          gameId,
+          playerId,
+          action: loadAction,
+          currentLoads: loads,
+          capacity: getTrainCapacity(PlayerService.normalizeTrainType(playerRow.trainType)),
+        });
+        await client.query(
+          `UPDATE turn_actions
+           SET actions = $1::jsonb
+           WHERE player_id = $2 AND game_id = $3 AND turn_number = $4`,
+          [JSON.stringify(actions.slice(0, actions.length - 1)), playerId, gameId, turnNumber]
+        );
+        const droppedLoads = await getDroppedLoadsInTransaction(client, gameId);
+        await client.query("COMMIT");
+        return { kind: loadAction.kind, ...undone, droppedLoads };
+      }
       if (!last || (last.kind !== "deliver" && last.kind !== "move")) {
         throw new Error("Last action is not undoable");
       }
@@ -2468,9 +2499,37 @@ export class PlayerService {
   }
 
   /**
-   * Pick up a load for a player. Validates train capacity, atomically appends
-   * the load to the player's loads array, and clears any dropped-load state.
-   * Used by both human players and bots.
+   * Refuse a pickup at a city where an active event (coastal Strike) forbids it.
+   *
+   * @throws ActionRestrictionError when the city is in the strike zone.
+   */
+  private static async assertPickupNotRestricted(
+    gameId: string,
+    playerId: string,
+    cityName: string,
+  ): Promise<void> {
+    const pickupRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId);
+    const pickupCityKey = getCityMilepointKey(cityName) ?? '';
+    const pickupBlocked = isPickupDeliveryBlocked(pickupRestrictions, pickupCityKey);
+    if (pickupBlocked.blocked) {
+      console.warn(
+        `[PlayerService] Pickup rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${cityName} cityKey=${pickupCityKey}`,
+      );
+      throw new ActionRestrictionError(
+        'COASTAL_STRIKE_BLOCKED',
+        `Pickup blocked by active event (Strike): city ${cityName} is within the coastal strike zone`,
+      );
+    }
+  }
+
+  /**
+   * Pick up a load for a bot player. Validates train capacity and event
+   * restrictions, appends the load to the player's loads array and takes a
+   * dropped chip of that type out of the city, all in one transaction.
+   *
+   * Trusted caller: the bot planner has already checked that the bot is at the
+   * city and that the city supplies the load. Requests from a client go through
+   * `pickupLoadForUser`, which checks both.
    */
   static async pickupLoadForPlayer(
     gameId: string,
@@ -2500,51 +2559,21 @@ export class PlayerService {
       const trainType = PlayerService.normalizeTrainType(playerResult.rows[0].trainType);
       const capacity = getTrainCapacity(trainType);
 
-      if (currentLoads.length >= capacity) {
-        throw new Error(`Train at full capacity (${currentLoads.length}/${capacity})`);
+      // A full train is refused with the capacity error before the event check, as before.
+      if (currentLoads.length < capacity) {
+        await PlayerService.assertPickupNotRestricted(gameId, playerId, cityName);
       }
 
-      // ── Event card restriction checks ─────────────────────────────────────
-      // Check pickup/delivery restrictions from active event effects (coastal Strike)
-      const pickupRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId);
-      const pickupCityKey = getCityMilepointKey(cityName) ?? '';
-      const pickupBlocked = isPickupDeliveryBlocked(pickupRestrictions, pickupCityKey);
-      if (pickupBlocked.blocked) {
-        console.warn(
-          `[PlayerService] Pickup rejected by event restriction: type=no_pickup_delivery_in_zone gameId=${gameId} playerId=${playerId} city=${cityName} cityKey=${pickupCityKey}`,
-        );
-        throw new ActionRestrictionError(
-          'COASTAL_STRIKE_BLOCKED',
-          `Pickup blocked by active event (Strike): city ${cityName} is within the coastal strike zone`,
-        );
-      }
-      // ── End restriction checks ────────────────────────────────────────────
-
-      // Atomically append load
-      const updateResult = await client.query(
-        `UPDATE players SET loads = array_append(loads, $1)
-         WHERE id = $2 AND game_id = $3
-         RETURNING loads`,
-        [loadType, playerId, gameId],
-      );
+      const { updatedLoads } = await pickupLoadInTransaction(client, {
+        gameId,
+        playerId,
+        loadType,
+        cityName,
+        currentLoads,
+        capacity,
+      });
 
       await client.query("COMMIT");
-
-      const updatedLoads: LoadType[] = updateResult.rows[0].loads as LoadType[];
-
-      // Best-effort: clear dropped-load state if this load was dropped at the city
-      if (cityName) {
-        try {
-          const loadSvc = LoadService.getInstance();
-          await loadSvc.pickupDroppedLoad(cityName, loadType, gameId);
-        } catch (droppedErr) {
-          console.error(
-            "[PlayerService] pickupLoadForPlayer dropped-load clear failed:",
-            droppedErr instanceof Error ? droppedErr.message : droppedErr,
-          );
-        }
-      }
-
       return { updatedLoads, cardsDrawnDuringAction: 0 };
     } catch (err) {
       await client.query("ROLLBACK");
@@ -2555,9 +2584,72 @@ export class PlayerService {
   }
 
   /**
-   * Drop a load for a player at a city. Validates the player is carrying the load,
-   * removes it from their loads array, and handles city placement via LoadService.
-   * Used by both human players and bots.
+   * Pick up a load for the authenticated user's player.
+   *
+   * Server-authoritative:
+   * - Validate membership, game status and turn (`lockPlayerForUserTurn`)
+   * - Validate the train is at the city, has spare capacity, and the load can
+   *   be had there: a chip dropped in the city, or a chip left in the tray for
+   *   a load the city produces
+   * - Validate no active event forbids the pickup
+   * - Update the train's loads and the city's dropped chips, and log the
+   *   action for undo, in one transaction
+   *
+   * @throws TurnGuardError, LoadActionError or ActionRestrictionError.
+   */
+  static async pickupLoadForUser(
+    gameId: string,
+    userId: string,
+    loadType: LoadType,
+    cityName: string,
+  ): Promise<LoadActionResult> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { player: playerRow } = await lockPlayerForUserTurn(client, gameId, userId);
+      const playerId: string = playerRow.id;
+      const currentLoads: LoadType[] = Array.isArray(playerRow.loads)
+        ? (playerRow.loads as LoadType[])
+        : [];
+
+      const { updatedLoads, source } = await pickupLoadInTransaction(client, {
+        gameId,
+        playerId,
+        loadType,
+        cityName,
+        currentLoads,
+        capacity: getTrainCapacity(PlayerService.normalizeTrainType(playerRow.trainType)),
+        boardRules: { position: { row: playerRow.position_row, col: playerRow.position_col } },
+      });
+      // Thrown after the writes above; the ROLLBACK below discards them.
+      await PlayerService.assertPickupNotRestricted(gameId, playerId, cityName);
+
+      await appendTurnAction(client, gameId, playerId, Number(playerRow.turnNumber ?? 1), {
+        kind: "pickup",
+        city: cityName,
+        loadType,
+        source,
+      });
+      const droppedLoads = await getDroppedLoadsInTransaction(client, gameId);
+
+      await client.query("COMMIT");
+      return { updatedLoads, droppedLoads, trayChanges: trayChangesForPickup(loadType, source) };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Drop a load for a bot player at a city. Validates the player is carrying
+   * the load, removes it from their loads array and applies the city-drop rule
+   * (see `dropLoadInTransaction`), all in one transaction.
+   *
+   * Trusted caller: the bot executor resolves the city from the bot's
+   * position. Requests from a client go through `dropLoadForUser`.
    */
   static async dropLoadForPlayer(
     gameId: string,
@@ -2585,20 +2677,13 @@ export class PlayerService {
         ? (playerResult.rows[0].loads as LoadType[])
         : [];
 
-      if (!currentLoads.includes(loadType)) {
-        throw new Error(`Player is not carrying load: ${loadType}`);
-      }
-
-      // Remove only the first occurrence of this load type. array_remove would
-      // strip every copy (e.g. both Oils on a Heavy Freight), so splice here;
-      // the row is locked FOR UPDATE above, so writing the array back is safe.
-      const remainingLoads = [...currentLoads];
-      remainingLoads.splice(remainingLoads.indexOf(loadType), 1);
-      await client.query(
-        `UPDATE players SET loads = $1
-         WHERE id = $2 AND game_id = $3`,
-        [remainingLoads, playerId, gameId],
-      );
+      await dropLoadInTransaction(client, {
+        gameId,
+        playerId,
+        loadType,
+        cityName,
+        currentLoads,
+      });
 
       await client.query("COMMIT");
     } catch (err) {
@@ -2607,22 +2692,67 @@ export class PlayerService {
     } finally {
       client.release();
     }
+  }
 
-    // Best-effort: handle city placement via LoadService
+  /**
+   * Drop a load for the authenticated user's player.
+   *
+   * Server-authoritative:
+   * - Validate membership, game status and turn (`lockPlayerForUserTurn`)
+   * - Validate the train is at the city and carries the load
+   * - Apply the city-drop rule: a load the city produces returns to the tray;
+   *   any other load stays in the city and a chip already there returns to
+   *   the tray
+   * - Update the train's loads and the city's dropped chips, and log the
+   *   action for undo, in one transaction
+   *
+   * @throws TurnGuardError or LoadActionError.
+   */
+  static async dropLoadForUser(
+    gameId: string,
+    userId: string,
+    loadType: LoadType,
+    cityName: string,
+  ): Promise<LoadActionResult> {
+    const client = await db.connect();
     try {
-      const loadSvc = LoadService.getInstance();
-      if (loadSvc.isLoadAvailableAtCity(loadType, cityName)) {
-        // Load is native to this city — return to tray
-        await loadSvc.returnLoad(cityName, loadType, gameId);
-      } else {
-        // Drop as a non-native load at this city
-        await loadSvc.setLoadInCity(cityName, loadType, gameId);
-      }
-    } catch (dropErr) {
-      console.error(
-        "[PlayerService] dropLoadForPlayer city placement failed:",
-        dropErr instanceof Error ? dropErr.message : dropErr,
-      );
+      await client.query("BEGIN");
+
+      const { player: playerRow } = await lockPlayerForUserTurn(client, gameId, userId);
+      const playerId: string = playerRow.id;
+      const currentLoads: LoadType[] = Array.isArray(playerRow.loads)
+        ? (playerRow.loads as LoadType[])
+        : [];
+
+      const { updatedLoads, placement, displaced } = await dropLoadInTransaction(client, {
+        gameId,
+        playerId,
+        loadType,
+        cityName,
+        currentLoads,
+        boardRules: { position: { row: playerRow.position_row, col: playerRow.position_col } },
+      });
+
+      await appendTurnAction(client, gameId, playerId, Number(playerRow.turnNumber ?? 1), {
+        kind: "drop",
+        city: cityName,
+        loadType,
+        placement,
+        displaced,
+      });
+      const droppedLoads = await getDroppedLoadsInTransaction(client, gameId);
+
+      await client.query("COMMIT");
+      return {
+        updatedLoads,
+        droppedLoads,
+        trayChanges: trayChangesForDrop(loadType, placement, displaced),
+      };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
     }
   }
 

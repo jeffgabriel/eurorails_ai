@@ -1,5 +1,5 @@
 import { Player, TrainState, BorrowResult, FullGameState, GridPoint } from '../../shared/types/GameTypes';
-import { LoadType } from '../../shared/types/LoadTypes';
+import { LoadActionResult, LoadType } from '../../shared/types/LoadTypes';
 import { DemandCard } from '../../shared/types/DemandCard';
 import { config } from '../config/apiConfig';
 import { authenticatedFetch } from './authenticatedFetch';
@@ -24,6 +24,17 @@ export interface RefreshSpriteUpdate {
 export interface FerryTransitionResult {
     newPosition?: GridPoint;
     arrivedAtCity?: GridPoint;
+}
+
+/** Outcome of a load pickup or drop request; `error` is text to show the player. */
+export type LoadActionOutcome =
+    | { ok: true; result: LoadActionResult }
+    | { ok: false; error: string };
+
+function isLoadActionResult(value: any): value is LoadActionResult {
+    return Array.isArray(value?.updatedLoads)
+        && Array.isArray(value?.droppedLoads)
+        && Array.isArray(value?.trayChanges);
 }
 
 /**
@@ -380,16 +391,97 @@ export class PlayerStateService {
     }
 
     /**
-     * Update local player's loads
-     * Server-authoritative: API call first, update local state only after success
+     * Pick up a load at the city the local player's train is in.
+     * Server-authoritative: the server validates the action and owns the loads.
      */
-    public async updatePlayerLoads(loads: LoadType[], gameId: string): Promise<boolean> {
+    public async pickupLoad(city: string, loadType: LoadType, gameId: string): Promise<LoadActionOutcome> {
+        return this.postLoadAction('pickup-load', city, loadType, gameId);
+    }
+
+    /**
+     * Drop a load at the city the local player's train is in.
+     * Server-authoritative: the server validates the action and owns the loads.
+     */
+    public async dropLoad(city: string, loadType: LoadType, gameId: string): Promise<LoadActionOutcome> {
+        return this.postLoadAction('drop-load', city, loadType, gameId);
+    }
+
+    private async postLoadAction(
+        route: 'pickup-load' | 'drop-load',
+        city: string,
+        loadType: LoadType,
+        gameId: string
+    ): Promise<LoadActionOutcome> {
         if (!this.localPlayer) {
-            console.error('Cannot update loads: no local player');
-            return false;
+            console.error(`Cannot ${route}: no local player`);
+            return { ok: false, error: 'No local player' };
         }
 
-        // Initialize trainState if it doesn't exist (for API call)
+        try {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/${route}`, {
+                method: 'POST',
+                body: JSON.stringify({ gameId, city, loadType })
+            });
+
+            if (!response.ok) {
+                const errorData: any = await response.json().catch(() => ({}));
+                console.error(`Failed to ${route}:`, errorData);
+                const details = typeof errorData?.details === 'string' ? errorData.details : null;
+                return { ok: false, error: details || 'The server rejected that action.' };
+            }
+
+            const result: unknown = await response.json();
+            if (!isLoadActionResult(result)) {
+                console.error(`Invalid ${route} response from server`);
+                return { ok: false, error: 'Unexpected response from the server.' };
+            }
+
+            this.setLocalLoads(result.updatedLoads);
+            return { ok: true, result };
+        } catch (error) {
+            console.error(`Error in ${route}:`, error);
+            return { ok: false, error: 'Could not reach the server. Please try again.' };
+        }
+    }
+
+    /**
+     * Undo the local player's last server-tracked action, which the caller
+     * knows to be a load pickup or drop. Returns null on failure.
+     */
+    public async undoLoadAction(gameId: string): Promise<LoadActionResult | null> {
+        if (!this.localPlayer) {
+            console.error('Cannot undo load action: no local player');
+            return null;
+        }
+
+        try {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/undo-last-action`, {
+                method: 'POST',
+                body: JSON.stringify({ gameId })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                console.error('Failed to undo load action:', errorData);
+                return null;
+            }
+
+            const result: any = await response.json();
+            if ((result?.kind !== 'pickup' && result?.kind !== 'drop') || !isLoadActionResult(result)) {
+                console.error('Invalid undo-last-action(load) response from server');
+                return null;
+            }
+
+            this.setLocalLoads(result.updatedLoads);
+            return result;
+        } catch (error) {
+            console.error('Error undoing load action:', error);
+            return null;
+        }
+    }
+
+    private setLocalLoads(loads: LoadType[]): void {
+        if (!this.localPlayer) return;
         if (!this.localPlayer.trainState) {
             this.localPlayer.trainState = {
                 position: null,
@@ -399,43 +491,7 @@ export class PlayerStateService {
                 lastTraversedEdge: undefined
             };
         }
-
-        // Server-authoritative: Make API call first
-        // IMPORTANT: Don't send position when updating loads - position is managed separately
-        // Sending position here can cause the train to jump backward if the position in
-        // this.localPlayer is outdated (from server, not current local position)
-        // We create a player object without position to avoid overwriting it
-        try {
-            const playerWithoutPosition = this.createPlayerWithoutPosition(this.localPlayer);
-            const trainStateWithoutPosition = {
-                ...(playerWithoutPosition.trainState as any),
-                loads: loads
-            };
-            
-            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
-                method: 'POST',
-                body: JSON.stringify({
-                    gameId: gameId,
-                    player: {
-                        ...playerWithoutPosition,
-                        trainState: trainStateWithoutPosition
-                    }
-                })
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                console.error('Failed to update player loads:', errorData);
-                return false;
-            }
-
-            // Only update local state after API succeeds
-            this.localPlayer.trainState.loads = loads;
-            return true;
-        } catch (error) {
-            console.error('Error updating player loads:', error);
-            return false;
-        }
+        this.localPlayer.trainState.loads = loads;
     }
 
     /**

@@ -33,9 +33,12 @@ describe('PlayerService.dropLoadForPlayer', () => {
 
   let mockLoadServiceInstance: {
     isLoadAvailableAtCity: jest.Mock;
-    returnLoad: jest.Mock;
-    setLoadInCity: jest.Mock;
   };
+
+  const loadChipCalls = (): any[][] =>
+    mockClient.query.mock.calls.filter(
+      (call: any[]) => typeof call[0] === 'string' && call[0].includes('load_chips'),
+    );
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -49,8 +52,6 @@ describe('PlayerService.dropLoadForPlayer', () => {
 
     mockLoadServiceInstance = {
       isLoadAvailableAtCity: jest.fn().mockReturnValue(false),
-      returnLoad: jest.fn().mockResolvedValue({ loadState: {}, droppedLoads: [] }),
-      setLoadInCity: jest.fn().mockResolvedValue({ loadState: {}, droppedLoads: [] }),
     };
     (LoadService.getInstance as jest.Mock) = jest.fn().mockReturnValue(mockLoadServiceInstance);
   });
@@ -60,7 +61,7 @@ describe('PlayerService.dropLoadForPlayer', () => {
   });
 
   describe('happy path — native load', () => {
-    it('should drop a native load and call returnLoad', async () => {
+    it('should return a native load to the tray without leaving a chip in the city', async () => {
       mockLoadServiceInstance.isLoadAvailableAtCity.mockReturnValue(true);
 
       mockClient.query.mockImplementation((sql: string) => {
@@ -79,13 +80,12 @@ describe('PlayerService.dropLoadForPlayer', () => {
       await PlayerService.dropLoadForPlayer(gameId, playerId, loadType, cityName);
 
       expect(mockLoadServiceInstance.isLoadAvailableAtCity).toHaveBeenCalledWith(loadType, cityName);
-      expect(mockLoadServiceInstance.returnLoad).toHaveBeenCalledWith(cityName, loadType, gameId);
-      expect(mockLoadServiceInstance.setLoadInCity).not.toHaveBeenCalled();
+      expect(loadChipCalls()).toHaveLength(0);
     });
   });
 
   describe('happy path — non-native load', () => {
-    it('should drop a non-native load and call setLoadInCity', async () => {
+    it('should leave a non-native load in the city and return a chip already there to the tray', async () => {
       mockLoadServiceInstance.isLoadAvailableAtCity.mockReturnValue(false);
 
       mockClient.query.mockImplementation((sql: string) => {
@@ -103,8 +103,17 @@ describe('PlayerService.dropLoadForPlayer', () => {
 
       await PlayerService.dropLoadForPlayer(gameId, playerId, loadType, cityName);
 
-      expect(mockLoadServiceInstance.setLoadInCity).toHaveBeenCalledWith(cityName, loadType, gameId);
-      expect(mockLoadServiceInstance.returnLoad).not.toHaveBeenCalled();
+      const chipCalls = loadChipCalls();
+      expect(chipCalls).toHaveLength(2);
+      // First the chip already lying in the city goes back to the tray...
+      expect(chipCalls[0][0]).toContain('UPDATE load_chips SET is_dropped = false');
+      expect(chipCalls[0][1]).toEqual([cityName, gameId]);
+      // ...then the dropped load takes its place.
+      expect(chipCalls[1][0]).toContain('INSERT INTO load_chips');
+      expect(chipCalls[1][1]).toEqual([gameId, loadType, cityName]);
+
+      const sqlCalls = mockClient.query.mock.calls.map((call: any[]) => call[0] as string);
+      expect(sqlCalls.indexOf(chipCalls[1][0])).toBeLessThan(sqlCalls.indexOf('COMMIT'));
     });
   });
 
@@ -232,34 +241,27 @@ describe('PlayerService.dropLoadForPlayer', () => {
     });
   });
 
-  describe('best-effort LoadService failure', () => {
-    it('should succeed even when LoadService city placement fails', async () => {
+  describe('city placement failure', () => {
+    it('should roll back the drop when the city placement fails', async () => {
       mockClient.query.mockImplementation((sql: string) => {
-        if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
+        if (sql === 'BEGIN' || sql === 'ROLLBACK') return Promise.resolve();
         if (sql.includes('SELECT loads')) {
           return Promise.resolve({
             rows: [{ loads: [LoadType.Coal] }],
           });
         }
-        if (sql.includes('UPDATE players SET loads')) {
-          return Promise.resolve({ rows: [] });
+        if (sql.includes('INSERT INTO load_chips')) {
+          return Promise.reject(new Error('load_chips write error'));
         }
         return Promise.resolve({ rows: [] });
       });
 
-      mockLoadServiceInstance.setLoadInCity.mockRejectedValue(new Error('LoadService down'));
+      await expect(
+        PlayerService.dropLoadForPlayer(gameId, playerId, loadType, cityName),
+      ).rejects.toThrow('load_chips write error');
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-      // Should not throw — LoadService failure is best-effort
-      await PlayerService.dropLoadForPlayer(gameId, playerId, loadType, cityName);
-
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('dropLoadForPlayer city placement failed'),
-        expect.any(String),
-      );
-
-      consoleSpy.mockRestore();
+      expect(mockClient.query).toHaveBeenCalledWith('ROLLBACK');
+      expect(mockClient.query).not.toHaveBeenCalledWith('COMMIT');
     });
   });
 

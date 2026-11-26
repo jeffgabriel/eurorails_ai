@@ -1,4 +1,4 @@
-import { LoadState, LoadType } from '../../shared/types/LoadTypes';
+import { DroppedLoad, LoadState, LoadTrayChange, LoadType } from '../../shared/types/LoadTypes';
 import { api } from '../lobby/shared/api';
 
 export class LoadService {
@@ -116,134 +116,32 @@ export class LoadService {
   }
 
   /**
-   * Pick up a load from a city
-   * Server-authoritative: API call first, update local state only after success
+   * Change the local count of chips of a load type in the tray.
+   * The server does not send tray counts; this keeps the local view in step
+   * with an action the server has already accepted.
    */
-  public async pickupLoad(loadType: LoadType, city: string, gameIdOverride?: string): Promise<boolean> {
-    try {
-      // First check if this is a dropped load
-      const droppedLoadsInCity = this.droppedLoads.get(city) || [];
-      const isDroppedLoad = droppedLoadsInCity.includes(loadType);
-
-      // Get gameId from localStorage
-      const gameId = gameIdOverride || this.getGameIdFromStorage();
-      if (!gameId) {
-        console.error('[LoadService.pickupLoad] Missing gameId (neither override nor localStorage)');
-        return false;
-      }
-      
-      // Server-authoritative: Make API call first
-      const result = await api.pickupLoad({
-        loadType,
-        city,
-        gameId,
-        isDropped: isDroppedLoad,
-      });
-
-      // Only update local state after API succeeds
-      if (isDroppedLoad) {
-        // Update local state for dropped loads
-        const updatedDrops = droppedLoadsInCity.filter((type, index) => 
-          index !== droppedLoadsInCity.indexOf(loadType));
-        if (updatedDrops.length === 0) {
-          this.droppedLoads.delete(city);
-        } else {
-          this.droppedLoads.set(city, updatedDrops);
-        }
-      } else {
-        // Update the available count in load states
-        const state = this.loadStates.get(loadType);
-        if (state) {
-          state.availableCount--;
-          this.loadStates.set(loadType, state);
-        }
-      }
-
-      // Update dropped loads from server response
-      result.droppedLoads.forEach(drop => {
-        const cityLoads = this.droppedLoads.get(drop.city_name) || [];
-        if (!cityLoads.includes(drop.type)) {
-          cityLoads.push(drop.type);
-          this.droppedLoads.set(drop.city_name, cityLoads);
-        }
-      });
-
-      return true;
-    } catch (error) {
-      console.error('[LoadService.pickupLoad] Failed:', error);
-      return false;
+  public adjustTrayCount(loadType: LoadType, delta: number): void {
+    const state = this.loadStates.get(loadType);
+    if (state) {
+      state.availableCount = Math.max(0, Math.min(state.totalCount, state.availableCount + delta));
     }
   }
 
   /**
-   * Return a load to the global availability pool
-   * Server-authoritative: API call first, update local state only after success
+   * Apply the result of a load pickup, drop or undo the server has accepted:
+   * the game's dropped chips replace the local ones, and the tray counts move
+   * by the changes the server reports.
    */
-  public async returnLoad(loadType: LoadType, gameIdOverride?: string, city?: string): Promise<boolean> {
-    try {
-      // Get gameId from localStorage
-      const gameId = gameIdOverride || this.getGameIdFromStorage();
-      if (!gameId) {
-        console.error('[LoadService.returnLoad] Missing gameId (neither override nor localStorage)');
-        return false;
-      }
-      
-      // Server-authoritative: Make API call first
-      const result = await api.returnLoad({ loadType, gameId, city });
-
-      // Only update local state after API succeeds
-      const state = this.loadStates.get(loadType);
-      if (state) {
-        state.availableCount++;
-        this.loadStates.set(loadType, state);
-      }
-
-      // Update dropped loads from server response
-      result.droppedLoads.forEach(drop => {
-        const cityLoads = this.droppedLoads.get(drop.city_name) || [];
-        if (!cityLoads.includes(drop.type)) {
-          cityLoads.push(drop.type);
-          this.droppedLoads.set(drop.city_name, cityLoads);
-        }
-      });
-
-      return true;
-    } catch (error) {
-      console.error('[LoadService.returnLoad] Failed:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Set a load in a city (drop a load)
-   * Server-authoritative: API call first, update local state only after success
-   */
-  public async setLoadInCity(city: string, loadType: LoadType, gameIdOverride?: string): Promise<boolean> {
-    try {
-      // Get gameId from localStorage
-      const gameId = gameIdOverride || this.getGameIdFromStorage();
-      if (!gameId) {
-        console.error('[LoadService.setLoadInCity] Missing gameId (neither override nor localStorage)');
-        return false;
-      }
-      
-      // Server-authoritative: Make API call first
-      const result = await api.setLoadInCity({ city, loadType, gameId });
-
-      // Only update local state after API succeeds
-      result.droppedLoads.forEach(drop => {
-        const cityLoads = this.droppedLoads.get(drop.city_name) || [];
-        if (!cityLoads.includes(drop.type)) {
-          cityLoads.push(drop.type);
-          this.droppedLoads.set(drop.city_name, cityLoads);
-        }
-      });
-
-      return true;
-    } catch (error) {
-      console.error('[LoadService.setLoadInCity] Failed:', error);
-      return false;
-    }
+  public applyServerUpdate(update: { droppedLoads: DroppedLoad[]; trayChanges: LoadTrayChange[] }): void {
+    this.droppedLoads.clear();
+    update.droppedLoads.forEach(drop => {
+      const cityLoads = this.droppedLoads.get(drop.city_name) || [];
+      cityLoads.push(drop.type);
+      this.droppedLoads.set(drop.city_name, cityLoads);
+    });
+    update.trayChanges.forEach(change => {
+      this.adjustTrayCount(change.loadType, change.delta);
+    });
   }
 
   // Helper method to check if a city naturally produces a load type

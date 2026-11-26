@@ -1,11 +1,12 @@
 import express from 'express';
-import { PlayerService } from '../services/playerService';
+import { ActionRestrictionError, PlayerService } from '../services/playerService';
 import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
 import { requireGameMembership } from '../middleware/gameMembership';
 import { emitStatePatch, getSocketIO } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { TurnGuardError } from '../services/turnGuard';
+import { LoadActionError } from '../services/loadActions';
 import { GameSettingsService, GameSettingsError } from '../services/gameSettingsService';
 import { isUuid } from '../utils/uuid';
 
@@ -462,6 +463,87 @@ router.post('/deliver-load', authenticateToken, async (req, res) => {
     }
 });
 
+/**
+ * Shared handler for the load pickup and drop routes (#310). The player is the
+ * session user's player; the body never names one.
+ */
+function loadActionHandler(action: 'pickup' | 'drop'): express.RequestHandler {
+    return async (req, res) => {
+        try {
+            const { gameId, city, loadType } = req.body as {
+                gameId?: string;
+                city?: string;
+                loadType?: LoadType;
+            };
+            const userId = req.user?.id;
+
+            if (!userId) {
+                return res.status(401).json({
+                    error: 'UNAUTHORIZED',
+                    details: 'Authentication required'
+                });
+            }
+
+            if (!gameId || typeof city !== 'string' || !city || !loadType) {
+                return res.status(400).json({
+                    error: 'Validation error',
+                    details: 'gameId, city, and loadType are required'
+                });
+            }
+
+            if (!isUuid(gameId)) {
+                return res.status(400).json({
+                    error: 'Validation error',
+                    details: 'Invalid gameId'
+                });
+            }
+
+            if (!Object.values(LoadType).includes(loadType)) {
+                return res.status(400).json({
+                    error: 'Validation error',
+                    details: 'Invalid loadType'
+                });
+            }
+
+            const result = action === 'pickup'
+                ? await PlayerService.pickupLoadForUser(gameId, userId, loadType, city)
+                : await PlayerService.dropLoadForUser(gameId, userId, loadType, city);
+
+            // Broadcast the player's new loads
+            const publicPlayers = await PlayerService.getPlayers(gameId, '');
+            const updatedPlayer = publicPlayers.find(p => p.userId === userId);
+            if (updatedPlayer) {
+                await emitStatePatch(gameId, { players: [updatedPlayer] } as any);
+            }
+
+            return res.status(200).json(result);
+        } catch (error: any) {
+            if (error instanceof TurnGuardError || error instanceof LoadActionError) {
+                return res.status(error.httpStatus).json(error.toResponseBody());
+            }
+            if (error instanceof ActionRestrictionError) {
+                return res.status(409).json({
+                    error: 'Conflict',
+                    code: error.code,
+                    details: error.message
+                });
+            }
+
+            console.error(`Error in ${action}-load:`, error);
+            return res.status(500).json({
+                error: 'Server error',
+                details: error?.message || 'An unexpected error occurred'
+            });
+        }
+    };
+}
+
+// Pick up a load at the city the train is in (authenticated, server-authoritative)
+router.post('/pickup-load', authenticateToken, loadActionHandler('pickup'));
+
+// Drop a load at the city the train is in (authenticated, server-authoritative)
+router.post('/drop-load', authenticateToken, loadActionHandler('drop'));
+
 // Move train and settle opponent track-usage fees (authenticated, server-authoritative on fees)
 router.post('/move-train', authenticateToken, async (req, res) => {
     try {
@@ -519,7 +601,7 @@ router.post('/move-train', authenticateToken, async (req, res) => {
     }
 });
 
-// Undo the last server-tracked per-turn action for the authenticated player (delivery or move)
+// Undo the last server-tracked per-turn action for the authenticated player (delivery, move, load pickup or load drop)
 router.post('/undo-last-action', authenticateToken, async (req, res) => {
     try {
         const { gameId } = req.body as { gameId?: string };
@@ -571,7 +653,7 @@ router.post('/undo-last-action', authenticateToken, async (req, res) => {
 
         return res.status(200).json(result);
     } catch (error: any) {
-        if (error instanceof TurnGuardError) {
+        if (error instanceof TurnGuardError || error instanceof LoadActionError) {
             return res.status(error.httpStatus).json(error.toResponseBody());
         }
 

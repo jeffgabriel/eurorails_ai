@@ -21,7 +21,6 @@
 
 import { db } from '../db/index';
 import { PlayerService } from '../services/playerService';
-import { LoadService } from '../services/loadService';
 import { activeEffectManager, ActiveEffectManager } from '../services/ActiveEffectManager';
 import { TrackSegment } from '../../shared/types/TrackTypes';
 import { TerrainType } from '../../shared/types/GameTypes';
@@ -144,8 +143,6 @@ function setupPickupMocks(opts: { loads?: LoadType[] } = {}): void {
     }
     return Promise.resolve({ rows: [] });
   });
-  const mockLoadSvc = { pickupDroppedLoad: jest.fn().mockResolvedValue({}) };
-  (LoadService.getInstance as jest.Mock) = jest.fn().mockReturnValue(mockLoadSvc);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

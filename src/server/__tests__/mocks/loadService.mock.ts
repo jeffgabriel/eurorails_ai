@@ -13,9 +13,6 @@ const mockInstance = {
     const loads = cityLoads.get(city) ?? [];
     return loads.includes(loadType);
   }),
-  pickupDroppedLoad: jest.fn().mockResolvedValue(undefined),
-  returnLoad: jest.fn().mockResolvedValue(undefined),
-  setLoadInCity: jest.fn().mockResolvedValue(undefined),
 };
 
 export const mockLoadService = {
@@ -47,8 +44,5 @@ export function resetLoadServiceMock(): void {
     const loads = cityLoads.get(city) ?? [];
     return loads.includes(loadType);
   });
-  mockInstance.pickupDroppedLoad.mockReset().mockResolvedValue(undefined);
-  mockInstance.returnLoad.mockReset().mockResolvedValue(undefined);
-  mockInstance.setLoadInCity.mockReset().mockResolvedValue(undefined);
   mockLoadService.getInstance.mockReset().mockReturnValue(mockInstance);
 }

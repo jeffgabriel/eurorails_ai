@@ -1,6 +1,5 @@
 import { db } from '../db/index';
 import { PlayerService } from '../services/playerService';
-import { LoadService } from '../services/loadService';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { TrainType } from '../../shared/types/GameTypes';
 
@@ -34,8 +33,6 @@ describe('PlayerService.pickupLoadForPlayer', () => {
   const loadType = LoadType.Coal;
   const cityName = 'Berlin';
 
-  let mockLoadServiceInstance: { pickupDroppedLoad: jest.Mock };
-
   beforeEach(() => {
     jest.clearAllMocks();
 
@@ -46,15 +43,6 @@ describe('PlayerService.pickupLoadForPlayer', () => {
       }
       return Promise.resolve({ rows: [] });
     });
-
-    // Setup LoadService mock
-    mockLoadServiceInstance = {
-      pickupDroppedLoad: jest.fn().mockResolvedValue({
-        loadState: {},
-        droppedLoads: [],
-      }),
-    };
-    (LoadService.getInstance as jest.Mock) = jest.fn().mockReturnValue(mockLoadServiceInstance);
   });
 
   afterEach(() => {
@@ -132,7 +120,7 @@ describe('PlayerService.pickupLoadForPlayer', () => {
       expect(selectCall![0]).toContain('FOR UPDATE');
     });
 
-    it('should call LoadService.pickupDroppedLoad for best-effort cleanup', async () => {
+    it('should take a dropped chip of that type out of the city in the same transaction', async () => {
       mockClient.query.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
         if (sql.includes('SELECT loads')) {
@@ -150,14 +138,17 @@ describe('PlayerService.pickupLoadForPlayer', () => {
 
       await PlayerService.pickupLoadForPlayer(gameId, playerId, loadType, cityName);
 
-      expect(mockLoadServiceInstance.pickupDroppedLoad).toHaveBeenCalledWith(
-        cityName,
-        loadType,
-        gameId,
+      const chipCall = mockClient.query.mock.calls.find(
+        (call: any[]) => typeof call[0] === 'string' && call[0].includes('UPDATE load_chips SET is_dropped = false'),
       );
+      expect(chipCall).toBeDefined();
+      expect(chipCall![1]).toEqual([cityName, loadType, gameId]);
+
+      const sqlCalls = mockClient.query.mock.calls.map((call: any[]) => call[0] as string);
+      expect(sqlCalls.indexOf(chipCall![0])).toBeLessThan(sqlCalls.indexOf('COMMIT'));
     });
 
-    it('should not call LoadService when cityName is empty', async () => {
+    it('should not touch load_chips when cityName is empty', async () => {
       mockClient.query.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
         if (sql.includes('SELECT loads')) {
@@ -175,7 +166,10 @@ describe('PlayerService.pickupLoadForPlayer', () => {
 
       await PlayerService.pickupLoadForPlayer(gameId, playerId, loadType, '');
 
-      expect(mockLoadServiceInstance.pickupDroppedLoad).not.toHaveBeenCalled();
+      const chipCall = mockClient.query.mock.calls.find(
+        (call: any[]) => typeof call[0] === 'string' && call[0].includes('load_chips'),
+      );
+      expect(chipCall).toBeUndefined();
     });
   });
 
@@ -291,36 +285,27 @@ describe('PlayerService.pickupLoadForPlayer', () => {
     });
   });
 
-  describe('best-effort LoadService failure', () => {
-    it('should succeed even when LoadService.pickupDroppedLoad fails', async () => {
+  describe('dropped-chip update failure', () => {
+    it('should roll back the pickup when the dropped-chip update fails', async () => {
       mockClient.query.mockImplementation((sql: string) => {
-        if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
+        if (sql === 'BEGIN' || sql === 'ROLLBACK') return Promise.resolve();
         if (sql.includes('SELECT loads')) {
           return Promise.resolve({
             rows: [{ loads: [], trainType: TrainType.Freight }],
           });
         }
-        if (sql.includes('UPDATE players SET loads')) {
-          return Promise.resolve({
-            rows: [{ loads: [LoadType.Coal] }],
-          });
+        if (sql.includes('UPDATE load_chips')) {
+          return Promise.reject(new Error('load_chips write error'));
         }
         return Promise.resolve({ rows: [] });
       });
 
-      mockLoadServiceInstance.pickupDroppedLoad.mockRejectedValue(new Error('Load service down'));
+      await expect(
+        PlayerService.pickupLoadForPlayer(gameId, playerId, loadType, cityName),
+      ).rejects.toThrow('load_chips write error');
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-      const result = await PlayerService.pickupLoadForPlayer(gameId, playerId, loadType, cityName);
-
-      expect(result.updatedLoads).toEqual([LoadType.Coal]);
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('pickupLoadForPlayer dropped-load clear failed'),
-        expect.any(String),
-      );
-
-      consoleSpy.mockRestore();
+      expect(mockClient.query).toHaveBeenCalledWith('ROLLBACK');
+      expect(mockClient.query).not.toHaveBeenCalledWith('COMMIT');
     });
   });
 
