@@ -418,27 +418,12 @@ export class TrackDrawingManager {
         return playerTrackState ? playerTrackState.turnBuildCost : 0;
     }
     
-    // Clear the last build cost for a player after processing turn change
-    public async clearLastBuildCost(playerId: string): Promise<void> {
+    // Clear the local copy of a player's per-turn build cost at end of turn.
+    // The server resets the persisted turn_build_cost when it ends the turn.
+    public clearLastBuildCost(playerId: string): void {
         const playerTrackState = this.playerTracks.get(playerId);
         if (playerTrackState) {
-            // Reset the turn build cost to zero
             playerTrackState.turnBuildCost = 0;
-            
-            // Save the updated track state to the database
-            try {
-                const ok = await this.trackService.saveTrackState(
-                    this.gameState.id,
-                    playerId,
-                    playerTrackState
-                );
-                
-                if (!ok) {
-                    throw new Error('Failed to clear turn build cost in database');
-                }
-            } catch (error) {
-                throw error;
-            }
         }
     }
     
@@ -1761,8 +1746,8 @@ export class TrackDrawingManager {
     }
 
     // End-of-turn cleanup: resets build cost and segments drawn this turn
-    public async endTurnCleanup(playerId: string): Promise<void> {
-        await this.clearLastBuildCost(playerId);
+    public endTurnCleanup(playerId: string): void {
+        this.clearLastBuildCost(playerId);
         this.segmentsDrawnThisTurn = [];
     }
 

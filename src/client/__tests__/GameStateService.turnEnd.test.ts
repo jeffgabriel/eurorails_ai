@@ -50,8 +50,7 @@ describe('GameStateService turn-end accounting', () => {
 
     playerStateService = {
       getLocalPlayerId: jest.fn().mockReturnValue('local-1'),
-      updatePlayerMoney: jest.fn().mockResolvedValue(true),
-      updatePlayerTurnNumber: jest.fn().mockResolvedValue(true),
+      settleBuildCost: jest.fn().mockResolvedValue(true),
     } as unknown as jest.Mocked<PlayerStateService>;
     service.setPlayerStateService(playerStateService);
   });
@@ -61,29 +60,31 @@ describe('GameStateService turn-end accounting', () => {
   });
 
   describe('applyBuildCostDeduction', () => {
-    it('deducts build cost via the API for the local player', async () => {
+    it('asks the server to settle the build cost for the local player', async () => {
       await service.applyBuildCostDeduction(localPlayer, 5);
 
-      expect(playerStateService.updatePlayerMoney).toHaveBeenCalledWith(45, 'game-1');
+      expect(playerStateService.settleBuildCost).toHaveBeenCalledWith('game-1');
+      // Money is set from the server response inside settleBuildCost, never computed here.
+      expect(localPlayer.money).toBe(50);
     });
 
     it('mutates money directly for a non-local player without API calls', async () => {
       await service.applyBuildCostDeduction(otherPlayer, 5);
 
       expect(otherPlayer.money).toBe(35);
-      expect(playerStateService.updatePlayerMoney).not.toHaveBeenCalled();
+      expect(playerStateService.settleBuildCost).not.toHaveBeenCalled();
     });
 
     it('is a no-op when build cost is 0', async () => {
       await service.applyBuildCostDeduction(localPlayer, 0);
 
-      expect(playerStateService.updatePlayerMoney).not.toHaveBeenCalled();
+      expect(playerStateService.settleBuildCost).not.toHaveBeenCalled();
       expect(localPlayer.money).toBe(50);
     });
 
-    it('does not throw when the money update rejects', async () => {
+    it('does not throw when the settlement rejects', async () => {
       const errorSpy = jest.spyOn(console, 'error').mockImplementation();
-      playerStateService.updatePlayerMoney.mockRejectedValueOnce(new Error('api down'));
+      playerStateService.settleBuildCost.mockRejectedValueOnce(new Error('api down'));
 
       await expect(service.applyBuildCostDeduction(localPlayer, 5)).resolves.toBeUndefined();
       expect(errorSpy).toHaveBeenCalled();
@@ -96,47 +97,79 @@ describe('GameStateService turn-end accounting', () => {
       await bareService.applyBuildCostDeduction(localPlayer, 5);
 
       expect(localPlayer.money).toBe(45);
-      expect(playerStateService.updatePlayerMoney).not.toHaveBeenCalled();
+      expect(playerStateService.settleBuildCost).not.toHaveBeenCalled();
     });
   });
 
-  describe('applyTurnNumberIncrement', () => {
-    it('persists the incremented turn number for the local player via the API', async () => {
-      // Server-authoritative: the local turnNumber is advanced inside
-      // updatePlayerTurnNumber on success, not before the await.
-      await service.applyTurnNumberIncrement(localPlayer);
+  describe('nextPlayerTurn', () => {
+    const { authenticatedFetch } = jest.requireMock('../services/authenticatedFetch') as {
+      authenticatedFetch: jest.Mock;
+    };
 
-      expect(playerStateService.updatePlayerTurnNumber).toHaveBeenCalledWith(4, 'game-1');
+    function respond(ok: boolean, body: unknown): void {
+      authenticatedFetch.mockResolvedValueOnce({ ok, json: async () => body });
+    }
+
+    it('asks the server to end the turn without choosing the next player', async () => {
+      respond(true, { currentPlayerIndex: 1, playerId: 'local-1', turnNumber: 4 });
+
+      await service.nextPlayerTurn();
+
+      expect(authenticatedFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = authenticatedFetch.mock.calls[0];
+      expect(url).toBe('http://test/api/players/updateCurrentPlayer');
+      expect(JSON.parse(init.body)).toEqual({ gameId: 'game-1' });
     });
 
-    it('increments a non-local player directly without persisting', async () => {
-      await service.applyTurnNumberIncrement(otherPlayer);
+    it('applies the server index and the server-assigned turn number on success', async () => {
+      respond(true, { currentPlayerIndex: 1, playerId: 'local-1', turnNumber: 4 });
 
-      expect(otherPlayer.turnNumber).toBe(3);
-      expect(playerStateService.updatePlayerTurnNumber).not.toHaveBeenCalled();
+      await service.nextPlayerTurn();
+
+      expect(service.getGameState().currentPlayerIndex).toBe(1);
+      expect(localPlayer.turnNumber).toBe(4);
+      expect(otherPlayer.turnNumber).toBe(2);
     });
 
-    it('defaults a missing turn number to 1 before incrementing', async () => {
-      const freshPlayer = createPlayer('other-1', 40, undefined);
-      await service.applyTurnNumberIncrement(freshPlayer);
+    it('applies the turn number to the player the server names, not the local index', async () => {
+      // Local index is stale (already points at the other player).
+      service.getGameState().currentPlayerIndex = 1;
+      respond(true, { currentPlayerIndex: 1, playerId: 'local-1', turnNumber: 4 });
 
-      expect(freshPlayer.turnNumber).toBe(2);
+      await service.nextPlayerTurn();
+
+      expect(localPlayer.turnNumber).toBe(4);
+      expect(otherPlayer.turnNumber).toBe(2);
     });
 
-    it('does not advance the local turn number when persistence fails', async () => {
-      playerStateService.updatePlayerTurnNumber.mockResolvedValueOnce(false);
+    it('leaves the index alone and does not notify when the response has no index', async () => {
+      const listener = jest.fn();
+      service.onTurnChange(listener);
+      respond(true, {});
 
-      await service.applyTurnNumberIncrement(localPlayer);
+      await service.nextPlayerTurn();
 
-      // Local state stays in sync with the server (no premature increment).
+      expect(service.getGameState().currentPlayerIndex).toBe(0);
       expect(localPlayer.turnNumber).toBe(3);
+      expect(listener).not.toHaveBeenCalled();
     });
 
-    it('does not throw when the update rejects', async () => {
+    it('changes nothing locally when the server refuses', async () => {
       const errorSpy = jest.spyOn(console, 'error').mockImplementation();
-      playerStateService.updatePlayerTurnNumber.mockRejectedValueOnce(new Error('api down'));
+      respond(false, { error: 'Forbidden', code: 'NotYourTurn' });
 
-      await expect(service.applyTurnNumberIncrement(localPlayer)).resolves.toBeUndefined();
+      await service.nextPlayerTurn();
+
+      expect(service.getGameState().currentPlayerIndex).toBe(0);
+      expect(localPlayer.turnNumber).toBe(3);
+      errorSpy.mockRestore();
+    });
+
+    it('does not throw or change local state when the request rejects', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+      authenticatedFetch.mockRejectedValueOnce(new Error('api down'));
+
+      await expect(service.nextPlayerTurn()).resolves.toBeUndefined();
       expect(localPlayer.turnNumber).toBe(3);
       expect(errorSpy).toHaveBeenCalled();
       errorSpy.mockRestore();

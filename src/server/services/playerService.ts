@@ -2,7 +2,7 @@ import { db } from "../db/index";
 import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES, TRACK_USAGE_FEE, TerrainType } from "../../shared/types/GameTypes";
 import { getTrainCapacity } from "../../shared/services/trainProperties";
 import { LoadService } from "./loadService";
-import { QueryResult } from "pg";
+import { PoolClient, QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { DemandDeckService } from "./demandDeckService";
 import { TrackService, getRiverEdgeKeys, segmentCrossesRiver, areSegmentsEqual } from "./trackService";
@@ -25,6 +25,7 @@ import {
 } from "./restrictionPredicates";
 import { cleanupGameState } from "./gameCleanupService";
 import { lockPlayerForUserTurn } from "./turnGuard";
+import { InitialBuildService } from "./InitialBuildService";
 
 /**
  * Statuses for the actions the hand UI offers from the first build turn on:
@@ -903,6 +904,165 @@ export class PlayerService {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Charge a player for the track they built this turn and reset the per-turn
+   * spend: `money -= turn_build_cost`, then `turn_build_cost = 0`.
+   *
+   * Idempotent — a second call finds a zero cost and charges nothing — so a
+   * retried or repeated settlement can never bill the same construction twice.
+   * Must run inside the caller's transaction, with the player row locked.
+   *
+   * @returns the amount charged and the player's money afterwards.
+   */
+  private static async settleTurnBuildCost(
+    client: PoolClient,
+    gameId: string,
+    playerId: string,
+  ): Promise<{ charged: number; money: number }> {
+    const trackRow = await client.query(
+      `SELECT turn_build_cost
+       FROM player_tracks
+       WHERE game_id = $1 AND player_id = $2
+       FOR UPDATE`,
+      [gameId, playerId],
+    );
+    const charged = Number(trackRow.rows[0]?.turn_build_cost ?? 0);
+
+    const moneyRow = await client.query(
+      `UPDATE players
+       SET money = money - $1
+       WHERE game_id = $2 AND id = $3
+       RETURNING money`,
+      [charged, gameId, playerId],
+    );
+    if (charged !== 0) {
+      await TrackService.clearTurnBuildCost(gameId, playerId, client);
+    }
+    return { charged, money: Number(moneyRow.rows[0]?.money ?? 0) };
+  }
+
+  /**
+   * Settle the calling user's build cost for this turn without ending the turn
+   * (server-authoritative, issue #304).
+   *
+   * The client calls this before its end-of-turn victory check, which must see
+   * post-deduction money. `endTurnForUser` settles again in its own
+   * transaction, so a skipped or failed call here is still charged at turn end,
+   * and a successful one is never charged twice.
+   *
+   * @throws TurnGuardError when the user may not act right now.
+   */
+  static async settleBuildCostForUser(
+    gameId: string,
+    userId: string,
+  ): Promise<{ playerId: string; charged: number; money: number }> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      const { player } = await lockPlayerForUserTurn(client, gameId, userId, {
+        allowedStatuses: ["active", "initialBuild"],
+      });
+      const settled = await PlayerService.settleTurnBuildCost(client, gameId, player.id);
+      await client.query("COMMIT");
+      return { playerId: player.id, ...settled };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * End the calling user's turn (server-authoritative, issue #304).
+   *
+   * In ONE transaction: confirms the user is the current player (row locks via
+   * `lockPlayerForUserTurn`), charges any unsettled build cost and resets
+   * `turn_build_cost`, increments that player's `current_turn_number`, and
+   * advances the turn — through `InitialBuildService` during `initialBuild`,
+   * or the transactional `updateCurrentPlayerIndex` path while `active`.
+   *
+   * The bookkeeping lives here rather than in `advanceTurn` because bots do
+   * their own at the START of their turn (`BotTurnTrigger.onTurnChange`) and
+   * then call `advanceTurn`; doing it there would count bot turns twice.
+   *
+   * The turn number is incremented BEFORE the advance so effect expiry
+   * (`cleanupExpiredEffects`) sees the same post-increment number it did when
+   * the client persisted the increment ahead of the end-turn call.
+   *
+   * @returns the ending player's id and new turn number, and the new current
+   *   player index — all read inside the transaction, so nothing can fail
+   *   between the commit and the response.
+   * @throws TurnGuardError when the user may not end the turn.
+   */
+  static async endTurnForUser(
+    gameId: string,
+    userId: string,
+  ): Promise<{ playerId: string; turnNumber: number; currentPlayerIndex: number }> {
+    const client = await db.connect();
+    let playerId: string;
+    let turnNumber: number;
+    let newPlayerIndex: number;
+    let emitAfterCommit: (() => Promise<void>) | undefined;
+    try {
+      await client.query("BEGIN");
+
+      const { player, currentPlayerIndex, gameStatus } = await lockPlayerForUserTurn(
+        client,
+        gameId,
+        userId,
+        { allowedStatuses: ["active", "initialBuild"] },
+      );
+      playerId = player.id;
+
+      await PlayerService.settleTurnBuildCost(client, gameId, playerId);
+
+      const turnRow = await client.query(
+        `UPDATE players
+         SET current_turn_number = COALESCE(current_turn_number, 1) + 1
+         WHERE game_id = $1 AND id = $2
+         RETURNING current_turn_number`,
+        [gameId, playerId],
+      );
+      turnNumber = Number(turnRow.rows[0]?.current_turn_number);
+
+      if (gameStatus === "initialBuild") {
+        emitAfterCommit = await InitialBuildService.advanceTurnWithClient(
+          client,
+          gameId,
+          currentPlayerIndex,
+        );
+      } else {
+        const countResult = await client.query(
+          "SELECT COUNT(*)::int AS count FROM players WHERE game_id = $1",
+          [gameId],
+        );
+        const playerCount: number = countResult.rows[0]?.count || 1;
+        const nextIndex = (currentPlayerIndex + 1) % playerCount;
+        await PlayerService.updateCurrentPlayerIndex(gameId, nextIndex, client, currentPlayerIndex);
+      }
+
+      // Read the resolved index (after any Derailment skips) before committing.
+      const indexRow = await client.query(
+        "SELECT current_player_index FROM games WHERE id = $1",
+        [gameId],
+      );
+      newPlayerIndex = Number(indexRow.rows[0]?.current_player_index ?? 0);
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    if (emitAfterCommit) {
+      await emitAfterCommit();
+    }
+    return { playerId, turnNumber, currentPlayerIndex: newPlayerIndex };
   }
 
   /**

@@ -216,42 +216,36 @@ export class PlayerStateService {
 
 
     /**
-     * Update local player's money
-     * Server-authoritative: API call first, update local state only after success
+     * Settle the local player's build cost for this turn.
+     * Server-authoritative: the server charges its own recorded turn build cost
+     * and resets it atomically; local money is set from the response. Safe to
+     * repeat — an already-settled cost is not charged again.
      */
-    public async updatePlayerMoney(newMoney: number, gameId: string): Promise<boolean> {
+    public async settleBuildCost(gameId: string): Promise<boolean> {
         if (!this.localPlayer) {
-            console.error('Cannot update money: no local player');
+            console.error('Cannot settle build cost: no local player');
             return false;
         }
 
-        // Server-authoritative: Make API call first
-        // IMPORTANT: Don't send position when updating money - position is managed separately
         try {
-            const playerWithoutPosition = this.createPlayerWithoutPosition(this.localPlayer);
-            
-            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/settle-build-cost`, {
                 method: 'POST',
-                body: JSON.stringify({
-                    gameId: gameId,
-                    player: {
-                        ...playerWithoutPosition,
-                        money: newMoney
-                    }
-                })
+                body: JSON.stringify({ gameId })
             });
 
             if (!response.ok) {
                 const errorData = await response.json();
-                console.error('Failed to update player money:', errorData);
+                console.error('Failed to settle build cost:', errorData);
                 return false;
             }
 
-            // Only update local state after API succeeds
-            this.localPlayer.money = newMoney;
+            const result = await response.json();
+            if (typeof result?.money === 'number') {
+                this.localPlayer.money = result.money;
+            }
             return true;
         } catch (error) {
-            console.error('Error updating player money:', error);
+            console.error('Error settling build cost:', error);
             return false;
         }
     }
@@ -440,46 +434,6 @@ export class PlayerStateService {
             return true;
         } catch (error) {
             console.error('Error updating player loads:', error);
-            return false;
-        }
-    }
-
-    /**
-     * Update local player's turn number (per-player turns taken).
-     * Server-authoritative: API call first, update local state only after success.
-     *
-     * IMPORTANT: Don't send trainState.position here; position is managed separately.
-     */
-    public async updatePlayerTurnNumber(newTurnNumber: number, gameId: string): Promise<boolean> {
-        if (!this.localPlayer) {
-            console.error('Cannot update turn number: no local player');
-            return false;
-        }
-
-        try {
-            const playerWithoutPosition = this.createPlayerWithoutPosition(this.localPlayer);
-
-            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
-                method: 'POST',
-                body: JSON.stringify({
-                    gameId: gameId,
-                    player: {
-                        ...playerWithoutPosition,
-                        turnNumber: newTurnNumber
-                    }
-                })
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                console.error('Failed to update player turn number:', errorData);
-                return false;
-            }
-
-            this.localPlayer.turnNumber = newTurnNumber;
-            return true;
-        } catch (error) {
-            console.error('Error updating player turn number:', error);
             return false;
         }
     }

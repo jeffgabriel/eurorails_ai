@@ -2088,6 +2088,153 @@ describe('PlayerService Integration Tests', () => {
         });
     });
 
+    describe('End turn - endTurnForUser (#304)', () => {
+        async function createTwoPlayers(): Promise<{ userIds: string[]; playerIds: string[] }> {
+            const userIds = [uuidv4(), uuidv4()];
+            const playerIds = [uuidv4(), uuidv4()];
+            for (let i = 0; i < 2; i++) {
+                await db.query(
+                    'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                    [userIds[i], `user_${userIds[i].slice(0, 8)}`, `user_${userIds[i].slice(0, 8)}@test.local`, 'hash']
+                );
+                await PlayerService.createPlayer(gameId, {
+                    id: playerIds[i],
+                    userId: userIds[i],
+                    name: `P${i + 1}`,
+                    color: i === 0 ? '#AA0000' : '#00AA00',
+                    money: 50,
+                    trainType: TrainType.Freight,
+                    turnNumber: 1,
+                    trainState: { position: { x: 0, y: 0, row: 0, col: 0 }, movementHistory: [], remainingMovement: 9, loads: [] as LoadType[] },
+                    hand: []
+                } as any);
+                // Pin created_at so the turn order is deterministic.
+                await db.query(
+                    "UPDATE players SET created_at = NOW() + ($1 || ' seconds')::interval WHERE id = $2",
+                    [String(i), playerIds[i]]
+                );
+                await db.query(
+                    `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost)
+                     VALUES ($1, $2, '[]', 7, 7)
+                     ON CONFLICT (game_id, player_id) DO UPDATE SET turn_build_cost = 7`,
+                    [gameId, playerIds[i]]
+                );
+            }
+            return { userIds, playerIds };
+        }
+
+        async function readState(playerId: string): Promise<{ index: number; turnNumber: number; turnBuildCost: number; money: number }> {
+            const game = await db.query('SELECT current_player_index FROM games WHERE id = $1', [gameId]);
+            const player = await db.query('SELECT current_turn_number, money FROM players WHERE id = $1', [playerId]);
+            const track = await db.query(
+                'SELECT turn_build_cost FROM player_tracks WHERE game_id = $1 AND player_id = $2',
+                [gameId, playerId]
+            );
+            return {
+                index: Number(game.rows[0].current_player_index),
+                turnNumber: Number(player.rows[0].current_turn_number),
+                turnBuildCost: Number(track.rows[0].turn_build_cost),
+                money: Number(player.rows[0].money),
+            };
+        }
+
+        it('should advance the turn, increment the turn number, and charge and reset the build cost', async () => {
+            const { userIds, playerIds } = await createTwoPlayers();
+
+            const result = await PlayerService.endTurnForUser(gameId, userIds[0]);
+
+            expect(result).toEqual({ playerId: playerIds[0], turnNumber: 2, currentPlayerIndex: 1 });
+            expect(await readState(playerIds[0])).toEqual({ index: 1, turnNumber: 2, turnBuildCost: 0, money: 43 });
+            // The next player's bookkeeping is untouched.
+            expect(await readState(playerIds[1])).toEqual({ index: 1, turnNumber: 1, turnBuildCost: 7, money: 50 });
+        });
+
+        it('should charge the build cost once when it is settled before the turn ends', async () => {
+            const { userIds, playerIds } = await createTwoPlayers();
+
+            const first = await PlayerService.settleBuildCostForUser(gameId, userIds[0]);
+            expect(first).toEqual({ playerId: playerIds[0], charged: 7, money: 43 });
+            // The turn has not ended: only money and the build cost moved.
+            expect(await readState(playerIds[0])).toEqual({ index: 0, turnNumber: 1, turnBuildCost: 0, money: 43 });
+
+            // A retry (e.g. after a failed end-turn request and a page reload) charges nothing.
+            const second = await PlayerService.settleBuildCostForUser(gameId, userIds[0]);
+            expect(second).toEqual({ playerId: playerIds[0], charged: 0, money: 43 });
+
+            await PlayerService.endTurnForUser(gameId, userIds[0]);
+            expect(await readState(playerIds[0])).toEqual({ index: 1, turnNumber: 2, turnBuildCost: 0, money: 43 });
+        });
+
+        it('should refuse to settle the build cost of a player who is not the current player', async () => {
+            const { userIds, playerIds } = await createTwoPlayers();
+
+            await expect(
+                PlayerService.settleBuildCostForUser(gameId, userIds[1])
+            ).rejects.toMatchObject({ code: TurnGuardErrorCode.NotYourTurn, httpStatus: 403 });
+
+            expect(await readState(playerIds[1])).toEqual({ index: 0, turnNumber: 1, turnBuildCost: 7, money: 50 });
+        });
+
+        it('should reject a player who is not the current player and change nothing', async () => {
+            const { userIds, playerIds } = await createTwoPlayers();
+
+            await expect(
+                PlayerService.endTurnForUser(gameId, userIds[1])
+            ).rejects.toMatchObject({
+                name: 'TurnGuardError',
+                code: TurnGuardErrorCode.NotYourTurn,
+                httpStatus: 403,
+            });
+
+            expect(await readState(playerIds[1])).toEqual({ index: 0, turnNumber: 1, turnBuildCost: 7, money: 50 });
+        });
+
+        it('should reject a second end-turn from the same player', async () => {
+            const { userIds, playerIds } = await createTwoPlayers();
+
+            await PlayerService.endTurnForUser(gameId, userIds[0]);
+            await expect(
+                PlayerService.endTurnForUser(gameId, userIds[0])
+            ).rejects.toMatchObject({ code: TurnGuardErrorCode.NotYourTurn });
+
+            expect((await readState(playerIds[0])).turnNumber).toBe(2);
+        });
+
+        it('should follow the initial build order during initialBuild', async () => {
+            const { userIds, playerIds } = await createTwoPlayers();
+            // Round 2 runs in reverse: P2 then P1, and P1 (last) starts the active phase.
+            await db.query(
+                `UPDATE games
+                 SET status = 'initialBuild', initial_build_round = 2,
+                     initial_build_order = $1, current_player_index = 1
+                 WHERE id = $2`,
+                [JSON.stringify([playerIds[1], playerIds[0]]), gameId]
+            );
+
+            await expect(
+                PlayerService.endTurnForUser(gameId, userIds[0])
+            ).rejects.toMatchObject({ code: TurnGuardErrorCode.NotYourTurn });
+
+            const afterP2 = await PlayerService.endTurnForUser(gameId, userIds[1]);
+            expect(afterP2.currentPlayerIndex).toBe(0);
+            expect(await readState(playerIds[1])).toEqual({ index: 0, turnNumber: 2, turnBuildCost: 0, money: 43 });
+
+            const afterP1 = await PlayerService.endTurnForUser(gameId, userIds[0]);
+            expect(afterP1.currentPlayerIndex).toBe(0);
+            const game = await db.query('SELECT status FROM games WHERE id = $1', [gameId]);
+            expect(game.rows[0].status).toBe('active');
+        });
+
+        it.each(['setup', 'completed'])('should reject ending a turn while the game is %s', async (status) => {
+            const { userIds } = await createTwoPlayers();
+            await db.query('UPDATE games SET status = $1 WHERE id = $2', [status, gameId]);
+
+            await expect(
+                PlayerService.endTurnForUser(gameId, userIds[0])
+            ).rejects.toMatchObject({ code: TurnGuardErrorCode.WrongStatus, httpStatus: 409 });
+        });
+    });
+
     describe('Mercy Borrowing - deliverLoadForUser debt repayment', () => {
         it('should apply full payment to money when no debt exists', async () => {
             DemandDeckService.destroyAllInstances();

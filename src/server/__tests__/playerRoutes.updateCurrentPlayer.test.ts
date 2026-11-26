@@ -1,178 +1,241 @@
 /**
- * Tests for POST /api/players/updateCurrentPlayer
- * Focuses on phase-aware routing and stale-request validation (AC3).
+ * Tests for POST /api/players/updateCurrentPlayer (end turn).
+ * The route is authenticated and server-authoritative (#304): the caller must
+ * be the current player, and the body's currentPlayerIndex is ignored.
  */
 
 import request from 'supertest';
 import express from 'express';
 
-// Mock db before importing routes
-jest.mock('../db/index', () => ({
-  db: {
-    query: jest.fn(),
-  },
-}));
-
-// Mock InitialBuildService
-jest.mock('../services/InitialBuildService', () => ({
-  InitialBuildService: {
-    advanceTurn: jest.fn(),
-  },
-}));
-
 // Mock PlayerService
 jest.mock('../services/playerService', () => ({
   PlayerService: {
-    advanceTurn: jest.fn(),
-    updateCurrentPlayerIndex: jest.fn(),
-    getGameState: jest.fn(),
-    getPlayers: jest.fn().mockResolvedValue([]),
+    endTurnForUser: jest.fn(),
+    settleBuildCostForUser: jest.fn(),
+    getPlayers: jest.fn(),
   },
 }));
 
 // Mock socketService
+const mockRoomEmit = jest.fn();
 jest.mock('../services/socketService', () => ({
   emitTurnChange: jest.fn(),
   emitStatePatch: jest.fn().mockResolvedValue(undefined),
-  getSocketIO: jest.fn().mockReturnValue(null),
+  getSocketIO: jest.fn(),
 }));
 
-// Mock authMiddleware (no auth required for updateCurrentPlayer)
+// Mock authMiddleware: a request is authenticated when it carries x-test-user.
 jest.mock('../middleware/authMiddleware', () => ({
-  authenticateToken: jest.fn((req: any, res: any, next: any) => next()),
+  authenticateToken: jest.fn((req: any, res: any, next: any) => {
+    const userId = req.headers['x-test-user'];
+    if (!userId) {
+      return res.status(401).json({ error: 'UNAUTHORIZED', details: 'Access token required' });
+    }
+    req.user = { id: userId };
+    return next();
+  }),
   requireAuth: jest.fn((req: any, res: any, next: any) => next()),
 }));
 
-import { db } from '../db/index';
-import { InitialBuildService } from '../services/InitialBuildService';
 import { PlayerService } from '../services/playerService';
+import { emitStatePatch, getSocketIO } from '../services/socketService';
+import { TurnGuardError, TurnGuardErrorCode } from '../services/turnGuard';
 import playerRoutes from '../routes/playerRoutes';
 
-const mockQuery = db.query as unknown as jest.Mock;
-const mockAdvanceTurn = InitialBuildService.advanceTurn as jest.Mock;
-const mockGetGameState = PlayerService.getGameState as jest.Mock;
-const mockPlayerAdvanceTurn = PlayerService.advanceTurn as jest.Mock;
-const mockUpdateCurrentPlayerIndex = PlayerService.updateCurrentPlayerIndex as jest.Mock;
+const mockEndTurnForUser = PlayerService.endTurnForUser as jest.Mock;
+const mockSettleBuildCostForUser = PlayerService.settleBuildCostForUser as jest.Mock;
+const mockGetPlayers = PlayerService.getPlayers as jest.Mock;
+const mockEmitStatePatch = emitStatePatch as jest.Mock;
+const mockGetSocketIO = getSocketIO as jest.Mock;
 
 const app = express();
 app.use(express.json());
 app.use('/api/players', playerRoutes);
 
-function mockResult(rows: any[]) {
-  return { rows, command: '', rowCount: rows.length, oid: 0, fields: [] };
-}
-
 const gameId = 'game-123';
-// PlayerService.getGameState returns only { currentPlayerIndex }
-const mockGameState = { currentPlayerIndex: 0 };
+const userId = 'user-1';
+const playerId = 'player-1';
+
+function endTurn(body: Record<string, unknown>, asUser: string | null = userId): request.Test {
+  const req = request(app).post('/api/players/updateCurrentPlayer');
+  if (asUser) {
+    req.set('x-test-user', asUser);
+  }
+  return req.send(body);
+}
 
 describe('POST /api/players/updateCurrentPlayer', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockGetGameState.mockResolvedValue(mockGameState);
-    mockAdvanceTurn.mockResolvedValue(undefined);
-    mockPlayerAdvanceTurn.mockResolvedValue(undefined);
-    mockUpdateCurrentPlayerIndex.mockResolvedValue(undefined);
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockEndTurnForUser.mockResolvedValue({ playerId, turnNumber: 4, currentPlayerIndex: 1 });
+    mockSettleBuildCostForUser.mockResolvedValue({ playerId, charged: 7, money: 43 });
+    mockGetPlayers.mockResolvedValue([{ id: playerId, turnNumber: 4 }, { id: 'player-2', turnNumber: 3 }]);
+    mockEmitStatePatch.mockResolvedValue(undefined);
+    mockGetSocketIO.mockReturnValue({ to: jest.fn().mockReturnValue({ emit: mockRoomEmit }) });
   });
 
-  describe('Input validation (400)', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  describe('authentication and validation', () => {
+    it('should return 401 without a token and not end the turn', async () => {
+      await endTurn({ gameId }, null).expect(401);
+
+      expect(mockEndTurnForUser).not.toHaveBeenCalled();
+    });
+
     it('should return 400 when gameId is missing', async () => {
-      const response = await request(app)
-        .post('/api/players/updateCurrentPlayer')
-        .send({ currentPlayerIndex: 0 })
-        .expect(400);
+      const response = await endTurn({ currentPlayerIndex: 0 }).expect(400);
 
       expect(response.body.error).toBe('Validation error');
       expect(response.body.details).toContain('Game ID is required');
-    });
-
-    it('should return 400 when currentPlayerIndex is missing', async () => {
-      const response = await request(app)
-        .post('/api/players/updateCurrentPlayer')
-        .send({ gameId })
-        .expect(400);
-
-      expect(response.body.error).toBe('Validation error');
-      expect(response.body.details).toContain('Current player index must be a number');
-    });
-
-    it('should return 400 when currentPlayerIndex is a string', async () => {
-      const response = await request(app)
-        .post('/api/players/updateCurrentPlayer')
-        .send({ gameId, currentPlayerIndex: 'zero' })
-        .expect(400);
-
-      expect(response.body.error).toBe('Validation error');
+      expect(mockEndTurnForUser).not.toHaveBeenCalled();
     });
   });
 
-  describe('initialBuild phase', () => {
-    it('should return 409 when advanceTurn detects a stale request', async () => {
-      // Game has current_player_index = 0; advanceTurn's FOR UPDATE lock discovers
-      // another caller already advanced, so it throws with stale = true.
-      mockQuery.mockResolvedValueOnce(mockResult([{
-        status: 'initialBuild',
-        current_player_index: 0,
-      }]));
+  describe('ending the turn', () => {
+    it('should end the turn for the authenticated user and return the new index', async () => {
+      const response = await endTurn({ gameId }).expect(200);
+
+      expect(mockEndTurnForUser).toHaveBeenCalledWith(gameId, userId);
+      expect(response.body).toEqual({ currentPlayerIndex: 1, playerId, turnNumber: 4 });
+    });
+
+    it('should ignore a currentPlayerIndex sent by the client', async () => {
+      const response = await endTurn({ gameId, currentPlayerIndex: 5 }).expect(200);
+
+      expect(mockEndTurnForUser).toHaveBeenCalledWith(gameId, userId);
+      expect(response.body).toEqual({ currentPlayerIndex: 1, playerId, turnNumber: 4 });
+    });
+
+    it('should broadcast the reset track state and the ending player', async () => {
+      await endTurn({ gameId }).expect(200);
+
+      expect(mockRoomEmit).toHaveBeenCalledWith(
+        'track:updated',
+        expect.objectContaining({ gameId, playerId }),
+      );
+      expect(mockGetPlayers).toHaveBeenCalledWith(gameId, userId);
+      expect(mockEmitStatePatch).toHaveBeenCalledWith(gameId, {
+        players: [{ id: playerId, turnNumber: 4 }],
+      });
+    });
+  });
+
+  describe('refusals', () => {
+    it('should return 403 when the caller is not the current player', async () => {
+      mockEndTurnForUser.mockRejectedValueOnce(
+        new TurnGuardError(TurnGuardErrorCode.NotYourTurn, 'Not your turn'),
+      );
+
+      const response = await endTurn({ gameId }).expect(403);
+
+      expect(response.body).toEqual({ error: 'Forbidden', code: 'NotYourTurn', details: 'Not your turn' });
+      expect(mockRoomEmit).not.toHaveBeenCalled();
+      expect(mockEmitStatePatch).not.toHaveBeenCalled();
+    });
+
+    it('should return 403 when the caller has no player in the game', async () => {
+      mockEndTurnForUser.mockRejectedValueOnce(
+        new TurnGuardError(TurnGuardErrorCode.NotAMember, 'Player not found in game'),
+      );
+
+      const response = await endTurn({ gameId }).expect(403);
+
+      expect(response.body.code).toBe('NotAMember');
+    });
+
+    it('should return 409 when the game status does not allow ending a turn', async () => {
+      mockEndTurnForUser.mockRejectedValueOnce(
+        new TurnGuardError(TurnGuardErrorCode.WrongStatus, 'Action not allowed while the game is completed'),
+      );
+
+      await endTurn({ gameId }).expect(409);
+    });
+
+    it('should return 409 when the initial-build advance detects a stale request', async () => {
       const staleErr = new Error('Stale request: expected current_player_index 0, got 1');
       (staleErr as any).stale = true;
-      mockAdvanceTurn.mockRejectedValueOnce(staleErr);
+      mockEndTurnForUser.mockRejectedValueOnce(staleErr);
 
-      const response = await request(app)
-        .post('/api/players/updateCurrentPlayer')
-        .send({ gameId, currentPlayerIndex: 1 })
-        .expect(409);
+      const response = await endTurn({ gameId }).expect(409);
 
       expect(response.body.error).toBe('Conflict');
       expect(response.body.details).toContain('Stale request');
-      expect(mockAdvanceTurn).toHaveBeenCalledWith(gameId, 0);
     });
 
-    it('should call InitialBuildService.advanceTurn with expectedCurrentIndex', async () => {
-      mockQuery.mockResolvedValueOnce(mockResult([{
-        status: 'initialBuild',
-        current_player_index: 0,
-      }]));
+    it('should return 500 on an unexpected error', async () => {
+      mockEndTurnForUser.mockRejectedValueOnce(new Error('db down'));
 
-      const response = await request(app)
-        .post('/api/players/updateCurrentPlayer')
-        .send({ gameId, currentPlayerIndex: 1 })
-        .expect(200);
+      const response = await endTurn({ gameId }).expect(500);
 
-      expect(mockAdvanceTurn).toHaveBeenCalledWith(gameId, 0);
-      expect(response.body).toEqual(mockGameState);
-    });
-
-    it('should not call updateCurrentPlayerIndex during initialBuild', async () => {
-      mockQuery.mockResolvedValueOnce(mockResult([{
-        status: 'initialBuild',
-        current_player_index: 0,
-      }]));
-
-      await request(app)
-        .post('/api/players/updateCurrentPlayer')
-        .send({ gameId, currentPlayerIndex: 1 })
-        .expect(200);
-
-      expect(mockUpdateCurrentPlayerIndex).not.toHaveBeenCalled();
+      expect(response.body.error).toBe('Server error');
     });
   });
+});
 
-  describe('active phase', () => {
-    it('should call PlayerService.advanceTurn for active games', async () => {
-      mockQuery.mockResolvedValueOnce(mockResult([{
-        status: 'active',
-        current_player_index: 1,
-      }]));
+describe('POST /api/players/settle-build-cost', () => {
+  function settle(body: Record<string, unknown>, asUser: string | null = userId): request.Test {
+    const req = request(app).post('/api/players/settle-build-cost');
+    if (asUser) {
+      req.set('x-test-user', asUser);
+    }
+    return req.send(body);
+  }
 
-      const response = await request(app)
-        .post('/api/players/updateCurrentPlayer')
-        .send({ gameId, currentPlayerIndex: 2 })
-        .expect(200);
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockSettleBuildCostForUser.mockResolvedValue({ playerId, charged: 7, money: 43 });
+    mockGetPlayers.mockResolvedValue([{ id: playerId, money: 43 }]);
+    mockEmitStatePatch.mockResolvedValue(undefined);
+    mockGetSocketIO.mockReturnValue({ to: jest.fn().mockReturnValue({ emit: mockRoomEmit }) });
+  });
 
-      expect(mockPlayerAdvanceTurn).toHaveBeenCalledWith(gameId);
-      expect(mockAdvanceTurn).not.toHaveBeenCalled();
-      expect(response.body).toEqual(mockGameState);
-    });
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('should return 401 without a token', async () => {
+    await settle({ gameId }, null).expect(401);
+
+    expect(mockSettleBuildCostForUser).not.toHaveBeenCalled();
+  });
+
+  it('should return 400 when gameId is missing', async () => {
+    await settle({}).expect(400);
+
+    expect(mockSettleBuildCostForUser).not.toHaveBeenCalled();
+  });
+
+  it('should settle for the authenticated user and broadcast the charge', async () => {
+    const response = await settle({ gameId }).expect(200);
+
+    expect(mockSettleBuildCostForUser).toHaveBeenCalledWith(gameId, userId);
+    expect(response.body).toEqual({ charged: 7, money: 43 });
+    expect(mockRoomEmit).toHaveBeenCalledWith('track:updated', expect.objectContaining({ gameId, playerId }));
+    expect(mockEmitStatePatch).toHaveBeenCalledWith(gameId, { players: [{ id: playerId, money: 43 }] });
+  });
+
+  it('should not broadcast when nothing was charged', async () => {
+    mockSettleBuildCostForUser.mockResolvedValueOnce({ playerId, charged: 0, money: 50 });
+
+    const response = await settle({ gameId }).expect(200);
+
+    expect(response.body).toEqual({ charged: 0, money: 50 });
+    expect(mockRoomEmit).not.toHaveBeenCalled();
+    expect(mockEmitStatePatch).not.toHaveBeenCalled();
+  });
+
+  it('should return 403 when the caller is not the current player', async () => {
+    mockSettleBuildCostForUser.mockRejectedValueOnce(
+      new TurnGuardError(TurnGuardErrorCode.NotYourTurn, 'Not your turn'),
+    );
+
+    const response = await settle({ gameId }).expect(403);
+
+    expect(response.body.code).toBe('NotYourTurn');
   });
 });
