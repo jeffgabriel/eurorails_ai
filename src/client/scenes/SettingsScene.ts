@@ -16,6 +16,10 @@ export class SettingsScene extends Phaser.Scene {
     private selectedColor?: PlayerColor;
     private errorContainer?: Phaser.GameObjects.Container;
     private joinCode?: string;
+    /** User id of the game's creator, who alone may delete players and end the game. */
+    private creatorUserId?: string;
+    /** Game the join code and creator were fetched for. */
+    private lobbyInfoGameId?: string;
     private activeTab: 'players' | 'rules' = 'players';
 
     constructor() {
@@ -31,6 +35,31 @@ export class SettingsScene extends Phaser.Scene {
 
     init(data: { gameState: FullGameState }) {
         this.gameState = data.gameState;
+        // Re-read the join code and creator each time Settings opens: the scene
+        // instance is reused, and the creator changes if the old one leaves.
+        this.joinCode = undefined;
+        this.creatorUserId = undefined;
+        this.lobbyInfoGameId = undefined;
+    }
+
+    /** The signed-in user's id (same source PlayerStateService uses). */
+    private getLocalUserId(): string | null {
+        try {
+            const userJson = localStorage.getItem('eurorails.user');
+            return userJson ? (JSON.parse(userJson)?.id ?? null) : null;
+        } catch {
+            return null;
+        }
+    }
+
+    private isLocalUserCreator(): boolean {
+        const userId = this.getLocalUserId();
+        return !!userId && userId === this.creatorUserId;
+    }
+
+    private isOwnPlayer(player: Player): boolean {
+        const userId = this.getLocalUserId();
+        return !!userId && player.userId === userId;
     }
 
     async create() {
@@ -55,12 +84,14 @@ export class SettingsScene extends Phaser.Scene {
         ).setOrigin(0);
         
         // Fetch join code if we have a game ID
-        if (this.gameState.id && !this.joinCode) {
+        if (this.gameState.id && this.lobbyInfoGameId !== this.gameState.id) {
             try {
                 const response = await authenticatedFetch(`${config.apiBaseUrl}/api/lobby/games/${this.gameState.id}`);
                 if (response.ok) {
                     const data = await response.json();
                     this.joinCode = data.data?.joinCode;
+                    this.creatorUserId = data.data?.createdBy ?? undefined;
+                    this.lobbyInfoGameId = this.gameState.id;
                 }
             } catch (error) {
                 console.error('Failed to fetch join code:', error);
@@ -223,6 +254,7 @@ export class SettingsScene extends Phaser.Scene {
         if (this.activeTab === 'players') {
             // Add player list with edit/delete buttons
             const playerListStartY = contentTopY + 20;
+            const isCreator = this.isLocalUserCreator();
             this.gameState.players.forEach((player, index) => {
                 const y = playerListStartY + (index * 60);
                 const rowCenter = this.scale.width / 2;
@@ -248,30 +280,34 @@ export class SettingsScene extends Phaser.Scene {
                     parseInt(player.color.replace('#', '0x'))
                 ).setOrigin(0.5);
 
-                // Edit button
-                const editButton = this.add.rectangle(
-                    rowCenter + 100,
-                    y,
-                    80,
-                    30,
-                    0x0055aa
-                ).setInteractive({ useHandCursor: true });
+                const isOwn = this.isOwnPlayer(player);
 
-                this.add.text(
-                    rowCenter + 100,
-                    y,
-                    'Edit',
-                    {
-                        color: '#ffffff',
-                        fontSize: '16px',
-                        fontFamily: UI_FONT_FAMILY
-                    }
-                ).setOrigin(0.5);
+                // Edit button (your own row only)
+                if (isOwn) {
+                    const editButton = this.add.rectangle(
+                        rowCenter + 100,
+                        y,
+                        80,
+                        30,
+                        0x0055aa
+                    ).setInteractive({ useHandCursor: true });
 
-                editButton.on('pointerdown', () => this.showEditPlayer(player));
+                    this.add.text(
+                        rowCenter + 100,
+                        y,
+                        'Edit',
+                        {
+                            color: '#ffffff',
+                            fontSize: '16px',
+                            fontFamily: UI_FONT_FAMILY
+                        }
+                    ).setOrigin(0.5);
 
-                // Delete button (only show if more than 2 players)
-                if (this.gameState.players.length > 2) {
+                    editButton.on('pointerdown', () => this.showEditPlayer(player));
+                }
+
+                // Delete button (creator only, never their own row, and only with more than 2 players)
+                if (isCreator && !isOwn && this.gameState.players.length > 2) {
                     const deleteButton = this.add.rectangle(
                         rowCenter + 200,
                         y,
@@ -339,7 +375,21 @@ export class SettingsScene extends Phaser.Scene {
             const buttonHeight = 48;
             const buttonGap = 14;
             const bottomPadding = 48;
-            const buttonCount = 3;
+            const bottomButtons: Array<{ label: string; color: number; onClick: () => void }> = [];
+            if (this.isLocalUserCreator()) {
+                bottomButtons.push({ label: 'End Game', color: 0xff0000, onClick: () => this.endGame() });
+            }
+            bottomButtons.push({
+                label: 'Back to Lobby',
+                color: 0x2563eb,
+                onClick: () => {
+                    // Do not end the game; just return to the lobby UI.
+                    // Use a full navigation since Phaser is running outside React.
+                    window.location.href = '/lobby';
+                },
+            });
+            bottomButtons.push({ label: 'Back to Game', color: 0x666666, onClick: () => this.closeSettings() });
+            const buttonCount = bottomButtons.length;
             const blockHeight = (buttonCount * buttonHeight) + ((buttonCount - 1) * buttonGap);
             const blockTopY = panelBottomY - bottomPadding - blockHeight;
 
@@ -401,75 +451,28 @@ export class SettingsScene extends Phaser.Scene {
 
             goButton.on('pointerdown', runCitySearch);
 
-            // Add end game button
-            const endGameButton = this.add.rectangle(
-                buttonX,
-                yForButtonIndex(0),
-                buttonWidth,
-                buttonHeight,
-                0xff0000
-            ).setInteractive({ useHandCursor: true });
+            bottomButtons.forEach((button, idx) => {
+                const rect = this.add.rectangle(
+                    buttonX,
+                    yForButtonIndex(idx),
+                    buttonWidth,
+                    buttonHeight,
+                    button.color
+                ).setInteractive({ useHandCursor: true });
 
-            this.add.text(
-                buttonX,
-                yForButtonIndex(0),
-                'End Game',
-                {
-                    color: '#ffffff',
-                    fontSize: '20px',
-                    fontFamily: UI_FONT_FAMILY
-                }
-            ).setOrigin(0.5);
+                this.add.text(
+                    buttonX,
+                    yForButtonIndex(idx),
+                    button.label,
+                    {
+                        color: '#ffffff',
+                        fontSize: '20px',
+                        fontFamily: UI_FONT_FAMILY
+                    }
+                ).setOrigin(0.5);
 
-            endGameButton.on('pointerdown', () => this.endGame());
-
-            // Add lobby button
-            const lobbyButton = this.add.rectangle(
-                buttonX,
-                yForButtonIndex(1),
-                buttonWidth,
-                buttonHeight,
-                0x2563eb // blue
-            ).setInteractive({ useHandCursor: true });
-
-            this.add.text(
-                buttonX,
-                yForButtonIndex(1),
-                'Back to Lobby',
-                {
-                    color: '#ffffff',
-                    fontSize: '20px',
-                    fontFamily: UI_FONT_FAMILY
-                }
-            ).setOrigin(0.5);
-
-            lobbyButton.on('pointerdown', () => {
-                // Do not end the game; just return to the lobby UI.
-                // Use a full navigation since Phaser is running outside React.
-                window.location.href = '/lobby';
+                rect.on('pointerdown', button.onClick);
             });
-
-            // Add back-to-game button
-            const backButton = this.add.rectangle(
-                buttonX,
-                yForButtonIndex(2),
-                buttonWidth,
-                buttonHeight,
-                0x666666
-            ).setInteractive({ useHandCursor: true });
-
-            this.add.text(
-                buttonX,
-                yForButtonIndex(2),
-                'Back to Game',
-                {
-                    color: '#ffffff',
-                    fontSize: '20px',
-                    fontFamily: UI_FONT_FAMILY
-                }
-            ).setOrigin(0.5);
-
-            backButton.on('pointerdown', () => this.closeSettings());
         }
     }
 
@@ -632,46 +635,32 @@ export class SettingsScene extends Phaser.Scene {
             return;
         }
 
-        try {
-            // Update player locally first
-            const updatedPlayer = {
-                ...this.editingPlayer,
-                name: newName,
-                color: this.selectedColor || this.editingPlayer.color
-            };
+        if (!this.isOwnPlayer(this.editingPlayer)) {
+            this.showErrorMessage('You can only edit your own player');
+            return;
+        }
 
-            // Save to database
-            const response = await fetch(`${config.apiBaseUrl}/api/players/update`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+        try {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/me`, {
+                method: 'PATCH',
                 body: JSON.stringify({
                     gameId: this.gameState.id,
-                    player: updatedPlayer
+                    name: newName,
+                    color: this.selectedColor || this.editingPlayer.color
                 })
             });
-            
-            // Log headers in a TypeScript-friendly way
-            const headers: Record<string, string> = {};
-            response.headers.forEach((value, key) => {
-                headers[key] = value;
-            });
 
-            // Try to get response body regardless of status
-            const responseText = await response.text();
-
-            let errorData;
-            try {
-                errorData = JSON.parse(responseText);
-            } catch (parseError) {
-                console.error('Failed to parse response as JSON:', parseError);
-                throw new Error('Server returned invalid JSON response');
-            }
-
+            const responseData = await response.json().catch(() => null);
             if (!response.ok) {
-                throw new Error(errorData.error || 'Failed to update player');
+                throw new Error(responseData?.details || responseData?.error || 'Failed to update player');
             }
+
+            // The server normalizes the name and color; show what it stored.
+            const updatedPlayer: Player = {
+                ...this.editingPlayer,
+                name: responseData?.player?.name ?? newName,
+                color: responseData?.player?.color ?? (this.selectedColor || this.editingPlayer.color)
+            };
 
             // Update local state only after successful save
             const playerIndex = this.gameState.players.findIndex(p => p.id === this.editingPlayer!.id);
@@ -689,30 +678,25 @@ export class SettingsScene extends Phaser.Scene {
 
     private async deletePlayer(player: Player) {
         try {
-            const response = await fetch(`${config.apiBaseUrl}/api/players/delete`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    gameId: this.gameState.id,
-                    playerId: player.id
-                })
-            });
+            const response = await authenticatedFetch(
+                `${config.apiBaseUrl}/api/game/${this.gameState.id}/players/${player.id}`,
+                { method: 'DELETE' }
+            );
 
+            const responseData = await response.json().catch(() => null);
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || 'Failed to delete player');
+                throw new Error(responseData?.details || responseData?.error || 'Failed to delete player');
             }
 
-            // Update local state
+            // Update local state; the server says who the current player is now.
             const index = this.gameState.players.indexOf(player);
             if (index > -1) {
                 this.gameState.players.splice(index, 1);
-                // Adjust currentPlayerIndex if needed
-                if (this.gameState.currentPlayerIndex >= this.gameState.players.length) {
-                    this.gameState.currentPlayerIndex = 0;
-                }
+            }
+            if (typeof responseData?.currentPlayerIndex === 'number') {
+                this.gameState.currentPlayerIndex = responseData.currentPlayerIndex;
+            } else if (this.gameState.currentPlayerIndex >= this.gameState.players.length) {
+                this.gameState.currentPlayerIndex = 0;
             }
 
             this.create();
@@ -793,12 +777,13 @@ export class SettingsScene extends Phaser.Scene {
 
     private async endGame() {
         try {
-            const response = await fetch(`${config.apiBaseUrl}/api/players/game/${this.gameState.id}/end`, {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/game/${this.gameState.id}/end`, {
                 method: 'POST'
             });
 
             if (!response.ok) {
-                throw new Error('Failed to end game');
+                const responseData = await response.json().catch(() => null);
+                throw new Error(responseData?.details || 'Failed to end game');
             }
 
             // Stop all current scenes
@@ -815,7 +800,7 @@ export class SettingsScene extends Phaser.Scene {
             window.location.href = '/lobby';
         } catch (error) {
             console.error('Error ending game:', error);
-            this.showErrorMessage('Failed to end game');
+            this.showErrorMessage(error instanceof Error ? error.message : 'Failed to end game');
         }
     }
 } 

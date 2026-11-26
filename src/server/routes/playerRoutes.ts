@@ -6,6 +6,8 @@ import { emitStatePatch, getSocketIO } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { TurnGuardError } from '../services/turnGuard';
+import { GameSettingsService, GameSettingsError } from '../services/gameSettingsService';
+import { isUuid } from '../utils/uuid';
 
 const router = express.Router();
 
@@ -101,23 +103,56 @@ router.post('/update', async (req, res) => {
     }
 });
 
-// Delete player
-router.post('/delete', async (req, res) => {
+// Edit the caller's own player (Settings menu): name and/or color only.
+// The player is found from the token, so no other player can be targeted.
+router.patch('/me', authenticateToken, async (req, res) => {
     try {
-        const { gameId, playerId } = req.body;
+        const { gameId, name, color } = req.body as {
+            gameId?: string;
+            name?: string;
+            color?: string;
+        };
+        const userId = req.user?.id;
 
-        // Validate request
-        if (!gameId || !playerId) {
-            console.error('Invalid request - missing gameId or playerId:', req.body);
-            return res.status(400).json({ error: 'Missing required fields' });
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
         }
 
-        await PlayerService.deletePlayer(gameId, playerId);
+        if (!isUuid(gameId)) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'Game ID is required'
+            });
+        }
 
-        return res.status(200).json({ message: 'Player deleted successfully' });
-    } catch (error) {
-        console.error('Error in /delete route:', error);
-        return res.status(500).json({ error: 'Failed to delete player' });
+        if (name === undefined && color === undefined) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'Provide a name or a color to change'
+            });
+        }
+
+        const profile = await GameSettingsService.updateOwnPlayer(gameId, userId, { name, color });
+
+        const updatedPlayers = await PlayerService.getPlayers(gameId, userId);
+        const updatedPlayer = updatedPlayers.find(p => p.id === profile.id);
+        if (updatedPlayer) {
+            await emitStatePatch(gameId, { players: [updatedPlayer] } as any);
+        }
+
+        return res.status(200).json({ player: profile });
+    } catch (error: any) {
+        if (error instanceof GameSettingsError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+        console.error('Error in PATCH /me route:', error);
+        return res.status(500).json({
+            error: 'Server error',
+            details: 'Failed to update player'
+        });
     }
 });
 
@@ -265,21 +300,6 @@ router.post('/settle-build-cost', authenticateToken, async (req, res) => {
         }
         console.error('Error in /settle-build-cost route:', error);
         return res.status(500).json({
-            error: 'Server error',
-            details: error.message || 'An unexpected error occurred'
-        });
-    }
-});
-
-// End game
-router.post('/game/:gameId/end', async (req, res) => {
-    try {
-        const { gameId } = req.params;
-        await PlayerService.updateGameStatus(gameId, 'completed');
-        return res.status(200).json({ message: 'Game ended successfully' });
-    } catch (error: any) {
-        console.error('Error ending game:', error);
-        return res.status(500).json({ 
             error: 'Server error',
             details: error.message || 'An unexpected error occurred'
         });

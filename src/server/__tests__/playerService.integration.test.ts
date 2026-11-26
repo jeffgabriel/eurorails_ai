@@ -182,61 +182,6 @@ describe('PlayerService Integration Tests', () => {
             await expect(PlayerService.createPlayer(gameId, player))
                 .rejects.toThrow('Invalid color format');
         });
-
-        it('should delete a player', async () => {
-            const playerId = uuidv4();
-            const player = {
-                id: playerId,
-                name: 'Test Player',
-                color: '#FF0000',
-                money: 50,
-                trainType: TrainType.Freight,
-                turnNumber: 1,
-                trainState: {
-                    position: {x: 0, y: 0, row: 0, col: 0},
-                    movementHistory: [],
-                    remainingMovement: 9,
-                    loads: [] as LoadType[]
-                },
-                hand: []
-            };
-            await PlayerService.createPlayer(gameId, player);
-            await PlayerService.deletePlayer(gameId, playerId);
-
-            const result = await db.query('SELECT * FROM players WHERE id = $1', [playerId]);
-            expect(result.rows.length).toBe(0);
-        });
-
-        it('should cascade delete player tracks when player is deleted', async () => {
-            // Ensure the game exists before inserting player and tracks
-            const playerId = uuidv4();
-            const player = {
-                id: playerId,
-                name: 'Test Player',
-                color: '#FF0000',
-                money: 50,
-                trainType: TrainType.Freight,
-                turnNumber: 1,
-                trainState: {
-                    position: {x: 0, y: 0, row: 0, col: 0},
-                    movementHistory: [],
-                    remainingMovement: 9,
-                    loads: [] as LoadType[]
-                },
-                hand: []
-            };
-            await PlayerService.createPlayer(gameId, player);
-            
-            // Add some track data
-            await db.query(
-                'INSERT INTO player_tracks (game_id, player_id, segments, total_cost) VALUES ($1, $2, $3, $4)',
-                [gameId, playerId, JSON.stringify([{x1: 0, y1: 0, x2: 1, y2: 1}]), 10]
-            );
-            await PlayerService.deletePlayer(gameId, playerId);
-
-            const trackResult = await db.query('SELECT * FROM player_tracks WHERE player_id = $1', [playerId]);
-            expect(trackResult.rows.length).toBe(0);
-        });
     });
 
     describe('Track usage fees (move-train + undo)', () => {
