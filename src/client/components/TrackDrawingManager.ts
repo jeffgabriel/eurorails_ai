@@ -3,8 +3,13 @@ import { FullGameState, TerrainType, GridPoint } from '../../shared/types/GameTy
 import { TrackSegment, PlayerTrackState } from '../../shared/types/TrackTypes';
 import { MapRenderer } from './MapRenderer';
 import { TrackService } from '../services/TrackService';
-import { getWaterCrossingExtraCost } from '../../shared/config/waterCrossings';
-import { TERRAIN_BUILD_COSTS } from '../../shared/config/terrainCosts';
+import {
+    computeSegmentBuildCost,
+    FerryChargeMode,
+    SegmentCostContext,
+    SegmentCostFerry,
+    TrackCostCoord,
+} from '../../shared/services/trackBuildCost';
 import { getMajorCityLookup } from '../../shared/services/majorCityGroups';
 import { diag } from '../utils/deviceDiagnostics';
 
@@ -1453,86 +1458,41 @@ export class TrackDrawingManager {
         return isAdjacent;
     }
 
+    /**
+     * Cost of building one new track section for the current player.
+     * Delegates to the shared cost module (single source of truth, #307);
+     * this method only supplies the client's view of the map and of the
+     * player's committed + in-drawing track.
+     */
     private calculateTrackCost(from: GridPoint, to: GridPoint): number {
-        // Get the base cost from the terrain type
-        let cost = TERRAIN_BUILD_COSTS[to.terrain];
-
-        // Special handling for major city connections:
-        // 1. First connection TO a major city or its outpost costs exactly 5 ECU
-        // 2. Connections FROM a major city or its outpost use the destination's terrain cost
-        // 3. Subsequent connections TO a major city or its outpost use the terrain cost
-        const isToMajorCity = to.city?.type === TerrainType.MajorCity || this.isConnectedPointOfMajorCity(to);
-        const isFromMajorCity = from.city?.type === TerrainType.MajorCity || this.isConnectedPointOfMajorCity(from);
-
-        if (isToMajorCity && !isFromMajorCity) {
-            // Get current player's track state
-            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-            const playerTrackState = this.playerTracks.get(currentPlayer.id);
-            
-            // Check if this is the first connection to this major city or its outpost
-            const isFirstConnection = !playerTrackState?.segments.some(segment => 
-                (segment.from.row === to.row && segment.from.col === to.col) ||
-                (segment.to.row === to.row && segment.to.col === to.col)
-            ) && !this.currentSegments.some(segment =>
-                (segment.from.row === to.row && segment.from.col === to.col) ||
-                (segment.to.row === to.row && segment.to.col === to.col)
-            );
-            
-            if (isFirstConnection) {
-                // First connection to major city or its outpost is exactly 5 ECU
-                cost = 5;
-            }
-        }
-
-        // Handle ferry port costs
-        if (to.terrain === TerrainType.FerryPort && to.ferryConnection) {
-            const ferryConnection = to.ferryConnection;
-            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-            const playerTrackState = this.playerTracks.get(currentPlayer.id);
-
-            // Create a Set of points that are connected to either end of the ferry
-            const connectedPoints = new Set<string>();
-            
-            // Helper function to add points from segments to the Set
-            const addPointsFromSegments = (segments: TrackSegment[]) => {
-                segments.forEach(segment => {
-                    connectedPoints.add(`${segment.from.row},${segment.from.col}`);
-                    connectedPoints.add(`${segment.to.row},${segment.to.col}`);
-                });
-            };
-
-            // Add points from existing segments
-            if (playerTrackState) {
-                addPointsFromSegments(playerTrackState.segments);
-            }
-            
-            // Add points from current segments being built
-            addPointsFromSegments(this.currentSegments);
-
-            // Create Set of ferry connection points
-            const ferryPoints = new Set([
-                `${ferryConnection.connections[0].row},${ferryConnection.connections[0].col}`,
-                `${ferryConnection.connections[1].row},${ferryConnection.connections[1].col}`
-            ]);
-
-            // Check if any ferry points are already connected
-            const isFirstConnection = !Array.from(ferryPoints).some(point => connectedPoints.has(point));
-
-            if (isFirstConnection) {
-                // First player to build to either point in the ferry connection pays the full ferry cost
-                cost = ferryConnection.cost;
-            } else {
-                // Subsequent players or building to the other end costs nothing
-                cost = 0;
-            }
-        }
-
-        // Additional cost for water crossings (river/lake/ocean inlet) based on the map image-derived lookup.
-        // This is independent of direction; the lookup normalizes the edge key.
-        cost += getWaterCrossingExtraCost(from, to);
-
-        return cost;
+        return computeSegmentBuildCost(from, to, this.segmentCostContext);
     }
+
+    private readonly segmentCostContext: SegmentCostContext<GridPoint> = {
+        // Major city center or one of its outposts
+        isMajorCityPoint: (point: GridPoint): boolean =>
+            point.city?.type === TerrainType.MajorCity || this.isConnectedPointOfMajorCity(point),
+        getFerryAt: (point: GridPoint): SegmentCostFerry | undefined => {
+            if (point.terrain !== TerrainType.FerryPort || !point.ferryConnection) {
+                return undefined;
+            }
+            return {
+                cost: point.ferryConnection.cost,
+                ports: point.ferryConnection.connections,
+            };
+        },
+        // Committed segments of the current player plus segments being drawn this turn
+        hasBuilderTrackAt: (coord: TrackCostCoord): boolean => {
+            const touches = (segment: TrackSegment): boolean =>
+                (segment.from.row === coord.row && segment.from.col === coord.col) ||
+                (segment.to.row === coord.row && segment.to.col === coord.col);
+            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+            const playerTrackState = this.playerTracks.get(currentPlayer.id);
+            return !!playerTrackState?.segments.some(touches) || this.currentSegments.some(touches);
+        },
+        // First player connection to either port pays the ferry cost; later connections cost nothing
+        ferryChargeMode: FerryChargeMode.FirstConnectionOnly,
+    };
 
     private isSegmentInAnyOtherNetwork(point1: GridPoint, point2: GridPoint, currentPlayerId: string): boolean {
         // Check all player networks except the current player
