@@ -7,12 +7,14 @@
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
+import type { PoolClient } from 'pg';
 import app from '../app';
 import { db } from '../db';
 import { TrackService } from '../services/trackService';
+import { VICTORY_INITIAL_THRESHOLD } from '../../shared/types/GameTypes';
 import { victoryTrack } from './fixtures/victoryFixtures';
 
-async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<T> {
+async function runQuery<T>(queryFn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await db.connect();
   try {
     return await queryFn(client);
@@ -22,7 +24,8 @@ async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<
 }
 
 function tokenFor(userId: string): string {
-  const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+  // Set by the Jest setup file; no fallback, matching AuthService.
+  const JWT_SECRET = process.env.JWT_SECRET as string;
   const now = Math.floor(Date.now() / 1000);
   return jwt.sign({ userId, email: `${userId}@example.com`, username: userId, iat: now, exp: now + 15 * 60 }, JWT_SECRET);
 }
@@ -94,7 +97,7 @@ describe('Victory declare/resolve integrity (#306)', () => {
     );
   }
 
-  async function gameRow(): Promise<any> {
+  async function gameRow(): Promise<Record<string, unknown>> {
     const result = await db.query('SELECT * FROM games WHERE id = $1', [gameId]);
     return result.rows[0];
   }
@@ -102,6 +105,33 @@ describe('Victory declare/resolve integrity (#306)', () => {
   async function moneyOf(playerId: string): Promise<number> {
     const result = await db.query('SELECT money FROM players WHERE id = $1', [playerId]);
     return Number(result.rows[0].money);
+  }
+
+  /**
+   * Runs `action` while every pooled connection but one is held. A transaction
+   * that reads through the pool as well as its own connection would wait on
+   * the pool forever here, so the action is given a deadline.
+   */
+  async function withOneFreeConnection<T>(action: () => PromiseLike<T>): Promise<T> {
+    const poolSize = parseInt(process.env.DB_MAX_CONNECTIONS || '10');
+    const held: PoolClient[] = [];
+    let timer: NodeJS.Timeout | undefined;
+    let pending: Promise<T> | undefined;
+    try {
+      for (let i = 0; i < poolSize - 1; i++) {
+        held.push(await db.connect());
+      }
+      pending = Promise.resolve(action());
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Request needed more than one pooled connection')), 3000);
+      });
+      return await Promise.race([pending, deadline]);
+    } finally {
+      clearTimeout(timer);
+      held.forEach(client => client.release());
+      // Let a stalled request finish now that connections are free.
+      await pending?.then(() => undefined, () => undefined);
+    }
   }
 
   function declare(token?: string, body: object = {}): request.Test {
@@ -182,7 +212,7 @@ describe('Victory declare/resolve integrity (#306)', () => {
       const res = await declare(firstToken, { playerId: secondPlayerId, connectedCities: [] });
       expect(res.status).toBe(200);
       expect(res.body.victoryState).toEqual({
-        triggered: true, triggerPlayerIndex: 0, finalTurnPlayerIndex: 2, victoryThreshold: 250,
+        triggered: true, triggerPlayerIndex: 0, finalTurnPlayerIndex: 2, victoryThreshold: VICTORY_INITIAL_THRESHOLD,
       });
       expect(await gameRow()).toMatchObject({
         victory_triggered: true, victory_trigger_player_index: 0, final_turn_player_index: 2,
@@ -232,6 +262,12 @@ describe('Victory declare/resolve integrity (#306)', () => {
       expect([a.status, b.status].sort()).toEqual([200, 400]);
       const rejected = a.status === 400 ? a : b;
       expect(rejected.body.details).toBe('Victory already declared');
+    });
+
+    it('needs only one pooled connection', async () => {
+      await createGame();
+      const res = await withOneFreeConnection(() => declare(firstToken));
+      expect(res.status).toBe(200);
     });
   });
 
@@ -286,6 +322,14 @@ describe('Victory declare/resolve integrity (#306)', () => {
       expect((await gameRow()).status).toBe('active');
     });
 
+    it('needs only one pooled connection', async () => {
+      await createGame();
+      await triggerFinalRound(2);
+      const res = await withOneFreeConnection(() => resolve(thirdToken));
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ gameOver: true, winnerId: firstPlayerId });
+    });
+
     it('lets the final-turn player resolve during their turn', async () => {
       await createGame();
       await triggerFinalRound(2);
@@ -324,7 +368,7 @@ describe('Victory declare/resolve integrity (#306)', () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
         gameOver: false,
-        victoryState: { triggered: false, triggerPlayerIndex: -1, finalTurnPlayerIndex: -1, victoryThreshold: 250 },
+        victoryState: { triggered: false, triggerPlayerIndex: -1, finalTurnPlayerIndex: -1, victoryThreshold: VICTORY_INITIAL_THRESHOLD },
       });
       expect(await gameRow()).toMatchObject({ status: 'active', winner_id: null, victory_triggered: false });
     });

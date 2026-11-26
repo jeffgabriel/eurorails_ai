@@ -37,7 +37,7 @@ describe('victory resolution HTTP synchronization', () => {
     const victoryState = {
       triggered: false, triggerPlayerIndex: -1, finalTurnPlayerIndex: -1, victoryThreshold: 250,
     };
-    jest.mocked(VictoryService.resolveVictoryForUser).mockResolvedValue({ gameOver: false, victoryState });
+    jest.mocked(VictoryService.resolveVictoryForUser).mockResolvedValueOnce({ gameOver: false, victoryState });
     if (broadcastFails) {
       jest.mocked(emitStatePatch).mockRejectedValueOnce(new Error('sequence database unavailable'));
     }
@@ -53,7 +53,7 @@ describe('victory resolution HTTP synchronization', () => {
   });
 
   it('does not broadcast when a final round is not active', async () => {
-    jest.mocked(VictoryService.resolveVictoryForUser).mockRejectedValue(new VictoryNotFinalTurnError());
+    jest.mocked(VictoryService.resolveVictoryForUser).mockRejectedValueOnce(new VictoryNotFinalTurnError());
     const result = await request(app).post(`/api/game/${GAME_ID}/resolve-victory`);
     expect(result.status).toBe(400);
     expect(result.body.error).toBe('NOT_FINAL_TURN');

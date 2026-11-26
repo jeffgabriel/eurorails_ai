@@ -108,8 +108,15 @@ export class TrackService {
         }
     }
 
-    static async getTrackState(gameId: string, playerId: string): Promise<PlayerTrackState | null> {
-        const result = await db.query(
+    static async getTrackState(
+        gameId: string,
+        playerId: string,
+        client?: { query: (text: string, params?: any[]) => Promise<any> }
+    ): Promise<PlayerTrackState | null> {
+        // Inside a transaction, read on the caller's connection so the read
+        // does not need a second one from the pool.
+        const q = client && typeof client.query === 'function' ? client : db;
+        const result = await q.query(
             'SELECT * FROM player_tracks WHERE game_id = $1 AND player_id = $2',
             [gameId, playerId]
         );

@@ -189,7 +189,7 @@ export class VictoryService {
     const threshold = game.victory_threshold || VICTORY_INITIAL_THRESHOLD;
     // Claims are retained in the API for compatibility; only persisted data
     // establishes eligibility.
-    const trackState = await TrackService.getTrackState(gameId, playerId);
+    const trackState = await TrackService.getTrackState(gameId, playerId, q);
     const evaluation = WinConditionsService.evaluate(
       player.money, player.debt_owed ?? 0, trackState?.segments ?? [], threshold,
     );
@@ -355,13 +355,18 @@ export class VictoryService {
     // Preserve monetary ordering, but only admit players whose current track
     // also qualifies. Complete all reads before mutating the game.
     const candidates = playersResult.rows.filter(p => p.net_worth >= threshold);
-    const evaluations = await Promise.all(candidates.map(async (player) => {
-      const trackState = await TrackService.getTrackState(gameId, player.id);
-      return WinConditionsService.evaluate(
+    // Track is read on `q`, one player at a time: inside a transaction that
+    // is a single connection, and it must not wait on the pool for another.
+    const eligiblePlayers: typeof candidates = [];
+    for (const player of candidates) {
+      const trackState = await TrackService.getTrackState(gameId, player.id, q);
+      const evaluation = WinConditionsService.evaluate(
         player.money, player.debt_owed ?? 0, trackState?.segments ?? [], threshold,
       );
-    }));
-    const eligiblePlayers = candidates.filter((_, index) => evaluations[index].eligible);
+      if (evaluation.eligible) {
+        eligiblePlayers.push(player);
+      }
+    }
 
     if (eligiblePlayers.length === 0) {
       // Eligibility can be lost to events during the final round.
