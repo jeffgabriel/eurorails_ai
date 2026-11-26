@@ -250,59 +250,22 @@ export class TurnActionManager {
         );
         return true;
       }
-      case "loadPickup": {
-        const localPlayer = this.playerStateService.getLocalPlayer();
-        if (!localPlayer?.trainState?.loads) return false;
-
-        const idx = localPlayer.trainState.loads.lastIndexOf(action.loadType);
-        if (idx === -1) return false;
-
-        const updatedLoads = [...localPlayer.trainState.loads];
-        updatedLoads.splice(idx, 1);
-
-        const returned = await this.loadService.returnLoad(
-          action.loadType,
-          this.gameState.id,
-          action.city
-        );
-        if (!returned) return false;
-
-        const ok = await this.playerStateService.updatePlayerLoads(updatedLoads, this.gameState.id);
-        return ok;
-      }
+      case "loadPickup":
       case "loadDrop": {
-        const localPlayer = this.playerStateService.getLocalPlayer();
-        if (!localPlayer?.trainState?.loads) return false;
+        // Server-authoritative undo: the server restores the train's loads and
+        // the city's chips from its own action log. If it fails, change nothing.
+        const undone = await this.playerStateService.undoLoadAction(this.gameState.id);
+        if (!undone) return false;
 
-        const updatedLoads = [...localPlayer.trainState.loads, action.loadType];
-
-        const pickedUp = await this.loadService.pickupLoad(
-          action.loadType,
-          action.city,
-          this.gameState.id
-        );
-        if (!pickedUp) return false;
-
-        const ok = await this.playerStateService.updatePlayerLoads(updatedLoads, this.gameState.id);
-        return ok;
+        this.loadService.applyServerUpdate(undone);
+        return true;
       }
       case "loadDelivery": {
-        // Undo delivery must also undo the load-pool adjustment performed client-side during delivery.
-        // Do this first so we can compensate if server undo fails.
-        const pickedUp = await this.loadService.pickupLoad(
-          action.loadType,
-          action.city,
-          this.gameState.id
-        );
-        if (!pickedUp) return false;
-
         const ok = await this.playerStateService.undoLastAction(this.gameState.id);
-        if (!ok) {
-          // Compensate: put the load back to the pool to avoid chip drift.
-          await this.loadService.returnLoad(action.loadType, this.gameState.id, action.city);
-          return false;
-        }
+        if (!ok) return false;
 
+        // The delivered chip had gone back to the tray; it is on the train again.
+        this.loadService.adjustTrayCount(action.loadType, -1);
         return true;
       }
       default: {

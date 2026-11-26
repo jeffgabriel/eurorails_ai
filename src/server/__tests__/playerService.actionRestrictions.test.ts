@@ -21,7 +21,6 @@
 
 import { db } from '../db/index';
 import { PlayerService } from '../services/playerService';
-import { LoadService } from '../services/loadService';
 import { activeEffectManager, ActiveEffectManager } from '../services/ActiveEffectManager';
 import { TrackSegment } from '../../shared/types/TrackTypes';
 import { TerrainType } from '../../shared/types/GameTypes';
@@ -144,8 +143,6 @@ function setupPickupMocks(opts: { loads?: LoadType[] } = {}): void {
     }
     return Promise.resolve({ rows: [] });
   });
-  const mockLoadSvc = { pickupDroppedLoad: jest.fn().mockResolvedValue({}) };
-  (LoadService.getInstance as jest.Mock) = jest.fn().mockReturnValue(mockLoadSvc);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -413,13 +410,15 @@ describe('PlayerService.pickupLoadForPlayer — pickup restrictions', () => {
     ).resolves.toBeDefined();
   });
 
-  it('calls getPickupDeliveryRestrictions with correct gameId', async () => {
+  it('calls getPickupDeliveryRestrictions with correct gameId, on the transaction client', async () => {
     setupPickupMocks();
 
     await PlayerService.pickupLoadForPlayer(GAME_ID, PLAYER_ID, LoadType.Coal, cityName)
       .catch(() => {});
 
-    expect(mockActiveEffectManager.getPickupDeliveryRestrictions).toHaveBeenCalledWith(GAME_ID);
+    // The read must go through the transaction's client, not the pool: the
+    // transaction already holds the player row lock on that connection.
+    expect(mockActiveEffectManager.getPickupDeliveryRestrictions).toHaveBeenCalledWith(GAME_ID, mockClient);
   });
 
   // ── Strike coastal: no_pickup_delivery_in_zone ────────────────────────────

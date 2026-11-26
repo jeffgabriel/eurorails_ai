@@ -74,141 +74,6 @@ export class LoadService {
       .map(([loadType]) => loadType);
   }
 
-  public async pickupDroppedLoad(city: string, loadType: LoadType, gameId: string): Promise<{
-    loadState: LoadState;
-    droppedLoads: Array<{ city_name: string; type: LoadType }>;
-  }> {
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-
-      // Check if this is a dropped load being picked up
-      await client.query(
-        'UPDATE load_chips SET is_dropped = false WHERE city_name = $1 AND type = $2 AND game_id = $3 AND is_dropped = true',
-        [city, loadType, gameId]
-      );
-
-      // Get updated dropped loads for this game
-      const droppedLoadsResult = await client.query(
-        'SELECT city_name, type FROM load_chips WHERE is_dropped = true AND game_id = $1',
-        [gameId]
-      );
-
-      await client.query('COMMIT');
-
-      const state = this.loadStates.get(loadType);
-      if (!state) {
-        throw new Error(`Load type ${loadType} not found`);
-      }
-
-      return {
-        loadState: {
-          ...state,
-          availableCount: state.availableCount - 1
-        },
-        droppedLoads: droppedLoadsResult.rows
-      };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  public async returnLoad(city: string | undefined, loadType: LoadType, gameId: string): Promise<{
-    loadState: LoadState;
-    droppedLoads: Array<{ city_name: string; type: LoadType }>;
-  }> {
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-
-      // If this was a dropped load, mark it as no longer dropped
-      // NOTE: city may be omitted by older clients; in that case we cannot clear a specific dropped record.
-      if (typeof city === 'string' && city.length > 0) {
-        await client.query(
-          'UPDATE load_chips SET is_dropped = false WHERE city_name = $1 AND type = $2 AND game_id = $3 AND is_dropped = true',
-          [city, loadType, gameId]
-        );
-      }
-
-      // Get updated dropped loads for this game
-      const droppedLoadsResult = await client.query(
-        'SELECT city_name, type FROM load_chips WHERE is_dropped = true AND game_id = $1',
-        [gameId]
-      );
-
-      await client.query('COMMIT');
-
-      const state = this.loadStates.get(loadType);
-      if (!state) {
-        throw new Error(`Load type ${loadType} not found`);
-      }
-
-      return {
-        loadState: {
-          ...state,
-          availableCount: state.availableCount + 1
-        },
-        droppedLoads: droppedLoadsResult.rows
-      };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  public async setLoadInCity(city: string, loadType: LoadType, gameId: string): Promise<{
-    loadState: LoadState;
-    droppedLoads: Array<{ city_name: string; type: LoadType }>;
-  }> {
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-
-      // First, mark any existing dropped load in this city as returned (for this game)
-      await client.query(
-        'UPDATE load_chips SET is_dropped = false WHERE city_name = $1 AND game_id = $2 AND is_dropped = true',
-        [city, gameId]
-      );
-
-      // Then create the new dropped load record
-      await client.query(
-        'INSERT INTO load_chips (game_id, type, city_name, is_dropped) VALUES ($1, $2, $3, true)',
-        [gameId, loadType, city]
-      );
-
-      // Get updated dropped loads for this game
-      const droppedLoadsResult = await client.query(
-        'SELECT city_name, type FROM load_chips WHERE is_dropped = true AND game_id = $1',
-        [gameId]
-      );
-
-      await client.query('COMMIT');
-
-      const state = this.loadStates.get(loadType);
-      if (!state) {
-        throw new Error(`Load type ${loadType} not found`);
-      }
-
-      return {
-        loadState: {
-          ...state,
-          availableCount: state.availableCount - 1
-        },
-        droppedLoads: droppedLoadsResult.rows
-      };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
   public async getDroppedLoads(gameId: string): Promise<Array<{ city_name: string; type: LoadType }>> {
     try {
       const result = await db.query(
@@ -233,6 +98,11 @@ export class LoadService {
   public isLoadAvailableAtCity(loadType: string, city: string): boolean {
     const config = this.loadConfiguration[loadType];
     return config?.cities.includes(city) ?? false;
+  }
+
+  /** Number of chips of a load type in the game (0 for an unknown type). */
+  public getTotalLoadCount(loadType: string): number {
+    return this.loadConfiguration[loadType]?.count ?? 0;
   }
 
   public getLoadInCity(city: string): string | undefined {

@@ -481,7 +481,6 @@ import { LoadService } from '../services/loadService';
 jest.mock('../services/loadService', () => ({
   LoadService: {
     getInstance: jest.fn().mockReturnValue({
-      pickupDroppedLoad: jest.fn().mockResolvedValue(undefined),
       getSourceCitiesForLoad: jest.fn().mockReturnValue(['Essen']),
     }),
   },

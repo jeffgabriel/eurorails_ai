@@ -51,4 +51,30 @@ export interface RawLoadConfigItem extends Record<string, unknown> {
 
 export interface RawLoadConfig {
   LoadConfiguration: RawLoadConfigItem[];
-} 
+}
+
+/** A load chip lying in a city (dropped there, not native to it). */
+export interface DroppedLoad {
+  city_name: string;
+  type: LoadType;
+}
+
+/** A change to the number of chips of one load type in the tray. */
+export interface LoadTrayChange {
+  loadType: LoadType;
+  /** +1 when a chip went back to the tray, -1 when one was taken from it. */
+  delta: number;
+}
+
+/**
+ * Server response for a load pickup, a load drop, or the undo of either
+ * (`POST /api/players/pickup-load`, `/drop-load`, `/undo-last-action`).
+ */
+export interface LoadActionResult {
+  /** The loads on the player's train after the action. */
+  updatedLoads: LoadType[];
+  /** Every dropped load chip in the game after the action. */
+  droppedLoads: DroppedLoad[];
+  /** Tray changes the action caused. */
+  trayChanges: LoadTrayChange[];
+}

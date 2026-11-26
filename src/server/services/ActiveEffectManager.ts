@@ -27,9 +27,13 @@ export class ActiveEffectManager {
   /**
    * Read all currently active effects from DB.
    * Deserializes JSONB array and rehydrates affectedZone as Set<string>.
+   *
+   * @param client  Pass the caller's PoolClient when reading inside a
+   *   transaction. Without it the read takes a second pooled connection while
+   *   the caller's connection holds row locks, which can exhaust the pool.
    */
-  async getActiveEffects(gameId: string): Promise<ActiveEffect[]> {
-    const result = await db.query(
+  async getActiveEffects(gameId: string, client?: PoolClient): Promise<ActiveEffect[]> {
+    const result = await (client ?? db).query(
       `SELECT active_event FROM games WHERE id = $1`,
       [gameId],
     );
@@ -191,8 +195,11 @@ export class ActiveEffectManager {
   /**
    * Aggregate pickup/delivery restrictions across all active effects (read-only).
    */
-  async getPickupDeliveryRestrictions(gameId: string): Promise<PickupDeliveryRestriction[]> {
-    const effects = await this.getActiveEffects(gameId);
+  async getPickupDeliveryRestrictions(
+    gameId: string,
+    client?: PoolClient,
+  ): Promise<PickupDeliveryRestriction[]> {
+    const effects = await this.getActiveEffects(gameId, client);
     return effects.flatMap(e => e.restrictions.pickupDelivery);
   }
 

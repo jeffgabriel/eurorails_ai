@@ -114,91 +114,111 @@ describe("TurnActionManager", () => {
     expect(trainUpdater.updateTrainPosition).toHaveBeenCalledWith("p1", 10, 20, 1, 2, { persist: false });
   });
 
-  it("should undo load pickup by returning load and updating player loads", async () => {
-    const gameState = createGameState();
-    const playerStateService = {
-      isCurrentPlayer: jest.fn().mockReturnValue(true),
-      getLocalPlayer: jest.fn().mockReturnValue(gameState.players[0]),
-      updatePlayerLoads: jest.fn().mockResolvedValue(true),
-    } as any;
-
-    gameState.players[0].trainState.loads = [LoadType.Oil];
-
-    const loadService = {
-      returnLoad: jest.fn().mockResolvedValue(true),
-    } as any;
+  const createManager = (playerStateService: any, loadService: any, gameState = createGameState()) => {
     const trackDrawingManager = {
       undoLastSegment: jest.fn(),
       getUncommittedSegmentCount: jest.fn().mockReturnValue(0),
       undoLastUncommittedSegment: jest.fn().mockReturnValue(false),
     } as any;
     const trainUpdater = { updateTrainPosition: jest.fn().mockResolvedValue(undefined) };
-
-    const mgr = new TurnActionManager({
+    return new TurnActionManager({
       gameState,
       trackDrawingManager,
       trainInteractionManager: trainUpdater,
       playerStateService,
       loadService,
     });
+  };
+
+  it("should undo load pickup through the server and apply the result to the load service", async () => {
+    const undone = {
+      kind: "pickup",
+      updatedLoads: [],
+      droppedLoads: [],
+      trayChanges: [{ loadType: LoadType.Oil, delta: 1 }],
+    };
+    const playerStateService = {
+      isCurrentPlayer: jest.fn().mockReturnValue(true),
+      undoLoadAction: jest.fn().mockResolvedValue(undone),
+    } as any;
+    const loadService = { applyServerUpdate: jest.fn() } as any;
+    const mgr = createManager(playerStateService, loadService);
 
     mgr.recordLoadPickup("Berlin", LoadType.Oil);
     const ok = await mgr.undoLastAction();
+
     expect(ok).toBe(true);
-    expect(loadService.returnLoad).toHaveBeenCalledWith(LoadType.Oil, "game-1", "Berlin");
-    expect(playerStateService.updatePlayerLoads).toHaveBeenCalledWith([], "game-1");
+    expect(playerStateService.undoLoadAction).toHaveBeenCalledWith("game-1");
+    expect(loadService.applyServerUpdate).toHaveBeenCalledWith(undone);
+    expect(mgr.canUndo()).toBe(false);
   });
 
-  it("should undo delivery by picking up the returned load then calling server undo; compensates on failure", async () => {
-    const gameState = createGameState();
+  it("should undo load drop through the server and apply the result to the load service", async () => {
+    const undone = {
+      kind: "drop",
+      updatedLoads: [LoadType.Oil],
+      droppedLoads: [{ city_name: "Berlin", type: LoadType.Wine }],
+      trayChanges: [{ loadType: LoadType.Wine, delta: -1 }],
+    };
+    const playerStateService = {
+      isCurrentPlayer: jest.fn().mockReturnValue(true),
+      undoLoadAction: jest.fn().mockResolvedValue(undone),
+    } as any;
+    const loadService = { applyServerUpdate: jest.fn() } as any;
+    const mgr = createManager(playerStateService, loadService);
+
+    mgr.recordLoadDrop("Berlin", LoadType.Oil);
+    const ok = await mgr.undoLastAction();
+
+    expect(ok).toBe(true);
+    expect(playerStateService.undoLoadAction).toHaveBeenCalledWith("game-1");
+    expect(loadService.applyServerUpdate).toHaveBeenCalledWith(undone);
+  });
+
+  it("should keep a load action on the stack and change nothing when the server refuses the undo", async () => {
+    const playerStateService = {
+      isCurrentPlayer: jest.fn().mockReturnValue(true),
+      undoLoadAction: jest.fn().mockResolvedValue(null),
+    } as any;
+    const loadService = { applyServerUpdate: jest.fn() } as any;
+    const mgr = createManager(playerStateService, loadService);
+
+    mgr.recordLoadPickup("Berlin", LoadType.Oil);
+    const ok = await mgr.undoLastAction();
+
+    expect(ok).toBe(false);
+    expect(loadService.applyServerUpdate).not.toHaveBeenCalled();
+    expect(mgr.canUndo()).toBe(true);
+  });
+
+  it("should undo delivery through the server, then take the chip back out of the tray", async () => {
     const playerStateService = {
       isCurrentPlayer: jest.fn().mockReturnValue(true),
       undoLastAction: jest.fn().mockResolvedValue(true),
     } as any;
-    const loadService = {
-      pickupLoad: jest.fn().mockResolvedValue(true),
-      returnLoad: jest.fn().mockResolvedValue(true),
-    } as any;
-    const trackDrawingManager = {
-      undoLastSegment: jest.fn(),
-      getUncommittedSegmentCount: jest.fn().mockReturnValue(0),
-      undoLastUncommittedSegment: jest.fn().mockReturnValue(false),
-    } as any;
-    const trainUpdater = { updateTrainPosition: jest.fn().mockResolvedValue(undefined) };
-
-    const mgr = new TurnActionManager({
-      gameState,
-      trackDrawingManager,
-      trainInteractionManager: trainUpdater,
-      playerStateService,
-      loadService,
-    });
-
-    mgr.recordLoadDelivery({
+    const loadService = { adjustTrayCount: jest.fn() } as any;
+    const mgr = createManager(playerStateService, loadService);
+    const delivery = {
       city: "Berlin",
       loadType: LoadType.Oil,
       cardIdUsed: 1,
       newCardIdDrawn: 2,
       payment: 10,
-    });
+    };
 
+    mgr.recordLoadDelivery(delivery);
     const ok = await mgr.undoLastAction();
     expect(ok).toBe(true);
-    expect(loadService.pickupLoad).toHaveBeenCalledWith(LoadType.Oil, "Berlin", "game-1");
     expect(playerStateService.undoLastAction).toHaveBeenCalledWith("game-1");
+    expect(loadService.adjustTrayCount).toHaveBeenCalledWith(LoadType.Oil, -1);
 
-    // Failure path should compensate by returning the load to the pool.
+    // Failure path: the tray count is left alone.
+    loadService.adjustTrayCount.mockClear();
     playerStateService.undoLastAction.mockResolvedValueOnce(false);
-    mgr.recordLoadDelivery({
-      city: "Berlin",
-      loadType: LoadType.Oil,
-      cardIdUsed: 1,
-      newCardIdDrawn: 2,
-      payment: 10,
-    });
+    mgr.recordLoadDelivery(delivery);
     const ok2 = await mgr.undoLastAction();
     expect(ok2).toBe(false);
-    expect(loadService.returnLoad).toHaveBeenCalledWith(LoadType.Oil, "game-1", "Berlin");
+    expect(loadService.adjustTrayCount).not.toHaveBeenCalled();
   });
 });
 

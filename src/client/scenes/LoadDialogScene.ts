@@ -344,32 +344,21 @@ export class LoadDialogScene extends Scene {
                 return;
             }
             
-            // Server-authoritative: Make API calls first
-            // Try to pick up the load from the city
-            const pickupSuccess = await this.loadService.pickupLoad(loadType, this.city.name, this.gameState.id);
-            if (!pickupSuccess) {
-                this.showError('Could not pick up that load (not available or server rejected).');
-                return;
-            }
-
-            // Calculate new loads array (for API call, not for local state yet)
-            const updatedLoads = [...this.player.trainState.loads, loadType];
-            
-            // Update game state via API
-            const success = await this.playerStateService.updatePlayerLoads(
-                updatedLoads,
+            // Server-authoritative: the server validates the pickup and updates
+            // the train's loads and the city's chips in one step.
+            const outcome = await this.playerStateService.pickupLoad(
+                this.city.name,
+                loadType,
                 this.gameState.id
             );
-
-            if (!success) {
-                // If update failed, revert load pickup
-                await this.loadService.returnLoad(loadType, this.gameState.id, this.city.name);
-                this.showError('Failed to update your train loads. Please try again.');
+            if (!outcome.ok) {
+                this.showError(outcome.error);
                 return;
             }
 
-            // Only update local state after all API calls succeed
-            this.player.trainState.loads = updatedLoads;
+            // Only update local state after the server accepts
+            this.loadService.applyServerUpdate(outcome.result);
+            this.player.trainState.loads = outcome.result.updatedLoads;
             this.turnActionManager?.recordLoadPickup(this.city.name, loadType);
             
             // Update displays
@@ -401,10 +390,6 @@ export class LoadDialogScene extends Scene {
                 return;
             }
 
-            // Server-authoritative pattern: Make all API calls first
-            // Return the load to global availability
-            await this.loadService.returnLoad(load.type, this.gameState.id, this.city.name);
-
             const delivered = await this.playerStateService.deliverLoad(
                 this.city.name,
                 load.type,
@@ -413,12 +398,6 @@ export class LoadDialogScene extends Scene {
             );
 
             if (!delivered || ('restricted' in delivered)) {
-                // Best-effort compensation: re-pickup the load so the global pool doesn't drift
-                try {
-                    await this.loadService.pickupLoad(load.type, this.city.name, this.gameState.id);
-                } catch {
-                    // ignore
-                }
                 // Show the restriction reason (e.g. active Strike) or a generic failure message
                 const reason = delivered && 'reason' in delivered ? delivered.reason : 'Failed to deliver load';
                 throw new Error(reason);
@@ -430,6 +409,9 @@ export class LoadDialogScene extends Scene {
 
             // All API calls succeeded - state is already updated by PlayerStateService
             // (since it updates this.localPlayer which is a reference to this.player)
+            // The delivered chip is back in the tray.
+            this.loadService.adjustTrayCount(load.type, 1);
+
             // Just refresh the UI
             this.turnActionManager?.recordLoadDelivery({
                 city: this.city.name,
@@ -492,39 +474,24 @@ export class LoadDialogScene extends Scene {
                 return;
             }
             
-            // Calculate new loads array (for API call, not for local state yet)
-            // Remove only one instance of the load type (not all instances)
-            const index = this.player.trainState.loads.indexOf(loadType);
-            if (index === -1) return;
-            const updatedLoads = [...this.player.trainState.loads];
-            updatedLoads.splice(index, 1);
-            
-            // Server-authoritative: Make API calls first
-            // Return the load to the city's available loads if the city produces this load type
-            const availableLoads = await this.loadService.getCityLoadDetails(this.city.name);
-            const cityProducesLoad = availableLoads.some(l => l.loadType === loadType);
-            
-            if (cityProducesLoad) {
-                await this.loadService.returnLoad(loadType, this.gameState.id, this.city.name);
-            } else {
-                // If city doesn't produce this load, it stays in the city
-                // and any existing load of the same type goes back to the tray
-                await this.loadService.setLoadInCity(this.city.name, loadType, this.gameState.id);
-            }
+            if (!this.player.trainState.loads.includes(loadType)) return;
 
-            // Update game state with new train loads
-            const success = await this.playerStateService.updatePlayerLoads(
-                updatedLoads,
+            // Server-authoritative: the server validates the drop and applies the
+            // city-drop rule (a load the city produces returns to the tray; any
+            // other load stays in the city and replaces a chip already there).
+            const outcome = await this.playerStateService.dropLoad(
+                this.city.name,
+                loadType,
                 this.gameState.id
             );
-
-            if (!success) {
-                console.error('Failed to update game state');
+            if (!outcome.ok) {
+                this.showError(outcome.error);
                 return;
             }
 
-            // Only update local state after all API calls succeed
-            this.player.trainState.loads = updatedLoads;
+            // Only update local state after the server accepts
+            this.loadService.applyServerUpdate(outcome.result);
+            this.player.trainState.loads = outcome.result.updatedLoads;
             this.turnActionManager?.recordLoadDrop(this.city.name, loadType);
             
             // Update displays

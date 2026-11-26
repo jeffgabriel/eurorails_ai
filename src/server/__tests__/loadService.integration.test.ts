@@ -147,9 +147,11 @@ describe('LoadService', () => {
         // Setup: Insert some test dropped loads using the service
         await runQuery(async (client) => {
           await ensureTestGameExists(client, gameId);
+          await client.query(
+            'INSERT INTO load_chips (game_id, type, city_name, is_dropped) VALUES ($1, $2, $3, true), ($1, $4, $5, true)',
+            [gameId, LoadType.Beer, 'München', LoadType.Cars, 'Stuttgart']
+          );
         });
-        await loadService.setLoadInCity('München', LoadType.Beer, gameId);
-        await loadService.setLoadInCity('Stuttgart', LoadType.Cars, gameId);
 
         const droppedLoads = await loadService.getDroppedLoads(gameId);
         expect(droppedLoads).toHaveLength(2);
@@ -159,125 +161,6 @@ describe('LoadService', () => {
             expect.objectContaining({ city_name: 'Stuttgart', type: LoadType.Cars })
           ])
         );
-      });
-
-      it('should pick up a dropped load', async () => {
-        // Setup: Insert a dropped load
-        const client = await db.connect();
-        try {
-          await ensureTestGameExists(client, gameId);
-          await client.query(
-            'INSERT INTO load_chips (game_id, type, city_name, is_dropped) VALUES ($1, $2, $3, true)',
-            [gameId, LoadType.Beer, 'München']
-          );
-        } finally {
-          client.release();
-        }
-
-        const result = await loadService.pickupDroppedLoad('München', LoadType.Beer, gameId);
-        
-        // Check the load was picked up
-        const checkClient = await db.connect();
-        try {
-          const droppedLoads = await checkClient.query(
-            'SELECT * FROM load_chips WHERE is_dropped = true AND game_id = $1',
-            [gameId]
-          );
-          expect(droppedLoads.rows).toHaveLength(0);
-        } finally {
-          checkClient.release();
-        }
-
-        // Check the returned state
-        expect(result.loadState.loadType).toBe(LoadType.Beer);
-        expect(result.droppedLoads).toHaveLength(0);
-      });
-
-      it('should handle returning a load to the tray', async () => {
-        // Setup: Insert a dropped load
-        await runQuery(async (client) => {
-          await ensureTestGameExists(client, gameId);
-          await client.query(
-            'INSERT INTO load_chips (game_id, type, city_name, is_dropped) VALUES ($1, $2, $3, true)',
-            [gameId, LoadType.Beer, 'München']
-          );
-        });
-
-        const result = await loadService.returnLoad('München', LoadType.Beer, gameId);
-        
-        // Check the load was returned
-        await runQuery(async (client) => {
-          const droppedLoads = await client.query(
-            'SELECT * FROM load_chips WHERE is_dropped = true AND game_id = $1',
-            [gameId]
-          );
-          expect(droppedLoads.rows).toHaveLength(0);
-        });
-
-        // Check the returned state
-        expect(result.loadState.loadType).toBe(LoadType.Beer);
-        expect(result.droppedLoads).toHaveLength(0);
-      });
-
-      it('should set a load in a city', async () => {
-        await runQuery(async (client) => {
-          await ensureTestGameExists(client, gameId);
-        });
-        const result = await loadService.setLoadInCity('München', LoadType.Beer, gameId);
-        
-        // Check the load was set using the service API
-        const droppedLoads = await loadService.getDroppedLoads(gameId);
-        expect(droppedLoads).toHaveLength(1);
-        expect(droppedLoads[0]).toEqual(
-          expect.objectContaining({
-            city_name: 'München',
-            type: LoadType.Beer
-          })
-        );
-
-        // Check the returned state
-        expect(result.loadState.loadType).toBe(LoadType.Beer);
-        expect(result.droppedLoads).toHaveLength(1);
-      });
-
-      it('should handle setting a load in a city that already has one', async () => {
-        // Setup: Insert an existing dropped load
-        await runQuery(async (client) => {
-          await ensureTestGameExists(client, gameId);
-          await client.query(
-            'INSERT INTO load_chips (game_id, type, city_name, is_dropped) VALUES ($1, $2, $3, true)',
-            [gameId, LoadType.Cars, 'München']
-          );
-        });
-
-        const result = await loadService.setLoadInCity('München', LoadType.Beer, gameId);
-        
-        // Check only the new load exists
-        await runQuery(async (client) => {
-          const droppedLoads = await client.query(
-            'SELECT * FROM load_chips WHERE is_dropped = true AND game_id = $1',
-            [gameId]
-          );
-          expect(droppedLoads.rows).toHaveLength(1);
-          expect(droppedLoads.rows[0]).toEqual(
-            expect.objectContaining({
-              city_name: 'München',
-              type: LoadType.Beer,
-              is_dropped: true
-            })
-          );
-        });
-
-        // Check the returned state
-        expect(result.loadState.loadType).toBe(LoadType.Beer);
-        expect(result.droppedLoads).toHaveLength(1);
-      });
-
-      it('should handle errors in database operations', async () => {
-        // Force a database error by using an invalid game ID
-        await expect(
-          loadService.setLoadInCity('München', LoadType.Beer, 'invalid-uuid')
-        ).rejects.toThrow();
       });
     });
 
@@ -320,40 +203,16 @@ describe('LoadService', () => {
       });
     });
 
-    describe('setLoadInCity', () => {
-      it('should add a dropped load to the database', async () => {
-        const loadType = LoadType.Cars;
-        const cityName = 'London';
-        
-        await loadService.setLoadInCity(cityName, loadType, gameId);
-
-        await runQuery(async (client) => {
-          const result = await client.query('SELECT * FROM load_chips WHERE game_id = $1', [gameId]);
-          expect(result.rows.length).toBe(1);
-          expect(result.rows[0].type).toBe(loadType);
-          expect(result.rows[0].city_name).toBe(cityName);
-        });
+    describe('getTotalLoadCount', () => {
+      it('should return the number of chips of a load type', async () => {
+        const loadStates = await loadService.getAllLoadStates();
+        const beer = loadStates.find((state) => state.loadType === LoadType.Beer);
+        expect(beer).toBeDefined();
+        expect(loadService.getTotalLoadCount(LoadType.Beer)).toBe(beer!.totalCount);
       });
-    });
 
-    describe('returnLoad', () => {
-      it('should remove a dropped load from the database', async () => {
-        // Insert a test load first
-        const loadType = LoadType.Cars;
-        const cityName = 'London';
-        await runQuery(async (client) => {
-          await client.query(
-            'INSERT INTO load_chips (id, game_id, type, city_name, is_dropped) VALUES ($1, $2, $3, $4, true)',
-            [uuidv4(), gameId, loadType, cityName]
-          );
-        });
-
-        await loadService.returnLoad(cityName, loadType, gameId);
-
-        await runQuery(async (client) => {
-          const result = await client.query('SELECT * FROM load_chips WHERE is_dropped = true AND game_id = $1', [gameId]);
-          expect(result.rows.length).toBe(0);
-        });
+      it('should return 0 for an unknown load type', () => {
+        expect(loadService.getTotalLoadCount('NotALoad')).toBe(0);
       });
     });
   });
