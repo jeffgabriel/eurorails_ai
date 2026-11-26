@@ -8,6 +8,8 @@ import { TerrainType, TrainType } from '../../shared/types/GameTypes';
 import { DemandDeckService } from '../services/demandDeckService';
 import { TrackService } from '../services/trackService';
 import { TurnGuardError, TurnGuardErrorCode } from '../services/turnGuard';
+import { loadGridPoints } from '../services/MapTopology';
+import { isCityMilepostOf } from '../services/trainMovement';
 
 // Force Jest to run this test file serially
 export const test = { concurrent: false };
@@ -15,6 +17,20 @@ export const test = { concurrent: false };
 /** Asserts a deliverLoadForUser result is a successful delivery (not restricted). */
 function expectDeliverySuccess(result: { restricted: true; reason: string } | { restricted?: false; payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: any }): asserts result is { payment: number; repayment: number; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; newCard: any } {
     expect('restricted' in result && result.restricted).toBeFalsy();
+}
+
+/** Puts a player's train on a milepost of the named city (deliveries require it). */
+async function placeTrainAtCity(playerId: string, cityName: string): Promise<void> {
+    for (const point of loadGridPoints().values()) {
+        if (isCityMilepostOf(point.row, point.col, cityName)) {
+            await db.query(
+                'UPDATE players SET position_row = $1, position_col = $2 WHERE id = $3',
+                [point.row, point.col, playerId]
+            );
+            return;
+        }
+    }
+    throw new Error(`No city milepost found for ${cityName}`);
 }
 
 // Helper to run a query with automatic connection management
@@ -711,6 +727,7 @@ describe('PlayerService Integration Tests', () => {
                 [[demand.resource], 50, playerId]
             );
 
+            await placeTrainAtCity(playerId, demand.city);
             const result = await PlayerService.deliverLoadForUser(
                 gameId,
                 userId,
@@ -786,6 +803,7 @@ describe('PlayerService Integration Tests', () => {
                 [[demand.resource], 50, playerId]
             );
 
+            await placeTrainAtCity(playerId, demand.city);
             const delivered = await PlayerService.deliverLoadForUser(
                 gameId,
                 userId,
@@ -860,6 +878,7 @@ describe('PlayerService Integration Tests', () => {
             );
 
             // Deliver load - the payment should partially repay the debt
+            await placeTrainAtCity(playerId, demand.city);
             const delivered = await PlayerService.deliverLoadForUser(
                 gameId,
                 userId,
@@ -2222,6 +2241,7 @@ describe('PlayerService Integration Tests', () => {
                 [[demand.resource], 50, playerId]
             );
 
+            await placeTrainAtCity(playerId, demand.city);
             const result = await PlayerService.deliverLoadForUser(
                 gameId,
                 userId,
@@ -2278,6 +2298,7 @@ describe('PlayerService Integration Tests', () => {
                 [[demand.resource], 50, playerId]
             );
 
+            await placeTrainAtCity(playerId, demand.city);
             const result = await PlayerService.deliverLoadForUser(
                 gameId,
                 userId,
@@ -2335,6 +2356,7 @@ describe('PlayerService Integration Tests', () => {
                 [[demand.resource], 50, playerId]
             );
 
+            await placeTrainAtCity(playerId, demand.city);
             const result = await PlayerService.deliverLoadForUser(
                 gameId,
                 userId,
@@ -2392,6 +2414,7 @@ describe('PlayerService Integration Tests', () => {
                 [[demand.resource], 50, playerId]
             );
 
+            await placeTrainAtCity(playerId, demand.city);
             const result = await PlayerService.deliverLoadForUser(
                 gameId,
                 userId,
@@ -2448,6 +2471,7 @@ describe('PlayerService Integration Tests', () => {
                 [[demand.resource], 50, playerId]
             );
 
+            await placeTrainAtCity(playerId, demand.city);
             await PlayerService.deliverLoadForUser(
                 gameId,
                 userId,

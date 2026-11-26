@@ -217,15 +217,24 @@ export class MovementExecutor {
         return { success: false, message: "Player reference lost", endMovement: false };
       }
 
-      // Ensure the movement deduction from canMoveTo is applied to the refreshed object
+      // The server counts the mileposts for the route it chose (it prefers the
+      // player's own track when that fits), which can differ from the shortest-path
+      // distance canMoveTo deducted. Use the server's count so the remaining
+      // movement shown here matches what the server will allow next.
+      const clientDistance = moveResult.distance ?? 0;
+      const serverDistance = moveApiResult.milepostsMoved ?? clientDistance;
+
+      // Ensure the movement deduction from canMoveTo is applied to the refreshed object.
+      // A move that ends movement (ferry port) already left it at zero.
       if (refreshedPlayer.trainState) {
-        refreshedPlayer.trainState.remainingMovement = remainingMovementAfterValidation;
+        refreshedPlayer.trainState.remainingMovement = moveResult.endMovement
+          ? remainingMovementAfterValidation
+          : Math.max(0, remainingMovementAfterValidation - (serverDistance - clientDistance));
       }
 
       // Create movement history entry (client-only, for direction rules)
-      // Use the distance from canMoveTo validation (stored in moveResult.distance)
       if (previousPosition) {
-        const movementCost = moveResult.distance ?? 0;
+        const movementCost = serverDistance;
         // Look up the actual terrain at the previous position
         const previousGridPoint = this.trackDrawingManager.getGridPointAtPosition(
           previousPosition.x,

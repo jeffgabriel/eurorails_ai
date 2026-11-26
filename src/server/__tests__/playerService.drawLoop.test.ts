@@ -251,6 +251,9 @@ describe('PlayerService.deliverLoadForUser — draw loop addActiveEffect', () =>
             hand: [cardId, 2, 3],
             loads: ['Coal'],
             turnNumber: 1,
+            // The train is in Berlin: deliveries require it (#312)
+            position_row: 24,
+            position_col: 52,
           }],
         });
       }

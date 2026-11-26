@@ -142,8 +142,16 @@ export class TrackService {
         };
     }
 
-    static async getAllTracks(gameId: string): Promise<PlayerTrackState[]> {
-        const result = await db.query(
+    /**
+     * All players' track for a game. Pass the caller's transaction `client`
+     * when calling from inside a transaction, so the read does not take a
+     * second pooled connection.
+     */
+    static async getAllTracks(
+        gameId: string,
+        client?: { query: (text: string, params?: any[]) => Promise<any> }
+    ): Promise<PlayerTrackState[]> {
+        const result = await (client ?? db).query(
             'SELECT * FROM player_tracks WHERE game_id = $1',
             [gameId]
         );

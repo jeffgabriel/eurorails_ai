@@ -16,16 +16,16 @@ export type TrackUsageComputation = {
   ownersUsed: Set<string>;
 };
 
-function nodeKey(n: Node): string {
+export function nodeKey(n: Node): string {
   return `${n.row},${n.col}`;
 }
 
-function parseNodeKey(k: string): Node {
+export function parseNodeKey(k: string): Node {
   const [rowStr, colStr] = k.split(",");
   return { row: Number(rowStr), col: Number(colStr) };
 }
 
-function edgeKey(a: Node, b: Node): string {
+export function edgeKey(a: Node, b: Node): string {
   // normalize ordering to make undirected edge key stable
   const aKey = nodeKey(a);
   const bKey = nodeKey(b);
