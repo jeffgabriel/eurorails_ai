@@ -1,15 +1,30 @@
 /**
  * #312: server-side movement rules — the per-turn milepost budget and the
  * route a move is charged for.
+ * #313: event modifiers — half rate, blocked mileposts, Rail Strike.
  */
 
 import {
+  MovePathStop,
+  MovementBudgetState,
+  MovementEventRules,
+  NO_MOVEMENT_EVENT_RULES,
+  applyHalfRate,
+  beginMoveAt,
   computeRemainingMovement,
+  enterMilepost,
   findMovePathWithinBudget,
   getTurnMovementAllowance,
+  halfRateAllowance,
+  hasNoMovementEventRules,
   isCityMilepost,
   isCityMilepostOf,
+  isEdgeStruck,
+  movementEventRulesFrom,
+  readTurnMovementState,
+  remainingMovementAt,
   sumMovementUsed,
+  walkMovePath,
 } from '../services/trainMovement';
 import { getFerryEdges } from '../../shared/services/majorCityGroups';
 import { TerrainType, TrainType } from '../../shared/types/GameTypes';
@@ -145,7 +160,12 @@ describe('findMovePathWithinBudget', () => {
       currentPlayerId: ME,
       maxMileposts: 0,
     });
-    expect(result).toEqual({ path: [], ownersUsed: new Set(), mileposts: 0 });
+    expect(result).toEqual({
+      path: [],
+      ownersUsed: new Set(),
+      mileposts: 0,
+      stateAfter: { remaining: 0, halfRateApplied: false },
+    });
   });
 
   it('returns null when the destination is farther than the budget', () => {
@@ -280,5 +300,274 @@ describe('findMovePathWithinBudget', () => {
     });
     expect(result?.mileposts).toBe(2);
     expect(result?.path).toHaveLength(3);
+  });
+});
+
+// ── #313: event modifiers ────────────────────────────────────────────────────
+
+const ROW = 1000;
+const at = (col: number): Node => ({ row: ROW, col });
+const key = (col: number): string => `${ROW},${col}`;
+
+function rules(partial: {
+  halfRate?: string[];
+  blocked?: string[];
+  struck?: string[];
+}): MovementEventRules {
+  return {
+    halfRateZone: new Set(partial.halfRate ?? []),
+    blockedMileposts: new Set(partial.blocked ?? []),
+    struckPlayerIds: new Set(partial.struck ?? []),
+  };
+}
+
+const fresh = (remaining: number): MovementBudgetState => ({ remaining, halfRateApplied: false });
+
+describe('movementEventRulesFrom', () => {
+  it('collects the stored restrictions of Snow and the Rail Strike', () => {
+    const result = movementEventRulesFrom([
+      { type: 'half_rate', zone: ['1,1', '1,2'] },
+      { type: 'blocked_terrain', zone: ['1,2'] },
+      { type: 'no_movement_on_player_rail', targetPlayerId: OPPONENT },
+    ]);
+    expect(Array.from(result.halfRateZone)).toEqual(['1,1', '1,2']);
+    expect(Array.from(result.blockedMileposts)).toEqual(['1,2']);
+    expect(Array.from(result.struckPlayerIds)).toEqual([OPPONENT]);
+    expect(hasNoMovementEventRules(result)).toBe(false);
+  });
+
+  it('restricts nothing for no restrictions or malformed ones', () => {
+    expect(hasNoMovementEventRules(movementEventRulesFrom([]))).toBe(true);
+    expect(hasNoMovementEventRules(movementEventRulesFrom(null))).toBe(true);
+    expect(
+      hasNoMovementEventRules(
+        movementEventRulesFrom([null, { type: 'half_rate' }, { type: 'no_movement_on_player_rail' }]),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('half rate', () => {
+  it('halves a full allowance to 5 (Freight, Heavy Freight) and 6 (Fast Freight, Superfreight)', () => {
+    expect(getTurnMovementAllowance(TrainType.Freight, [halfRateAllowance])).toBe(5);
+    expect(getTurnMovementAllowance(TrainType.HeavyFreight, [halfRateAllowance])).toBe(5);
+    expect(getTurnMovementAllowance(TrainType.FastFreight, [halfRateAllowance])).toBe(6);
+    expect(getTurnMovementAllowance(TrainType.Superfreight, [halfRateAllowance])).toBe(6);
+  });
+
+  it('halves what is left, rounding up, and only once', () => {
+    const once = applyHalfRate(fresh(5));
+    expect(once).toEqual({ remaining: 3, halfRateApplied: true });
+    expect(applyHalfRate(once)).toEqual(once);
+    expect(applyHalfRate(fresh(1)).remaining).toBe(1);
+    expect(applyHalfRate(fresh(0)).remaining).toBe(0);
+  });
+
+  it('applies to a train standing in the zone when it starts a move', () => {
+    const zone = rules({ halfRate: [key(0)] });
+    expect(beginMoveAt(fresh(9), key(0), zone)).toEqual({ remaining: 5, halfRateApplied: true });
+    expect(beginMoveAt(fresh(9), key(1), zone)).toEqual(fresh(9));
+    // already halved this turn: nothing more is taken
+    expect(beginMoveAt({ remaining: 4, halfRateApplied: true }, key(0), zone).remaining).toBe(4);
+  });
+
+  it('halves what is left after the step that enters the zone', () => {
+    const zone = rules({ halfRate: [key(4)] });
+    // 9 allowance, 3 used: the 4th milepost enters the zone, 5 left -> 3
+    expect(enterMilepost(fresh(6), key(4), false, zone)).toEqual({ remaining: 3, halfRateApplied: true });
+    expect(enterMilepost(fresh(6), key(3), false, zone)).toEqual(fresh(5));
+    // a free edge (major city red area, ferry line) into the zone uses no milepost but still halves
+    expect(enterMilepost(fresh(6), key(4), true, zone)).toEqual({ remaining: 3, halfRateApplied: true });
+    expect(enterMilepost(fresh(0), key(3), false, zone)).toBeNull();
+    expect(enterMilepost(fresh(0), key(3), true, zone)).toEqual(fresh(0));
+  });
+});
+
+describe('readTurnMovementState', () => {
+  it('is the full allowance before the first move', () => {
+    expect(readTurnMovementState(TrainType.Freight, [])).toEqual(fresh(9));
+    expect(readTurnMovementState(TrainType.FastFreight, null)).toEqual(fresh(12));
+  });
+
+  it('starts at half rate when the turn does (the input for #314)', () => {
+    expect(readTurnMovementState(TrainType.Freight, [], true)).toEqual({ remaining: 5, halfRateApplied: true });
+    expect(readTurnMovementState(TrainType.Superfreight, [], true)).toEqual({ remaining: 6, halfRateApplied: true });
+  });
+
+  it('continues from the state stored on the last segment', () => {
+    const path = [
+      { cost: 2, remainingAfter: 7, halfRate: false },
+      { cost: 2, remainingAfter: 3, halfRate: true },
+    ];
+    expect(readTurnMovementState(TrainType.Freight, path)).toEqual({ remaining: 3, halfRateApplied: true });
+  });
+
+  it('falls back to the summed costs for a segment written without state', () => {
+    expect(readTurnMovementState(TrainType.Freight, [{ cost: 4 }])).toEqual(fresh(5));
+  });
+
+  it('never trusts a stored remainder above the train speed, or below zero', () => {
+    expect(readTurnMovementState(TrainType.Freight, [{ cost: 1, remainingAfter: 99, halfRate: false }]).remaining).toBe(9);
+    expect(readTurnMovementState(TrainType.Freight, [{ cost: 1, remainingAfter: -3, halfRate: false }]).remaining).toBe(0);
+  });
+});
+
+describe('remainingMovementAt', () => {
+  const zone = rules({ halfRate: [key(4)] });
+
+  it('reports half rate for a train standing in the zone', () => {
+    expect(remainingMovementAt(TrainType.Freight, [], at(4), zone)).toBe(5);
+    expect(remainingMovementAt(TrainType.FastFreight, [], at(4), zone)).toBe(6);
+    expect(remainingMovementAt(TrainType.Freight, [], at(3), zone)).toBe(9);
+    expect(remainingMovementAt(TrainType.Freight, [], null, zone)).toBe(9);
+  });
+
+  it('halves what is left when the event starts after the train has moved', () => {
+    const moved = [{ cost: 4, remainingAfter: 5, halfRate: false }];
+    expect(remainingMovementAt(TrainType.Freight, moved, at(4), zone)).toBe(3);
+    expect(remainingMovementAt(TrainType.Freight, moved, at(4), NO_MOVEMENT_EVENT_RULES)).toBe(5);
+  });
+});
+
+describe('isEdgeStruck', () => {
+  const strike = rules({ struck: [OPPONENT] });
+
+  it('is true for track owned only by a striking player', () => {
+    expect(isEdgeStruck([OPPONENT], strike)).toBe(true);
+    expect(isEdgeStruck(new Set([OPPONENT]), strike)).toBe(true);
+  });
+
+  it('is false for other track and for ownerless edges', () => {
+    expect(isEdgeStruck([ME], strike)).toBe(false);
+    expect(isEdgeStruck([ME, OPPONENT], strike)).toBe(false);
+    expect(isEdgeStruck([], strike)).toBe(false);
+    expect(isEdgeStruck(undefined, strike)).toBe(false);
+    expect(isEdgeStruck([OPPONENT], NO_MOVEMENT_EVENT_RULES)).toBe(false);
+  });
+});
+
+describe('findMovePathWithinBudget with event rules', () => {
+  const myLine = [track(ME, line(ROW, 0, 13))];
+  const find = (
+    to: Node,
+    eventRules: MovementEventRules,
+    start: MovementBudgetState = fresh(9),
+    allTracks: PlayerTrackState[] = myLine,
+    from: Node = at(0),
+  ): ReturnType<typeof findMovePathWithinBudget> =>
+    findMovePathWithinBudget({
+      allTracks,
+      from,
+      to,
+      currentPlayerId: ME,
+      maxMileposts: start.remaining,
+      halfRateApplied: start.halfRateApplied,
+      eventRules,
+    });
+
+  it('reports the budget after a move with no events', () => {
+    const result = find(at(4), NO_MOVEMENT_EVENT_RULES);
+    expect(result?.mileposts).toBe(4);
+    expect(result?.stateAfter).toEqual(fresh(5));
+  });
+
+  it('halves the rest of a single move that starts outside the zone and enters it', () => {
+    // zone from milepost 4 on: 4 mileposts to enter, 5 left -> 3, so 7 is the farthest
+    const zone = rules({ halfRate: [4, 5, 6, 7, 8, 9].map(key) });
+    const reachable = find(at(7), zone);
+    expect(reachable?.mileposts).toBe(7);
+    expect(reachable?.stateAfter).toEqual({ remaining: 0, halfRateApplied: true });
+    expect(find(at(8), zone)).toBeNull();
+    expect(find(at(4), zone)?.stateAfter).toEqual({ remaining: 3, halfRateApplied: true });
+  });
+
+  it('rounds up for a Fast Freight entering the zone on an odd remainder', () => {
+    // 12 allowance, 5 mileposts to enter: 7 left -> 4
+    const zone = rules({ halfRate: [5, 6, 7, 8, 9, 10].map(key) });
+    expect(find(at(9), zone, fresh(12))?.stateAfter.remaining).toBe(0);
+    expect(find(at(10), zone, fresh(12))).toBeNull();
+  });
+
+  it('does not halve again once half rate applies', () => {
+    const zone = rules({ halfRate: [2, 3].map(key) });
+    const result = find(at(3), zone, { remaining: 5, halfRateApplied: true });
+    expect(result?.stateAfter).toEqual({ remaining: 2, halfRateApplied: true });
+  });
+
+  it('never enters a blocked milepost, and goes around one when it can', () => {
+    const blocked = rules({ blocked: [key(2)] });
+    expect(find(at(3), blocked)).toBeNull();
+    expect(find(at(1), blocked)?.mileposts).toBe(1);
+
+    // a detour over row 1001 around the blocked milepost
+    const detour = [
+      segment(at(1), { row: 1001, col: 1 }),
+      segment({ row: 1001, col: 1 }, { row: 1001, col: 2 }),
+      segment({ row: 1001, col: 2 }, { row: 1001, col: 3 }),
+      segment({ row: 1001, col: 3 }, at(3)),
+    ];
+    const around = find(at(3), blocked, fresh(9), [track(ME, [...line(ROW, 0, 13), ...detour])]);
+    expect(around?.mileposts).toBe(5);
+    expect(around?.path.some((edge) => edge.to.row === ROW && edge.to.col === 2)).toBe(false);
+  });
+
+  it('lets a train leave a blocked milepost it already stands on', () => {
+    const blocked = rules({ blocked: [key(0)] });
+    expect(find(at(2), blocked)?.mileposts).toBe(2);
+  });
+
+  it('does not use the track of a striking player, whoever moves', () => {
+    const opponentLine = [track(OPPONENT, line(ROW, 0, 5))];
+    expect(find(at(3), NO_MOVEMENT_EVENT_RULES, fresh(9), opponentLine)?.mileposts).toBe(3);
+    expect(find(at(3), rules({ struck: [OPPONENT] }), fresh(9), opponentLine)).toBeNull();
+    // the striking player cannot move on their own track either
+    expect(find(at(3), rules({ struck: [ME] }))).toBeNull();
+    // a strike on someone else's track does not stop a train on its own track
+    expect(find(at(3), rules({ struck: [OPPONENT] }))?.mileposts).toBe(3);
+  });
+
+  it('routes around struck track over other track', () => {
+    const own = track(ME, [
+      segment(at(0), { row: 1001, col: 0 }),
+      segment({ row: 1001, col: 0 }, { row: 1001, col: 1 }),
+      segment({ row: 1001, col: 1 }, at(1)),
+    ]);
+    const shortcut = track(OPPONENT, [segment(at(0), at(1))]);
+    const result = find(at(1), rules({ struck: [OPPONENT] }), fresh(2), [own, shortcut]);
+    // without the strike the 1-milepost shortcut is the only route that fits in 2
+    expect(find(at(1), NO_MOVEMENT_EVENT_RULES, fresh(2), [own, shortcut])?.mileposts).toBe(1);
+    expect(result).toBeNull();
+    expect(find(at(1), rules({ struck: [OPPONENT] }), fresh(3), [own, shortcut])?.ownersUsed.size).toBe(0);
+  });
+});
+
+describe('walkMovePath', () => {
+  const path = [0, 1, 2, 3, 4, 5, 6].map(at);
+
+  it('walks the whole path when nothing stops it', () => {
+    const result = walkMovePath(path, fresh(9), NO_MOVEMENT_EVENT_RULES);
+    expect(result).toEqual({ edgesTravelled: 6, state: fresh(3), stoppedBy: MovePathStop.None });
+  });
+
+  it('stops when half rate uses up the movement', () => {
+    // enter the zone at milepost 2: 7 left -> 4, so mileposts 3..6 are reachable; start with 6: 4 left -> 2
+    const zone = rules({ halfRate: [2, 3, 4, 5, 6].map(key) });
+    const result = walkMovePath(path, fresh(6), zone);
+    expect(result.edgesTravelled).toBe(4);
+    expect(result.stoppedBy).toBe(MovePathStop.OutOfMovement);
+    expect(result.state).toEqual({ remaining: 0, halfRateApplied: true });
+  });
+
+  it('stops before a blocked milepost', () => {
+    const result = walkMovePath(path, fresh(9), rules({ blocked: [key(3)] }));
+    expect(result.edgesTravelled).toBe(2);
+    expect(result.stoppedBy).toBe(MovePathStop.BlockedMilepost);
+  });
+
+  it('stops before track under a Rail Strike', () => {
+    const owners = (index: number): string[] => (index < 2 ? [ME] : [OPPONENT]);
+    const result = walkMovePath(path, fresh(9), rules({ struck: [OPPONENT] }), owners);
+    expect(result.edgesTravelled).toBe(2);
+    expect(result.stoppedBy).toBe(MovePathStop.RailStrike);
   });
 });

@@ -334,6 +334,8 @@ export class PlayerStateService {
         updatedMoney: number;
         /** Mileposts the server counted for the move (absent from older servers). */
         milepostsMoved?: number;
+        /** Mileposts the server will still allow this turn, half rate included (absent from older servers). */
+        remainingMovement?: number;
     } | null> {
         if (!this.localPlayer) {
             console.error('Cannot move train: no local player');
@@ -385,7 +387,8 @@ export class PlayerStateService {
                 ownersUsed: result.ownersUsed,
                 ownersPaid: result.ownersPaid,
                 updatedMoney: result.updatedMoney,
-                milepostsMoved: typeof result.milepostsMoved === 'number' ? result.milepostsMoved : undefined
+                milepostsMoved: typeof result.milepostsMoved === 'number' ? result.milepostsMoved : undefined,
+                remainingMovement: typeof result.remainingMovement === 'number' ? result.remainingMovement : undefined
             };
         } catch (error) {
             console.error('Error moving train:', error);

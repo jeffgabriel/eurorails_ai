@@ -38,6 +38,14 @@ import { BuildRouteResolver, isBuildResolverEnabled, type ResolverOutcome } from
 import { TurnValidator } from './TurnValidator';
 import { getTrainSpeed, getTrainCapacity } from '../../../shared/services/trainProperties';
 import { isPositionAtCity } from '../../../shared/services/cityPositionResolver';
+import {
+  MovementBudgetState,
+  MovePathStop,
+  beginMoveAt,
+  hasNoMovementEventRules,
+  movementEventRulesFrom,
+  walkMovePath,
+} from '../trainMovement';
 
 export class ActionResolver {
   /**
@@ -614,6 +622,41 @@ export class ActionResolver {
           `[Movement Budget] Path: raw ${rawPathLength} edges, effective ${effectivePathLen}mp (intra-city hops discounted)`,
         );
       }
+
+      // Event rules (Snow half rate and blocked mileposts, Rail Strike): stop where
+      // PlayerService.moveTrainForUser would refuse to go on, using the same
+      // per-milepost rules (trainMovement.ts). A path with nothing left is skipped.
+      const eventRules = movementEventRulesFrom(
+        (snapshot.activeEffects ?? []).flatMap(e => e.restrictions.movement),
+      );
+      if (!hasNoMovementEventRules(eventRules)) {
+        const fromKey = `${fromPosition.row},${fromPosition.col}`;
+        // Half rate is applied once per turn. It already is when the bot's speed was
+        // halved for a ferry crossing, or when the caller passed the budget left for
+        // a train standing in the zone (MovementPhasePlanner halves it there).
+        const alreadyHalved =
+          ferryCrossing !== null ||
+          snapshot.bot.ferryHalfSpeed === true ||
+          (remainingSpeed !== undefined && eventRules.halfRateZone.has(fromKey));
+        const startState = beginMoveAt(
+          { remaining: effectiveSpeed, halfRateApplied: alreadyHalved },
+          fromKey,
+          eventRules,
+        );
+        const walked = walkMovePath(
+          fullPath.slice(0, pathLength + 1),
+          startState,
+          eventRules,
+          (edgeIndex) => usage.path[edgeIndex]?.ownerPlayerIds,
+        );
+        if (walked.edgesTravelled < pathLength) {
+          console.warn(
+            `[Movement Budget] MOVE cut by active event: ${walked.edgesTravelled}/${pathLength} edges (stop=${MovePathStop[walked.stoppedBy]})`,
+          );
+          pathLength = walked.edgesTravelled;
+        }
+        if (pathLength === 0) continue;
+      }
       let truncatedPath = fullPath.slice(0, pathLength + 1); // +1 for the start node
 
       // Major-city truncation: stop at the first milepost belonging to the destination
@@ -1005,19 +1048,30 @@ export class ActionResolver {
     const plans: TurnPlan[] = [];
     let currentSnapshot = ActionResolver.cloneSnapshot(snapshot);
     let currentContext = { ...context };
-    let movementUsed = 0;
     const maxMovement = context.speed;
+    // Movement left this turn. The server halves what is left, once per turn, when
+    // the train stands in or enters a Snow half-rate zone (trainMovement.ts); the
+    // budget here follows the same rule so a later MOVE step is not planned too far.
+    let budget: MovementBudgetState = { remaining: maxMovement, halfRateApplied: false };
 
     for (let i = 0; i < actions.length; i++) {
       const a = actions[i];
       const isMove = a.action === AIActionType.MoveTrain || a.action === 'MOVE';
-      const budgetRemaining = maxMovement - movementUsed;
+      const eventRules = movementEventRulesFrom(
+        (currentSnapshot.activeEffects ?? []).flatMap(e => e.restrictions.movement),
+      );
+      if (isMove && currentSnapshot.bot.position) {
+        const pos = currentSnapshot.bot.position;
+        budget = beginMoveAt(budget, `${pos.row},${pos.col}`, eventRules);
+      }
+      const budgetBeforeStep = budget;
+      const budgetRemaining = budget.remaining;
 
       let result: ResolvedAction;
       if (isMove) {
         if (budgetRemaining <= 0) {
           console.warn(
-            `[Movement Budget] Step ${i + 1} MOVE skipped: 0mp remaining (${movementUsed}mp used of ${maxMovement}mp)`,
+            `[Movement Budget] Step ${i + 1} MOVE skipped: 0mp remaining (${maxMovement - budgetRemaining}mp used of ${maxMovement}mp)`,
           );
           continue;
         }
@@ -1048,7 +1102,17 @@ export class ActionResolver {
       if (isMove && result.plan) {
         const movePlan = result.plan as TurnPlanMoveTrain;
         const stepsUsed = computeEffectivePathLength(movePlan.path, getMajorCityLookup());
-        movementUsed += stepsUsed;
+        let remainingAfter = Math.max(0, budgetBeforeStep.remaining - stepsUsed);
+        let halfRateApplied = budgetBeforeStep.halfRateApplied;
+        if (!halfRateApplied && eventRules.halfRateZone.size > 0) {
+          // The move may have entered a half-rate zone: what was left then is halved.
+          const walked = walkMovePath(movePlan.path, budgetBeforeStep, eventRules);
+          if (walked.state.halfRateApplied) {
+            halfRateApplied = true;
+            remainingAfter = Math.min(remainingAfter, walked.state.remaining);
+          }
+        }
+        budget = { remaining: remainingAfter, halfRateApplied };
       }
 
       // Simulate state changes for subsequent steps

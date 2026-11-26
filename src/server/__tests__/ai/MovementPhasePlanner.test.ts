@@ -2445,3 +2445,74 @@ describe('TEST-002: structural invariant — PostDeliveryReplanner.replan fires 
     expect(result.routeAbandoned).toBe(true);
   });
 });
+
+// ── #313: movement budget under a Snow half-rate zone ─────────────────────
+
+describe('#313: half-rate budget (the server halves what is left, once per turn)', () => {
+  /** A snapshot with one Snow effect whose half-rate zone is `zone`. */
+  function snapshotWithSnow(zone: string[]): WorldSnapshot {
+    const snapshot = makeSnapshot();
+    snapshot.activeEffects = [
+      {
+        cardId: 131,
+        cardType: 'Snow',
+        drawingPlayerId: 'other-player',
+        drawingPlayerIndex: 1,
+        expiresAfterTurnNumber: 99,
+        affectedZone: new Set(zone),
+        restrictions: {
+          movement: [{ type: 'half_rate', zone }, { type: 'blocked_terrain', zone: [] }],
+          build: [],
+          pickupDelivery: [],
+        },
+        pendingLostTurns: [],
+      },
+    ] as unknown as WorldSnapshot['activeEffects'];
+    return snapshot;
+  }
+
+  /** resolveMove: one move along `path`; a further call fails, which ends the movement loop. */
+  function mockOneMoveThenStop(path: { row: number; col: number }[]): void {
+    mockIsStopComplete.mockReturnValue(false);
+    // Every move "costs" 3 mileposts (an earlier test in this file leaves the mock at 9).
+    const { computeEffectivePathLength } = jest.requireMock('../../../shared/services/majorCityGroups');
+    (computeEffectivePathLength as jest.Mock).mockReset();
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(3);
+    mockResolveMove.mockReset();
+    mockResolveMove
+      .mockResolvedValueOnce({ success: true, plan: { type: AIActionType.MoveTrain, path, fees: new Set(), totalFee: 0 } })
+      .mockResolvedValue({ success: false, error: 'stop here' });
+  }
+
+  const route = (): StrategicRoute => makeRoute({ stops: [makeStop('pickup', 'Berlin')], currentStopIndex: 0 });
+  const context = (): GameContext => makeContext({ citiesOnNetwork: ['Berlin'], position: { row: 5, col: 5 }, speed: 9 });
+
+  it('plans at half rate when the bot starts the turn inside the zone', async () => {
+    mockOneMoveThenStop([{ row: 5, col: 5 }, { row: 5, col: 6 }, { row: 5, col: 7 }, { row: 5, col: 8 }]);
+    const trace = makeTrace();
+    await MovementPhasePlanner.run(route(), snapshotWithSnow(['5,5', '5,6', '5,7', '5,8']), context(), trace);
+
+    // 9 -> 5 at the start; the move costs 3 (mocked path length), leaving 2, not halved again
+    expect(mockResolveMove.mock.calls[0][2]).toBe(5);
+    expect(trace.moveBudget.used).toBe(9 - 2);
+  });
+
+  it('halves what is left after a move that enters the zone', async () => {
+    // the 2nd milepost of the move is in the zone: 9 - 2 = 7 left on entering -> 4, then 1 more -> 3
+    mockOneMoveThenStop([{ row: 5, col: 5 }, { row: 5, col: 6 }, { row: 5, col: 7 }, { row: 5, col: 8 }]);
+    const trace = makeTrace();
+    await MovementPhasePlanner.run(route(), snapshotWithSnow(['5,7', '5,8']), context(), trace);
+
+    expect(mockResolveMove.mock.calls[0][2]).toBe(9);
+    expect(trace.moveBudget.used).toBe(9 - 3);
+  });
+
+  it('leaves the budget alone when the move stays outside the zone', async () => {
+    mockOneMoveThenStop([{ row: 5, col: 5 }, { row: 5, col: 6 }, { row: 5, col: 7 }, { row: 5, col: 8 }]);
+    const trace = makeTrace();
+    await MovementPhasePlanner.run(route(), snapshotWithSnow(['9,9']), context(), trace);
+
+    expect(mockResolveMove.mock.calls[0][2]).toBe(9);
+    expect(trace.moveBudget.used).toBe(9 - 6);
+  });
+});

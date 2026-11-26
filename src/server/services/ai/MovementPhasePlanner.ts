@@ -30,6 +30,7 @@ import {
   TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
 import { isMovementHalfRate, isPickupDeliveryBlocked, getCityMilepointKey } from '../../services/restrictionPredicates';
+import { movementEventRulesFrom, walkMovePath } from '../trainMovement';
 import {
   resolveBuildTarget,
   applyStopEffectToLocalState,
@@ -124,19 +125,43 @@ export class MovementPhasePlanner {
     // planning budget now so the loop never emits more moves than allowed.
     // PlayerService enforces this at execution time; halving here prevents the
     // planner from committing to unreachable stops.
-    let remainingBudget: number;
-    if (snapshot.bot.position) {
+    //
+    // The server applies half rate once per turn, to whatever movement is left
+    // when the train first stands in or enters the zone (trainMovement.ts). The
+    // two helpers below keep this planner's budget in step with that: one for a
+    // train standing in the zone (turn start, or a Snow card drawn mid-turn by a
+    // delivery), one for a move that enters the zone.
+    let remainingBudget: number = context.speed;
+    let halfRateApplied = false;
+    const halveBudgetIfStandingInZone = (): void => {
+      if (halfRateApplied || !snapshot.bot.position) return;
       const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
       const movementRestrictions = (snapshot.activeEffects ?? []).flatMap(e => e.restrictions.movement);
       if (isMovementHalfRate(movementRestrictions, posKey)) {
-        remainingBudget = Math.ceil(context.speed / 2);
-        console.info(`[MovementPhasePlanner] Half-rate movement: budget capped ${context.speed} → ${remainingBudget}`);
-      } else {
-        remainingBudget = context.speed;
+        const before = remainingBudget;
+        remainingBudget = Math.ceil(remainingBudget / 2);
+        halfRateApplied = true;
+        console.info(`[MovementPhasePlanner] Half-rate movement: budget capped ${before} → ${remainingBudget}`);
       }
-    } else {
-      remainingBudget = context.speed;
-    }
+    };
+    /** Budget after a move: `plainBudgetAfter`, or less when the move entered a half-rate zone. */
+    const budgetAfterMove = (
+      path: { row: number; col: number }[],
+      budgetBefore: number,
+      plainBudgetAfter: number,
+    ): number => {
+      if (halfRateApplied) return plainBudgetAfter;
+      const eventRules = movementEventRulesFrom(
+        (snapshot.activeEffects ?? []).flatMap(e => e.restrictions.movement),
+      );
+      if (eventRules.halfRateZone.size === 0) return plainBudgetAfter;
+      const walked = walkMovePath(path, { remaining: budgetBefore, halfRateApplied: false }, eventRules);
+      if (!walked.state.halfRateApplied) return plainBudgetAfter;
+      halfRateApplied = true;
+      console.info(`[MovementPhasePlanner] Half-rate movement: entered zone, budget ${plainBudgetAfter} → ${walked.state.remaining}`);
+      return Math.min(plainBudgetAfter, walked.state.remaining);
+    };
+    halveBudgetIfStandingInZone();
     let lastMoveTargetCity: string | null = null;
     let replanLlmLog: LlmAttempt[] | undefined;
     let replanSystemPrompt: string | undefined;
@@ -499,6 +524,10 @@ export class MovementPhasePlanner {
       if (context.citiesOnNetwork.includes(targetCity)) {
         lastMoveTargetCity = targetCity;
 
+        // A Snow card drawn earlier this turn may have put the bot in a half-rate zone.
+        halveBudgetIfStandingInZone();
+        const budgetBeforeMove = remainingBudget;
+
         const _moveResolveStart = Date.now();
         const moveResult = await ActionResolver.resolveMove(
           { to: targetCity },
@@ -521,7 +550,11 @@ export class MovementPhasePlanner {
         const movePlan = moveResult.plan as TurnPlanMoveTrain;
         const majorCityLookup = getMajorCityLookup();
         const milesConsumed = computeEffectivePathLength(movePlan.path, majorCityLookup);
-        remainingBudget = Math.max(0, remainingBudget - milesConsumed);
+        remainingBudget = budgetAfterMove(
+          movePlan.path,
+          budgetBeforeMove,
+          Math.max(0, remainingBudget - milesConsumed),
+        );
         trace.moveBudget.used = context.speed - remainingBudget;
 
         // Update position context before any post-move checks (ferry, arrival).
@@ -737,6 +770,8 @@ export class MovementPhasePlanner {
                 }
                 break;
               } else {
+                halveBudgetIfStandingInZone();
+                const a3BudgetBeforeMove = remainingBudget;
                 const _a3MoveStart = Date.now();
                 const a3MoveResult = await ActionResolver.resolveMove(
                   { toRow: previewBuildOrigin.row, toCol: previewBuildOrigin.col },
@@ -754,7 +789,11 @@ export class MovementPhasePlanner {
                   const a3Miles = computeEffectivePathLength(a3MovePlan.path, majorCityLookupA3);
 
                   plans.push(a3MoveResult.plan);
-                  remainingBudget = Math.max(0, remainingBudget - a3Miles);
+                  remainingBudget = budgetAfterMove(
+                    a3MovePlan.path,
+                    a3BudgetBeforeMove,
+                    Math.max(0, remainingBudget - a3Miles),
+                  );
                   trace.moveBudget.used = context.speed - remainingBudget;
                   trace.a3.movePreprended = true;
                   trace.a3.terminationReason = 'a3_move_success';

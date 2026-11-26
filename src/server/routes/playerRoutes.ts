@@ -590,6 +590,14 @@ router.post('/move-train', authenticateToken, async (req, res) => {
         if (error instanceof TurnGuardError) {
             return res.status(error.httpStatus).json(error.toResponseBody());
         }
+        // A move an active event forbids (Snow, Rail Strike) is a rule conflict, not a server fault.
+        if (error instanceof ActionRestrictionError) {
+            return res.status(409).json({
+                error: 'Conflict',
+                code: error.code,
+                details: error.message
+            });
+        }
 
         const message = error?.message || 'An unexpected error occurred';
 

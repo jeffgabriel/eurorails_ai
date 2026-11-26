@@ -19,20 +19,25 @@ import {
   isBuildBlockedAtMilepost,
   isFloodRebuildBlocked,
   isMovementBlockedAtDest,
-  isMovementOnOwnRailBlocked,
   isPickupDeliveryBlocked,
 } from "./restrictionPredicates";
 import { cleanupGameState } from "./gameCleanupService";
 import { lockPlayerForUserTurn } from "./turnGuard";
 import {
+  MovementBudgetState,
+  MovementEventRules,
   MovementRuleError,
   MovementRuleErrorCode,
-  computeRemainingMovement,
+  MovePath,
+  NO_MOVEMENT_EVENT_RULES,
+  beginMoveAt,
   findMovePathWithinBudget,
   getTurnMovementAllowance,
   isCityMilepost,
   isCityMilepostOf,
-  sumMovementUsed,
+  movementEventRulesFrom,
+  readTurnMovementState,
+  remainingMovementAt,
 } from "./trainMovement";
 import {
   buildActionsOf,
@@ -335,6 +340,21 @@ export class PlayerService {
       }
     }
     return null;
+  }
+
+  /**
+   * Movement rules from the raw `games.active_event` value (an array of
+   * ActiveEffectRecord, or null). Same data `ActiveEffectManager.getMovementRestrictions`
+   * returns, for a caller that already has the column in hand.
+   */
+  private static movementEventRulesFromRecords(activeEvent: unknown): MovementEventRules {
+    if (!Array.isArray(activeEvent)) return NO_MOVEMENT_EVENT_RULES;
+    const restrictions: unknown[] = [];
+    for (const record of activeEvent as Array<{ restrictions?: { movement?: unknown } } | null>) {
+      const movement: unknown = record?.restrictions?.movement;
+      if (Array.isArray(movement)) restrictions.push(...movement);
+    }
+    return movementEventRulesFrom(restrictions);
   }
 
   private static normalizeTrainType(raw: unknown): TrainType {
@@ -681,6 +701,7 @@ export class PlayerService {
                     current_turn_number as "turnNumber",
                     mh.movement_path as "movementHistory",
                     ta.actions as "turnActions",
+                    (SELECT active_event FROM games WHERE games.id = players.game_id) as "activeEvent",
                     hand,
                     loads,
                     camera_state,
@@ -719,7 +740,15 @@ export class PlayerService {
       //     : null,
       // });
 
-      const players = result.rows.map((row) => {
+      // The game's active event effects come back on every row (one game, so the
+      // same value each time); the movement rules are derived from them once.
+      const movementEventRules: MovementEventRules = PlayerService.movementEventRulesFromRecords(
+        result.rows[0]?.activeEvent,
+      );
+
+      const players = result.rows.map((fullRow) => {
+        // activeEvent is only an input to remainingMovement; it is not part of a player.
+        const { activeEvent: _activeEvent, ...row } = fullRow;
         // Issue #176: Demand cards are public in the board game, so show ALL hands
         // Handle both null and empty array cases
         const handArray = row.hand || [];
@@ -742,10 +771,18 @@ export class PlayerService {
         // Normalize trainType from database (legacy values like "Freight" may exist)
         const trainType = this.normalizeTrainType(row.trainType);
 
-        // remainingMovement = the train type's allowance minus the server-computed
-        // costs in the current turn's movement history (see trainMovement.ts).
+        // remainingMovement = what moveTrainForUser would start this player's next
+        // move with: the budget state after the turn's last recorded segment, at
+        // half rate when the train stands in a half-rate zone (see trainMovement.ts).
         const movementHistory = row.movementHistory || [];
-        const remainingMovement = computeRemainingMovement(trainType, movementHistory);
+        const remainingMovement = remainingMovementAt(
+          trainType,
+          movementHistory,
+          row.position_row != null && row.position_col != null
+            ? { row: Number(row.position_row), col: Number(row.position_col) }
+            : null,
+          movementEventRules,
+        );
 
         // Extract paidOpponentIds from turn_actions for this turn
         // This ensures the "once per turn" fee tracking persists across browser refresh
@@ -1529,8 +1566,17 @@ export class PlayerService {
    * `cost` in `movement_history`, which is the server's record of movement used.
    * `args.movementCost` from the client is ignored.
    *
-   * Not enforced here yet: half rate and event-based limits (#313), ferry
-   * stop/crossing rules (#314). A ferry edge costs no movement.
+   * Event modifiers (#313), from the active effects' stored movement restrictions:
+   * - Half rate (Snow): a train standing in the zone when it moves, or entering
+   *   it, has what is left of the turn halved, rounded up, once per turn. The
+   *   budget state after each move is stored on its `movement_history` segment
+   *   (`remainingAfter`, `halfRate`) and the next move continues from it.
+   * - Blocked mileposts (Snow): the route may not enter one.
+   * - Rail Strike #123: the route may not use the drawing player's track,
+   *   whoever is moving.
+   *
+   * Not enforced here yet: ferry stop/crossing rules (#314). A ferry edge costs
+   * no movement.
    *
    * Fee rule:
    * - ECU 4M per distinct opponent whose track is used at any point in the turn.
@@ -1556,8 +1602,10 @@ export class PlayerService {
     cardsDrawnDuringAction: number;
     /** Mileposts the server counted for this move (not the ignored `args.movementCost`). */
     milepostsMoved: number;
-    /** Mileposts left this turn after this move, at the plain train-type limit. */
+    /** Mileposts left this turn after this move, with half rate applied where it is in force. */
     remainingMovement: number;
+    /** True when this turn's movement has been halved (by this move or an earlier one). */
+    halfRateApplied: boolean;
   }> {
     const { gameId, userId, to } = args;
     if (!Number.isInteger(to?.row) || !Number.isInteger(to?.col)) {
@@ -1593,6 +1641,7 @@ export class PlayerService {
       // ── Event card restriction checks ─────────────────────────────────────
       // Check movement restrictions from active event effects (Snow, Rail Strike)
       const movementRestrictions = await activeEffectManager.getMovementRestrictions(gameId, client);
+      const eventRules: MovementEventRules = movementEventRulesFrom(movementRestrictions);
       const destKey = `${to.row},${to.col}`;
       const destBlocked = isMovementBlockedAtDest(movementRestrictions, destKey);
       if (destBlocked.blocked) {
@@ -1604,9 +1653,8 @@ export class PlayerService {
           `Movement blocked by active event (Snow): destination ${destKey} is in the blocked terrain zone`,
         );
       }
-      // no_movement_on_player_rail: checked after track usage is computed (below)
-      // half_rate: does not block movement, only caps speed — still a client-side cap.
-      // The server enforces the plain train-type limit below; half rate is issue #313.
+      // Blocked mileposts along the way, no_movement_on_player_rail and half_rate
+      // are applied by the route search below (eventRules).
       // ── End restriction checks ────────────────────────────────────────────
 
       // Lock action log row for this turn (if it exists) so we can safely compute already-paid opponents.
@@ -1696,20 +1744,27 @@ export class PlayerService {
         );
       }
 
-      // Movement left this turn, from the turn's movement history read above.
-      // #313 passes its allowance modifiers (half rate) to getTurnMovementAllowance.
+      // Movement left this turn: the budget state after the last move recorded in
+      // the turn's movement history read above (the full allowance when there is
+      // none). #314 passes "this turn starts at half rate" as the third argument
+      // of readTurnMovementState.
       const movementAllowance = getTurnMovementAllowance(
         PlayerService.normalizeTrainType(playerRow.trainType),
       );
-      const movementUsedBefore = sumMovementUsed(turnMovementPath);
-      const movementLeftBefore = Math.max(0, movementAllowance - movementUsedBefore);
+      const recordedState: MovementBudgetState = readTurnMovementState(
+        PlayerService.normalizeTrainType(playerRow.trainType),
+        turnMovementPath,
+      );
 
       // Compute the route, its milepost count and the owners used for this move.
       // If this is the first placement (no from), there is no route and no fee.
       let ownersUsed: string[] = [];
-      let usesOwnTrack = false;
       let mileposts = 0;
+      let stateAfterMove: MovementBudgetState = recordedState;
       if (from && (from.row !== to.row || from.col !== to.col)) {
+        // A train standing in a half-rate zone moves at half rate: this halves
+        // what is left once (the start of the turn, or an event drawn mid-turn).
+        const stateBefore = beginMoveAt(recordedState, `${from.row},${from.col}`, eventRules);
         // Read on the transaction client: a pooled read here would need a second
         // connection while this one holds the player and game row locks.
         const allTracks = await TrackService.getAllTracks(gameId, client);
@@ -1729,39 +1784,63 @@ export class PlayerService {
         // opponents already paid this turn (no new fee). A shorter route over any
         // other opponent's track would charge a fee the player never saw, so it is
         // not taken: the move is refused as too far instead.
+        // The preview ignores event rules, as the client's prompt does, so a detour
+        // around struck track or a Snow block over an opponent it does not show is
+        // refused too.
         const allowedOpponentIds = new Set<string>([...previewUsage.ownersUsed, ...alreadyPaid]);
-        const movePath = findMovePathWithinBudget({
-          allTracks,
-          from: { row: from.row, col: from.col },
-          to: { row: to.row, col: to.col },
-          currentPlayerId: playerId,
-          maxMileposts: movementLeftBefore,
-          allowedOpponentIds,
-        });
+        const findPath = (start: MovementBudgetState, rules: MovementEventRules): MovePath | null =>
+          findMovePathWithinBudget({
+            allTracks,
+            from: { row: from.row, col: from.col },
+            to: { row: to.row, col: to.col },
+            currentPlayerId: playerId,
+            maxMileposts: start.remaining,
+            halfRateApplied: start.halfRateApplied,
+            eventRules: rules,
+            allowedOpponentIds,
+          });
+        const movePath = findPath(stateBefore, eventRules);
         if (!movePath) {
+          // Name the event that stands in the way, when one does: retry (still only
+          // over allowed opponents) with the Rail Strike lifted, then also the
+          // blocked mileposts, then half rate. Otherwise it is plain distance.
+          const withoutStrike: MovementEventRules = { ...eventRules, struckPlayerIds: new Set<string>() };
+          const withoutBlocks: MovementEventRules = { ...withoutStrike, blockedMileposts: new Set<string>() };
+          if (eventRules.struckPlayerIds.size > 0 && findPath(stateBefore, withoutStrike)) {
+            console.warn(
+              `[PlayerService] Movement rejected by event restriction: type=no_movement_on_player_rail gameId=${gameId} playerId=${playerId}`,
+            );
+            throw new ActionRestrictionError(
+              'RAIL_STRIKE_BLOCKED',
+              `Movement blocked by active event (Rail Strike): no train may move on the striking player's track`,
+            );
+          }
+          if (eventRules.blockedMileposts.size > 0 && findPath(stateBefore, withoutBlocks)) {
+            console.warn(
+              `[PlayerService] Movement rejected by event restriction: type=blocked_terrain gameId=${gameId} playerId=${playerId} destKey=${destKey}`,
+            );
+            throw new ActionRestrictionError(
+              'SNOW_BLOCKED_TERRAIN',
+              `Movement blocked by active event (Snow): the route to ${destKey} crosses the blocked terrain zone`,
+            );
+          }
+          if (eventRules.halfRateZone.size > 0 && findPath(recordedState, NO_MOVEMENT_EVENT_RULES)) {
+            console.warn(
+              `[PlayerService] Movement rejected by event restriction: type=half_rate gameId=${gameId} playerId=${playerId} destKey=${destKey}`,
+            );
+            throw new ActionRestrictionError(
+              'SNOW_HALF_RATE_EXCEEDED',
+              `Movement blocked by active event (Snow): at half rate the destination ${destKey} is beyond the movement left this turn`,
+            );
+          }
           throw new MovementRuleError(
             MovementRuleErrorCode.MovementExceeded,
-            `Invalid move: the destination is beyond the ${movementLeftBefore} of ${movementAllowance} mileposts left this turn`,
+            `Invalid move: the destination is beyond the ${stateBefore.remaining} of ${movementAllowance} mileposts left this turn${stateBefore.halfRateApplied ? " (half rate)" : ""}`,
           );
         }
         ownersUsed = Array.from(movePath.ownersUsed);
-        // Check if any edge in the path is owned by the current player
-        usesOwnTrack = movePath.path.some(edge => edge.ownerPlayerIds.includes(playerId));
         mileposts = movePath.mileposts;
-      }
-
-      // ── Rail Strike: reject if this move uses the targeted player's own track ──
-      // This check must happen after track usage is computed so we know which
-      // track edges are involved. The player can still move on opponent or
-      // public track; only movement on their own rail is blocked.
-      if (usesOwnTrack && isMovementOnOwnRailBlocked(movementRestrictions, playerId, playerId)) {
-        console.warn(
-          `[PlayerService] Movement rejected by event restriction: type=no_movement_on_player_rail gameId=${gameId} playerId=${playerId}`,
-        );
-        throw new ActionRestrictionError(
-          'RAIL_STRIKE_BLOCKED',
-          `Movement blocked by active event (Rail Strike): player ${playerId} cannot move on their own track this turn`,
-        );
+        stateAfterMove = movePath.stateAfter;
       }
 
       const newlyPayable = ownersUsed.filter((pid) => !alreadyPaid.has(pid));
@@ -1837,6 +1916,9 @@ export class PlayerService {
         from: from ? { x: from.x, y: from.y, row: from.row, col: from.col, terrain: 0 } : null,
         to: { x: to.x, y: to.y, row: to.row, col: to.col, terrain: 0 },
         cost: mileposts,
+        // Budget state after this move; the turn's next move continues from it.
+        remainingAfter: stateAfterMove.remaining,
+        halfRate: stateAfterMove.halfRateApplied,
       };
 
       if (hasTurnHistoryRow) {
@@ -1871,7 +1953,8 @@ export class PlayerService {
         // Movement never draws cards directly
         cardsDrawnDuringAction: 0,
         milepostsMoved: mileposts,
-        remainingMovement: movementLeftBefore - mileposts,
+        remainingMovement: stateAfterMove.remaining,
+        halfRateApplied: stateAfterMove.halfRateApplied,
       };
     } catch (err) {
       await client.query("ROLLBACK");

@@ -749,14 +749,25 @@ export class GameScene extends Phaser.Scene {
     };
   }
 
-  /** Reset a player's movement allowance for a new turn, halving it after a ferry crossing. */
+  /**
+   * Reset a player's movement allowance for a new turn, halving it after a ferry
+   * crossing or when the train starts the turn inside an active Snow zone (the
+   * server enforces the Snow half rate; this keeps the displayed allowance in step).
+   */
   private resetMovementForNewTurn(player: Player): void {
     const trainProps = TRAIN_PROPERTIES[player.trainType];
     if (!trainProps) {
       console.error(`Invalid train type: ${player.trainType}`);
       return;
     }
-    if (player.trainState.justCrossedFerry) {
+    const position = player.trainState.position;
+    const positionKey = position ? `${position.row},${position.col}` : null;
+    const startsInSnowZone =
+      positionKey !== null &&
+      (useGameStore.getState().activeEffects ?? []).some(
+        (effect) => effect.cardType === EventCardType.Snow && effect.affectedZone.includes(positionKey),
+      );
+    if (player.trainState.justCrossedFerry || startsInSnowZone) {
       player.trainState.remainingMovement = Math.ceil(trainProps.speed / 2);
       player.trainState.justCrossedFerry = false;
     } else {
