@@ -1,6 +1,6 @@
 import { db } from "../db/index";
 import { PlayerColor } from "../../shared/types/GameTypes";
-import { PlayerService } from "./playerService";
+import { cleanupGameState } from "./gameCleanupService";
 
 /** Why an in-game Settings action was refused. */
 export enum GameSettingsErrorCode {
@@ -104,8 +104,34 @@ export interface RemovePlayerResult {
  *
  * Every method takes the authenticated user's id and checks it against the
  * database inside the same transaction as the change.
+ *
+ * Lock order: player rows first, then the game row. That is the order
+ * `lockPlayerForUserTurn` uses, so these actions cannot deadlock against a
+ * turn-guarded action running at the same moment.
  */
 export class GameSettingsService {
+  /**
+   * Confirm the locked game row belongs to the caller.
+   *
+   * @throws GameSettingsError when the game is missing or the caller did not create it.
+   */
+  private static assertCreator(
+    game: { created_by: string | null } | undefined,
+    userId: string,
+    notCreatorMessage: string,
+  ): void {
+    if (!game) {
+      throw new GameSettingsError(GameSettingsErrorCode.GameNotFound, "Game not found");
+    }
+    if (!game.created_by || game.created_by !== userId) {
+      throw new GameSettingsError(GameSettingsErrorCode.NotCreator, notCreatorMessage);
+    }
+  }
+
+  private static isGameOver(status: string): boolean {
+    return status === "completed" || status === "abandoned";
+  }
+
   /**
    * Permanently delete a player (with their track and movement history) from a
    * game. Only the game's creator may do this, and not to their own player.
@@ -127,28 +153,9 @@ export class GameSettingsService {
     try {
       await client.query("BEGIN");
 
-      const gameResult = await client.query(
-        `SELECT created_by, status, current_player_index, initial_build_order, victory_triggered
-         FROM games WHERE id = $1 FOR UPDATE`,
-        [gameId],
-      );
-      if (gameResult.rows.length === 0) {
-        throw new GameSettingsError(GameSettingsErrorCode.GameNotFound, "Game not found");
-      }
-      const game = gameResult.rows[0];
-      if (!game.created_by || game.created_by !== creatorUserId) {
-        throw new GameSettingsError(
-          GameSettingsErrorCode.NotCreator,
-          "Only the game creator can delete a player",
-        );
-      }
-      if (game.status === "completed" || game.status === "abandoned") {
-        throw new GameSettingsError(
-          GameSettingsErrorCode.GameOver,
-          `Cannot delete a player from a game that is ${game.status}`,
-        );
-      }
-
+      // Players before the game row (see the lock order note on the class).
+      // A player who joins between the two locks sorts after everyone here, so
+      // the indexes computed below still hold.
       const playersResult = await client.query(
         `SELECT id, user_id, is_deleted FROM players
          WHERE game_id = $1 ORDER BY created_at ASC FOR UPDATE`,
@@ -159,6 +166,21 @@ export class GameSettingsService {
         user_id: string | null;
         is_deleted: boolean | null;
       }>;
+
+      const gameResult = await client.query(
+        `SELECT created_by, status, current_player_index, initial_build_order, victory_triggered
+         FROM games WHERE id = $1 FOR UPDATE`,
+        [gameId],
+      );
+      const game = gameResult.rows[0];
+      GameSettingsService.assertCreator(game, creatorUserId, "Only the game creator can delete a player");
+      if (GameSettingsService.isGameOver(game.status)) {
+        throw new GameSettingsError(
+          GameSettingsErrorCode.GameOver,
+          `Cannot delete a player from a game that is ${game.status}`,
+        );
+      }
+
       const targetIndex = players.findIndex((p) => p.id === playerId);
       if (targetIndex === -1) {
         throw new GameSettingsError(
@@ -241,24 +263,35 @@ export class GameSettingsService {
    * @throws GameSettingsError when the caller is not the creator.
    */
   static async endGame(gameId: string, creatorUserId: string): Promise<void> {
-    const gameResult = await db.query(
-      "SELECT created_by, status FROM games WHERE id = $1",
-      [gameId],
-    );
-    if (gameResult.rows.length === 0) {
-      throw new GameSettingsError(GameSettingsErrorCode.GameNotFound, "Game not found");
-    }
-    const game = gameResult.rows[0];
-    if (!game.created_by || game.created_by !== creatorUserId) {
-      throw new GameSettingsError(
-        GameSettingsErrorCode.NotCreator,
-        "Only the game creator can end the game",
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      const gameResult = await client.query(
+        "SELECT created_by, status FROM games WHERE id = $1 FOR UPDATE",
+        [gameId],
       );
+      const game = gameResult.rows[0];
+      GameSettingsService.assertCreator(game, creatorUserId, "Only the game creator can end the game");
+
+      const alreadyOver = GameSettingsService.isGameOver(game.status);
+      if (!alreadyOver) {
+        await client.query(
+          "UPDATE games SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+          [gameId],
+        );
+      }
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
-    if (game.status === "completed" || game.status === "abandoned") {
-      return;
-    }
-    await PlayerService.updateGameStatus(gameId, "completed");
+
+    // Release the game's in-memory state once it is over (idempotent).
+    await cleanupGameState(gameId);
   }
 
   /**
@@ -300,15 +333,6 @@ export class GameSettingsService {
     try {
       await client.query("BEGIN");
 
-      // Lock the game row so two players cannot claim the same color at once.
-      const gameResult = await client.query(
-        "SELECT id FROM games WHERE id = $1 FOR UPDATE",
-        [gameId],
-      );
-      if (gameResult.rows.length === 0) {
-        throw new GameSettingsError(GameSettingsErrorCode.GameNotFound, "Game not found");
-      }
-
       const playerResult = await client.query(
         `SELECT id FROM players
          WHERE game_id = $1 AND user_id = $2 AND is_deleted = false
@@ -322,6 +346,10 @@ export class GameSettingsService {
         );
       }
       const playerId = playerResult.rows[0].id as string;
+
+      // Lock the game row (after the player row: see the lock order note on the
+      // class) so two players cannot claim the same color at once.
+      await client.query("SELECT id FROM games WHERE id = $1 FOR UPDATE", [gameId]);
 
       if (color !== null) {
         const conflict = await client.query(

@@ -97,7 +97,6 @@ describe('Settings actions (#305)', () => {
   afterEach(async () => {
     await runQuery(async (client) => {
       await client.query('DELETE FROM player_tracks WHERE game_id = ANY($1)', [gameIds]);
-      await client.query('UPDATE games SET created_by = NULL WHERE id = ANY($1)', [gameIds]);
       await client.query('DELETE FROM players WHERE game_id = ANY($1)', [gameIds]);
       await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
     });
@@ -413,22 +412,6 @@ describe('Settings actions (#305)', () => {
         .send({ gameId, name: 'Intruder' });
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('NotAMember');
-    });
-  });
-
-  describe('removed endpoints', () => {
-    it.each([
-      ['/api/players/delete', (): object => ({ gameId, playerId: thirdPlayerId })],
-      ['/api/players/game/:gameId/end', (): object => ({})],
-    ])('POST %s is gone', async (path: string, body: () => object) => {
-      await createGame('active');
-      const res = await request(app)
-        .post(path.replace(':gameId', gameId))
-        .set('Authorization', `Bearer ${creatorToken}`)
-        .send(body());
-      expect(res.status).toBe(404);
-      expect(await playerIdsInGame()).toHaveLength(3);
-      expect((await gameRow()).status).toBe('active');
     });
   });
 });

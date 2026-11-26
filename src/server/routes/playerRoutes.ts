@@ -124,7 +124,7 @@ router.patch('/me', authenticateToken, async (req, res) => {
         if (!isUuid(gameId)) {
             return res.status(400).json({
                 error: 'Validation error',
-                details: 'Game ID is required'
+                details: 'A valid game ID is required'
             });
         }
 
