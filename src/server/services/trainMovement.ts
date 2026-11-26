@@ -1,4 +1,10 @@
-import { buildUnionTrackGraph, PathEdge } from "../../shared/services/trackUsageFees";
+import {
+  buildUnionTrackGraph,
+  edgeKey,
+  nodeKey,
+  parseNodeKey,
+  PathEdge,
+} from "../../shared/services/trackUsageFees";
 import { getFerryEdges, getMajorCityLookup, isIntraCityEdge } from "../../shared/services/majorCityGroups";
 import { isPositionAtCity } from "../../shared/services/cityPositionResolver";
 import { getTrainSpeed } from "../../shared/services/trainProperties";
@@ -125,17 +131,9 @@ export type MovePath = {
 
 type SearchState = { nodeKey: string; mileposts: number };
 
-function toKey(node: { row: number; col: number }): string {
-  return `${node.row},${node.col}`;
-}
-
-function parseKey(key: string): { row: number; col: number } {
-  const [row, col] = key.split(",");
-  return { row: Number(row), col: Number(col) };
-}
-
-function undirectedKey(aKey: string, bKey: string): string {
-  return aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
+/** Edge key between two node keys, in the encoding `buildUnionTrackGraph` uses. */
+function edgeKeyOf(aKey: string, bKey: string): string {
+  return edgeKey(parseNodeKey(aKey), parseNodeKey(bKey));
 }
 
 /**
@@ -166,8 +164,8 @@ export function findMovePathWithinBudget(args: {
   maxMileposts: number;
 }): MovePath | null {
   const budget = Math.max(0, Math.floor(args.maxMileposts));
-  const startKey = toKey(args.from);
-  const goalKey = toKey(args.to);
+  const startKey = nodeKey(args.from);
+  const goalKey = nodeKey(args.to);
   if (startKey === goalKey) {
     return { path: [], ownersUsed: new Set(), mileposts: 0 };
   }
@@ -175,7 +173,7 @@ export function findMovePathWithinBudget(args: {
   const { adjacency, edgeOwners } = buildUnionTrackGraph({ allTracks: args.allTracks });
   const majorCityLookup = getMajorCityLookup();
   const ferryKeys = new Set<string>(
-    getFerryEdges().map((ferry) => undirectedKey(toKey(ferry.pointA), toKey(ferry.pointB))),
+    getFerryEdges().map((ferry) => edgeKey(ferry.pointA, ferry.pointB)),
   );
 
   // Search over (node, mileposts used) states in increasing order of
@@ -210,7 +208,7 @@ export function findMovePathWithinBudget(args: {
       }
 
       for (const nextKey of adjacency.get(current.nodeKey) ?? []) {
-        const eKey = undirectedKey(current.nodeKey, nextKey);
+        const eKey = edgeKeyOf(current.nodeKey, nextKey);
         const isFree =
           ferryKeys.has(eKey) || isIntraCityEdge(current.nodeKey, nextKey, majorCityLookup);
         const nextMileposts = current.mileposts + (isFree ? 0 : 1);
@@ -257,12 +255,12 @@ function buildMovePath(
   const path: PathEdge[] = [];
   const ownersUsed = new Set<string>();
   for (let i = 0; i < nodeKeys.length - 1; i++) {
-    const owners = edgeOwners.get(undirectedKey(nodeKeys[i], nodeKeys[i + 1]));
+    const owners = edgeOwners.get(edgeKeyOf(nodeKeys[i], nodeKeys[i + 1]));
     const ownerPlayerIds = owners ? Array.from(owners) : [];
     for (const ownerId of ownerPlayerIds) {
       if (ownerId !== currentPlayerId) ownersUsed.add(ownerId);
     }
-    path.push({ from: parseKey(nodeKeys[i]), to: parseKey(nodeKeys[i + 1]), ownerPlayerIds });
+    path.push({ from: parseNodeKey(nodeKeys[i]), to: parseNodeKey(nodeKeys[i + 1]), ownerPlayerIds });
   }
   return { path, ownersUsed, mileposts: goal.mileposts };
 }

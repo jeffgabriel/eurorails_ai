@@ -526,7 +526,7 @@ describe('PlayerService.deliverLoadForUser — delivery restrictions', () => {
       GAME_ID, USER_ID, cityName, LoadType.Coal, 31,
     ).catch(() => {});
 
-    expect(mockActiveEffectManager.getPickupDeliveryRestrictions).toHaveBeenCalledWith(GAME_ID);
+    expect(mockActiveEffectManager.getPickupDeliveryRestrictions).toHaveBeenCalledWith(GAME_ID, mockClient);
   });
 
   it('rejects delivery when city milepost is in Strike coastal zone', async () => {
@@ -595,19 +595,23 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
   });
 
   // Setup move mocks WITH a current position and player-owned track from (5,5) to (6,5).
-  // This ensures computeTrackUsageForMove runs and detects own-track usage.
+  // This ensures the route search runs and detects own-track usage.
   function setupFullMoveMocksWithPosition(playerId: string = PLAYER_ID): void {
-    // TrackService.getAllTracks returns player's own track segment
-    mockDb.query.mockResolvedValue({
-      rows: [{
-        player_id: playerId,
-        segments: JSON.stringify([{ from: { row: 5, col: 5 }, to: { row: 6, col: 5 } }]),
-      }],
-    });
+    // The pool has no track: moveTrainForUser must read it on its transaction client.
+    mockDb.query.mockResolvedValue({ rows: [] });
 
     mockClient.query.mockImplementation((sql: string) => {
       if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
         return Promise.resolve();
+      }
+      // TrackService.getAllTracks returns player's own track segment
+      if (sql.includes('FROM player_tracks')) {
+        return Promise.resolve({
+          rows: [{
+            player_id: playerId,
+            segments: JSON.stringify([{ from: { row: 5, col: 5 }, to: { row: 6, col: 5 } }]),
+          }],
+        });
       }
       if (sql.includes('FROM players') && sql.includes('user_id = $2') && sql.includes('FOR UPDATE')) {
         return Promise.resolve({
@@ -714,7 +718,7 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
       to: { row: 6, col: 5 },
     }).catch(() => {});
 
-    expect(mockActiveEffectManager.getMovementRestrictions).toHaveBeenCalledWith(GAME_ID);
+    expect(mockActiveEffectManager.getMovementRestrictions).toHaveBeenCalledWith(GAME_ID, mockClient);
   });
 
   it('allows movement when no active effects', async () => {
@@ -829,6 +833,22 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
     ).resolves.toBeDefined();
   });
 
+  it('reads track and restrictions on the transaction client, never the pool', async () => {
+    setupFullMoveMocksWithPosition();
+
+    await expect(
+      PlayerService.moveTrainForUser({
+        gameId: GAME_ID,
+        userId: USER_ID,
+        to: { row: 6, col: 5 },
+      }),
+    ).resolves.toMatchObject({ milepostsMoved: 1 });
+
+    // A pooled read inside the transaction needs a second connection while the
+    // first holds row locks, which can exhaust the pool under load.
+    expect(mockDb.query).not.toHaveBeenCalled();
+  });
+
   it('allows movement for non-target player when no_movement_on_player_rail targets a different player', async () => {
     const restrictions: MovementRestriction[] = [
       {
@@ -868,7 +888,7 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
       }),
     ).resolves.toBeDefined();
 
-    expect(mockActiveEffectManager.getMovementRestrictions).toHaveBeenCalledWith(GAME_ID);
+    expect(mockActiveEffectManager.getMovementRestrictions).toHaveBeenCalledWith(GAME_ID, mockClient);
   });
 });
 

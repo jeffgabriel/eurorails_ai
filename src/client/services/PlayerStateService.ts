@@ -333,7 +333,7 @@ export class PlayerStateService {
         ownersPaid: Array<{ playerId: string; amount: number }>;
         updatedMoney: number;
         /** Mileposts the server counted for the move (absent from older servers). */
-        movementCost?: number;
+        milepostsMoved?: number;
     } | null> {
         if (!this.localPlayer) {
             console.error('Cannot move train: no local player');
@@ -385,7 +385,7 @@ export class PlayerStateService {
                 ownersUsed: result.ownersUsed,
                 ownersPaid: result.ownersPaid,
                 updatedMoney: result.updatedMoney,
-                movementCost: typeof result.movementCost === 'number' ? result.movementCost : undefined
+                milepostsMoved: typeof result.milepostsMoved === 'number' ? result.milepostsMoved : undefined
             };
         } catch (error) {
             console.error('Error moving train:', error);

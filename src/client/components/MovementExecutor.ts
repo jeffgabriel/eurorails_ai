@@ -222,7 +222,7 @@ export class MovementExecutor {
       // distance canMoveTo deducted. Use the server's count so the remaining
       // movement shown here matches what the server will allow next.
       const clientDistance = moveResult.distance ?? 0;
-      const serverDistance = moveApiResult.movementCost ?? clientDistance;
+      const serverDistance = moveApiResult.milepostsMoved ?? clientDistance;
 
       // Ensure the movement deduction from canMoveTo is applied to the refreshed object.
       // A move that ends movement (ferry port) already left it at zero.

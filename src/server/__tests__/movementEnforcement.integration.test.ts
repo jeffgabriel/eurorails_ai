@@ -2,6 +2,14 @@
  * #312: server-computed movement cost and speed limit.
  *   - POST /api/players/move-train    (route, milepost count and per-turn limit come from the server)
  *   - POST /api/players/deliver-load  (the train must be in the delivery city)
+ *
+ * Isolation and cleanup (real database, shared with the other integration suites):
+ *   - beforeAll inserts this suite's two users; afterAll deletes them by id.
+ *   - Each test builds its own game with createGame(), which records the game id.
+ *   - afterEach deletes only this suite's games, children first: turn_actions,
+ *     movement_history, player_tracks, players, then games. It also drops the
+ *     in-memory demand decks.
+ *   - Rows are always selected by this suite's ids, never table-wide.
  */
 
 import request from 'supertest';
@@ -202,7 +210,7 @@ describe('Movement enforcement (#312)', () => {
 
       const full = await move(at(9));
       expect(full.status).toBe(200);
-      expect(full.body.movementCost).toBe(9);
+      expect(full.body.milepostsMoved).toBe(9);
       expect(full.body.remainingMovement).toBe(0);
 
       const extra = await move(at(10));
@@ -217,7 +225,7 @@ describe('Movement enforcement (#312)', () => {
       expect((await move(at(13))).status).toBe(400);
       const res = await move(at(12));
       expect(res.status).toBe(200);
-      expect(res.body.movementCost).toBe(12);
+      expect(res.body.milepostsMoved).toBe(12);
       expect(res.body.remainingMovement).toBe(0);
     });
 
@@ -252,7 +260,7 @@ describe('Movement enforcement (#312)', () => {
       expect(await reportedRemainingMovement()).toBe(9);
       const res = await move(at(13));
       expect(res.status).toBe(200);
-      expect(res.body.movementCost).toBe(4);
+      expect(res.body.milepostsMoved).toBe(4);
       expect(await storedCosts(1)).toEqual([9]);
       expect(await storedCosts(2)).toEqual([4]);
     });
@@ -280,13 +288,46 @@ describe('Movement enforcement (#312)', () => {
     });
   });
 
+  describe('database connections', () => {
+    // A pooled read inside the transaction needs a second connection while the first
+    // holds the player and game row locks; under load that can exhaust the pool.
+    // pool.query() checks a connection out through pool.connect(), so one connect()
+    // call means everything ran on the transaction's own client.
+    it('moves a train on a single connection', async () => {
+      await createGame();
+      const connectSpy = jest.spyOn(db, 'connect');
+      try {
+        const result = await PlayerService.moveTrainForUser({ gameId, userId: moverUserId, to: at(3) });
+        expect(result.milepostsMoved).toBe(3);
+        expect(connectSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        connectSpy.mockRestore();
+      }
+    });
+
+    it('checks a delivery on a single connection', async () => {
+      await createGame({ position: cityMilepost('Berlin') });
+      const connectSpy = jest.spyOn(db, 'connect');
+      try {
+        // Card 1 is not in the (empty) hand: the delivery is refused after the
+        // restriction read, before any card is drawn.
+        await expect(
+          PlayerService.deliverLoadForUser(gameId, moverUserId, 'Berlin', 'Coal' as any, 1),
+        ).rejects.toThrow('Demand card not in hand');
+        expect(connectSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        connectSpy.mockRestore();
+      }
+    });
+  });
+
   describe('client movementCost', () => {
     it('ignores a negative movementCost', async () => {
       await createGame();
 
       const first = await move(at(5), { movementCost: -100 });
       expect(first.status).toBe(200);
-      expect(first.body.movementCost).toBe(5);
+      expect(first.body.milepostsMoved).toBe(5);
       expect(await storedCosts()).toEqual([5]);
       expect(await reportedRemainingMovement()).toBe(4);
 
@@ -335,7 +376,7 @@ describe('Movement enforcement (#312)', () => {
       const res = await move(at(5));
 
       expect(res.status).toBe(200);
-      expect(res.body.movementCost).toBe(5);
+      expect(res.body.milepostsMoved).toBe(5);
       expect(res.body.feeTotal).toBe(0);
       expect((await moverRow()).money).toBe(50);
     });
@@ -353,7 +394,7 @@ describe('Movement enforcement (#312)', () => {
       const res = await move(START);
 
       expect(res.status).toBe(200);
-      expect(res.body.movementCost).toBe(4);
+      expect(res.body.milepostsMoved).toBe(4);
       expect(res.body.feeTotal).toBe(4);
       expect(res.body.remainingMovement).toBe(1);
       expect((await moverRow()).money).toBe(46);
@@ -370,7 +411,7 @@ describe('Movement enforcement (#312)', () => {
       const res = await move({ row: 24, col: 53 });
 
       expect(res.status).toBe(200);
-      expect(res.body.movementCost).toBe(0);
+      expect(res.body.milepostsMoved).toBe(0);
       expect(res.body.remainingMovement).toBe(9);
     });
 
@@ -388,7 +429,7 @@ describe('Movement enforcement (#312)', () => {
         to: { row: 2000, col: 2008, x: 0, y: 0 },
       });
 
-      expect(result.movementCost).toBe(9);
+      expect(result.milepostsMoved).toBe(9);
       expect(result.remainingMovement).toBe(0);
       expect((await moverRow()).position_col).toBe(2008);
       await expect(
@@ -408,12 +449,18 @@ describe('Movement enforcement (#312)', () => {
       expect((await moverRow()).position_row).toBeNull();
     });
 
-    it('rejects a first placement on a ferry port, on a point off the map and on the mover\'s own track', async () => {
+    it.each([
+      ['a ferry port', (): Node => firstMilepostWithTerrain(TerrainType.FerryPort)],
+      ['a point off the map', (): Node => ({ row: 5000, col: 5000 })],
+      // Having track there does not make it a city.
+      ['a non-city point on the mover\'s own track', (): Node => at(3)],
+    ])('rejects a first placement on %s as not a city', async (_label, destination) => {
       await createGame({ position: null });
 
-      expect((await move(firstMilepostWithTerrain(TerrainType.FerryPort))).status).toBe(400);
-      expect((await move({ row: 5000, col: 5000 })).status).toBe(400);
-      expect((await move(at(3))).status).toBe(400);
+      const res = await move(destination());
+
+      expect(res.status).toBe(400);
+      expect(res.body.details).toMatch(/must start at a city/);
       expect((await moverRow()).position_row).toBeNull();
     });
 
@@ -437,7 +484,7 @@ describe('Movement enforcement (#312)', () => {
       const res = await move(city);
 
       expect(res.status).toBe(200);
-      expect(res.body.movementCost).toBe(0);
+      expect(res.body.milepostsMoved).toBe(0);
       expect(res.body.remainingMovement).toBe(9);
       const row = await moverRow();
       expect({ row: row.position_row, col: row.position_col }).toEqual(city);

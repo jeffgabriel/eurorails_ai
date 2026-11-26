@@ -1303,7 +1303,7 @@ export class PlayerService {
 
       // ── Event card restriction checks ─────────────────────────────────────
       // Check pickup/delivery restrictions from active event effects (coastal Strike)
-      const deliveryRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId);
+      const deliveryRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId, client);
       if (deliveryRestrictions.length > 0) {
         const cityKey = PlayerService.getCityMilepointKey(city);
         for (const restriction of deliveryRestrictions) {
@@ -1532,8 +1532,8 @@ export class PlayerService {
     updatedPosition: { row: number; col: number; x?: number; y?: number };
     updatedMoney: number;
     cardsDrawnDuringAction: number;
-    /** Mileposts the server counted for this move. */
-    movementCost: number;
+    /** Mileposts the server counted for this move (not the ignored `args.movementCost`). */
+    milepostsMoved: number;
     /** Mileposts left this turn after this move, at the plain train-type limit. */
     remainingMovement: number;
   }> {
@@ -1570,7 +1570,7 @@ export class PlayerService {
 
       // ── Event card restriction checks ─────────────────────────────────────
       // Check movement restrictions from active event effects (Snow, Rail Strike)
-      const movementRestrictions = await activeEffectManager.getMovementRestrictions(gameId);
+      const movementRestrictions = await activeEffectManager.getMovementRestrictions(gameId, client);
       const destKey = `${to.row},${to.col}`;
       const destBlocked = isMovementBlockedAtDest(movementRestrictions, destKey);
       if (destBlocked.blocked) {
@@ -1607,14 +1607,20 @@ export class PlayerService {
         }
       }
 
+      // This turn's movement history, read once: the reversal check, the movement
+      // budget and the append below all use it. It is the server's record of movement
+      // used; the player row is locked, so a concurrent move or undo cannot change it.
+      const turnHistoryResult = await client.query(
+        `SELECT movement_path FROM movement_history
+         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
+        [playerId, gameId, turnNumber]
+      );
+      const hasTurnHistoryRow: boolean = turnHistoryResult.rows.length > 0;
+      const turnMovementPath: unknown = turnHistoryResult.rows[0]?.movement_path;
+
       // Reversal validation: trains may only reverse direction at a city or ferry port.
       if (from && (from.row !== to.row || from.col !== to.col)) {
-        const moveHistoryResult = await client.query(
-          `SELECT movement_path FROM movement_history
-           WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
-          [playerId, gameId, turnNumber]
-        );
-        const movePath = moveHistoryResult.rows[0]?.movement_path;
+        const movePath = turnMovementPath;
         if (Array.isArray(movePath) && movePath.length > 0) {
           const lastSeg = movePath[movePath.length - 1];
           if (lastSeg?.from && lastSeg?.to) {
@@ -1668,18 +1674,12 @@ export class PlayerService {
         );
       }
 
-      // Movement left this turn. The turn's movement_history row is the server's
-      // record; the player row is locked, so a concurrent move cannot race this read.
+      // Movement left this turn, from the turn's movement history read above.
       // #313 passes its allowance modifiers (half rate) to getTurnMovementAllowance.
-      const usedHistoryResult = await client.query(
-        `SELECT movement_path FROM movement_history
-         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
-        [playerId, gameId, turnNumber]
-      );
       const movementAllowance = getTurnMovementAllowance(
         PlayerService.normalizeTrainType(playerRow.trainType),
       );
-      const movementUsedBefore = sumMovementUsed(usedHistoryResult.rows[0]?.movement_path);
+      const movementUsedBefore = sumMovementUsed(turnMovementPath);
       const movementLeftBefore = Math.max(0, movementAllowance - movementUsedBefore);
 
       // Compute the route, its milepost count and the owners used for this move.
@@ -1688,7 +1688,9 @@ export class PlayerService {
       let usesOwnTrack = false;
       let mileposts = 0;
       if (from && (from.row !== to.row || from.col !== to.col)) {
-        const allTracks = await TrackService.getAllTracks(gameId);
+        // Read on the transaction client: a pooled read here would need a second
+        // connection while this one holds the player and game row locks.
+        const allTracks = await TrackService.getAllTracks(gameId, client);
         const movePath = findMovePathWithinBudget({
           allTracks,
           from: { row: from.row, col: from.col },
@@ -1807,16 +1809,9 @@ export class PlayerService {
         cost: mileposts,
       };
 
-      // Check if movement_history exists for this turn
-      const existingHistory = await client.query(
-        `SELECT movement_path FROM movement_history
-         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
-        [playerId, gameId, turnNumber]
-      );
-
-      if (existingHistory.rows.length > 0) {
+      if (hasTurnHistoryRow) {
         // Append to existing movement path
-        const existingPath = existingHistory.rows[0].movement_path || [];
+        const existingPath = Array.isArray(turnMovementPath) ? turnMovementPath : [];
         const updatedPath = [...existingPath, movementSegment];
         await client.query(
           `UPDATE movement_history
@@ -1845,7 +1840,7 @@ export class PlayerService {
         updatedMoney: currentMoney - feeTotal,
         // Movement never draws cards directly
         cardsDrawnDuringAction: 0,
-        movementCost: mileposts,
+        milepostsMoved: mileposts,
         remainingMovement: movementLeftBefore - mileposts,
       };
     } catch (err) {
