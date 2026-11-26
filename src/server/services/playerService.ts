@@ -1535,6 +1535,10 @@ export class PlayerService {
    * Fee rule:
    * - ECU 4M per distinct opponent whose track is used at any point in the turn.
    * - We therefore charge only for opponents that have NOT already been paid earlier in the same turn.
+   * - A move never owes a fee the player was not shown. The client's fee prompt previews
+   *   `computeTrackUsageForMove(from, to)`; the server computes the same owner set and only
+   *   takes a route over track of those opponents or of opponents already paid this turn.
+   *   If no such route fits in the movement left, the move is refused and nothing is charged.
    */
   static async moveTrainForUser(args: {
     gameId: string;
@@ -1709,24 +1713,32 @@ export class PlayerService {
         // Read on the transaction client: a pooled read here would need a second
         // connection while this one holds the player and game row locks.
         const allTracks = await TrackService.getAllTracks(gameId, client);
+        // The fee preview: the same call the client's fee prompt makes for this move
+        // (MovementExecutor), with no movement limit. Also tells "no track connection"
+        // apart from "too far for this turn".
+        const previewUsage = computeTrackUsageForMove({
+          allTracks,
+          from: { row: from.row, col: from.col },
+          to: { row: to.row, col: to.col },
+          currentPlayerId: playerId,
+        });
+        if (!previewUsage.isValid) {
+          throw new Error(previewUsage.errorMessage || "Invalid move");
+        }
+        // The route may only run on track of opponents the preview shows, or of
+        // opponents already paid this turn (no new fee). A shorter route over any
+        // other opponent's track would charge a fee the player never saw, so it is
+        // not taken: the move is refused as too far instead.
+        const allowedOpponentIds = new Set<string>([...previewUsage.ownersUsed, ...alreadyPaid]);
         const movePath = findMovePathWithinBudget({
           allTracks,
           from: { row: from.row, col: from.col },
           to: { row: to.row, col: to.col },
           currentPlayerId: playerId,
           maxMileposts: movementLeftBefore,
+          allowedOpponentIds,
         });
         if (!movePath) {
-          // Tell "no track connection" apart from "too far for this turn".
-          const usage = computeTrackUsageForMove({
-            allTracks,
-            from: { row: from.row, col: from.col },
-            to: { row: to.row, col: to.col },
-            currentPlayerId: playerId,
-          });
-          if (!usage.isValid) {
-            throw new Error(usage.errorMessage || "Invalid move");
-          }
           throw new MovementRuleError(
             MovementRuleErrorCode.MovementExceeded,
             `Invalid move: the destination is beyond the ${movementLeftBefore} of ${movementAllowance} mileposts left this turn`,

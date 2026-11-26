@@ -188,6 +188,38 @@ describe('findMovePathWithinBudget', () => {
       expect(Array.from(result?.ownersUsed ?? [])).toEqual([OPPONENT]);
     });
 
+    it('does not use the shortcut when its owner is not an allowed opponent', () => {
+      const args = { allTracks, from: a, to: b, currentPlayerId: ME, maxMileposts: 3 };
+      expect(findMovePathWithinBudget({ ...args, allowedOpponentIds: new Set<string>() })).toBeNull();
+      expect(findMovePathWithinBudget({ ...args, allowedOpponentIds: new Set(['someone-else']) })).toBeNull();
+    });
+
+    it('uses the shortcut when its owner is an allowed opponent', () => {
+      const result = findMovePathWithinBudget({
+        allTracks,
+        from: a,
+        to: b,
+        currentPlayerId: ME,
+        maxMileposts: 3,
+        allowedOpponentIds: new Set([OPPONENT]),
+      });
+      expect(result?.mileposts).toBe(1);
+      expect(Array.from(result?.ownersUsed ?? [])).toEqual([OPPONENT]);
+    });
+
+    it('still uses own track when no opponent is allowed', () => {
+      const result = findMovePathWithinBudget({
+        allTracks,
+        from: a,
+        to: b,
+        currentPlayerId: ME,
+        maxMileposts: 9,
+        allowedOpponentIds: new Set<string>(),
+      });
+      expect(result?.mileposts).toBe(5);
+      expect(result?.ownersUsed.size).toBe(0);
+    });
+
     it('charges the mileposts of the route it returns, never a mix of the two', () => {
       for (let budget = 0; budget <= 12; budget++) {
         const result = findMovePathWithinBudget({ allTracks, from: a, to: b, currentPlayerId: ME, maxMileposts: budget });

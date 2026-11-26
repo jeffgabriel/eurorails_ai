@@ -145,6 +145,12 @@ function edgeKeyOf(aKey: string, bKey: string): string {
  * and a shorter route over opponent track only when the own route does not
  * fit. The path that is counted is the path that is charged for.
  *
+ * `allowedOpponentIds`, when given, limits whose track the route may run on:
+ * an edge with an owner who is neither the current player nor in the set is
+ * not used at all. `moveTrainForUser` passes the opponents the client's fee
+ * preview shows plus those already paid this turn, so a move never owes a fee
+ * the player was not shown.
+ *
  * Milepost counting matches the client and the bots
  * (`computeEffectivePathLength`): an edge inside one major city's red area is
  * free, every other track edge is one milepost.
@@ -154,7 +160,7 @@ function edgeKeyOf(aKey: string, bKey: string): string {
  * crossing itself must not use up movement, because a bot's first move after
  * reaching a port starts from the port it arrived at.
  *
- * @returns the path, or null when no route fits in `maxMileposts`.
+ * @returns the path, or null when no allowed route fits in `maxMileposts`.
  */
 export function findMovePathWithinBudget(args: {
   allTracks: PlayerTrackState[];
@@ -162,6 +168,7 @@ export function findMovePathWithinBudget(args: {
   to: { row: number; col: number };
   currentPlayerId: string;
   maxMileposts: number;
+  allowedOpponentIds?: ReadonlySet<string>;
 }): MovePath | null {
   const budget = Math.max(0, Math.floor(args.maxMileposts));
   const startKey = nodeKey(args.from);
@@ -218,6 +225,13 @@ export function findMovePathWithinBudget(args: {
         if (nextBest !== undefined && nextBest <= nextMileposts) continue;
 
         const owners = edgeOwners.get(eKey);
+        if (owners !== undefined && args.allowedOpponentIds !== undefined) {
+          const allowed = args.allowedOpponentIds;
+          const hasUnshownOwner = Array.from(owners).some(
+            (ownerId) => ownerId !== args.currentPlayerId && !allowed.has(ownerId),
+          );
+          if (hasUnshownOwner) continue;
+        }
         const isOpponentOnly =
           owners !== undefined && owners.size > 0 && !owners.has(args.currentPlayerId);
         const next: SearchState = { nodeKey: nextKey, mileposts: nextMileposts };
