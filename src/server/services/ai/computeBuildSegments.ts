@@ -21,6 +21,13 @@ import {
 } from '../MapTopology';
 import { getMajorCityLookup, getMajorCityGroups, getFerryEdges, isIntraCityEdge } from '../../../shared/services/majorCityGroups';
 import { getWaterCrossingExtraCost } from '../../../shared/config/waterCrossings';
+import {
+  computeSegmentBuildCost,
+  createBuilderTrackIndex,
+  FerryChargeMode,
+  SegmentCostContext,
+  SegmentCostFerry,
+} from '../../../shared/services/trackBuildCost';
 
 /** Cost multiplier applied to edges near existing track to discourage parallel building. */
 const PARALLEL_COST_MULTIPLIER = 2;
@@ -131,13 +138,13 @@ function extractTrackEndpoints(segments: TrackSegment[]): GridCoord[] {
 
 /**
  * Build a TrackSegment between two grid positions, populating pixel
- * coordinates and cost from the terrain of the destination.
+ * coordinates and the build cost from the shared track-cost module.
  */
 function buildSegment(
   fromCoord: GridCoord,
   toCoord: GridCoord,
   grid: Map<string, GridPointData>,
-  ferryPortCosts: Map<string, number>,
+  costContext: SegmentCostContext<GridPointData>,
 ): TrackSegment | null {
   const fromData = grid.get(makeKey(fromCoord.row, fromCoord.col));
   const toData = grid.get(makeKey(toCoord.row, toCoord.col));
@@ -145,9 +152,6 @@ function buildSegment(
 
   const fromPixel = gridToPixel(fromCoord.row, fromCoord.col);
   const toPixel = gridToPixel(toCoord.row, toCoord.col);
-
-  // Ferry ports use their connection cost (4–16M) instead of terrain cost
-  const baseCost = ferryPortCosts.get(makeKey(toCoord.row, toCoord.col)) ?? getTerrainCost(toData.terrain);
 
   return {
     from: {
@@ -164,7 +168,7 @@ function buildSegment(
       col: toCoord.col,
       terrain: toData.terrain,
     },
-    cost: baseCost + getWaterCrossingExtraCost(fromCoord, toCoord),
+    cost: computeSegmentBuildCost(fromData, toData, costContext),
   };
 }
 
@@ -237,11 +241,28 @@ export function computeBuildSegments(
   // Per game rules, building TO a ferry port costs the ferry connection cost,
   // not the base terrain cost (which getTerrainCost incorrectly returns as 1).
   const ferryPortCosts = new Map<string, number>();
+  const ferryByPortKey = new Map<string, SegmentCostFerry>();
   const ferryEdges = getFerryEdges();
   for (const ferry of ferryEdges) {
-    ferryPortCosts.set(makeKey(ferry.pointA.row, ferry.pointA.col), ferry.cost);
-    ferryPortCosts.set(makeKey(ferry.pointB.row, ferry.pointB.col), ferry.cost);
+    const costFerry: SegmentCostFerry = { cost: ferry.cost, ports: [ferry.pointA, ferry.pointB] };
+    for (const port of costFerry.ports) {
+      const portKey = makeKey(port.row, port.col);
+      ferryPortCosts.set(portKey, ferry.cost);
+      ferryByPortKey.set(portKey, costFerry);
+    }
   }
+
+  // Inputs for the shared segment-cost function (cost assigned to built segments).
+  // Bots charge the ferry cost on every segment that ends on a ferry port; the
+  // client only charges a player's first connection to a ferry line. That
+  // difference predates the shared module and is kept explicit here.
+  const costContext: SegmentCostContext<GridPointData> = {
+    isMajorCityPoint: (point: GridPointData): boolean => majorCityLookup.has(makeKey(point.row, point.col)),
+    getFerryAt: (point: GridPointData): SegmentCostFerry | undefined =>
+      ferryByPortKey.get(makeKey(point.row, point.col)),
+    hasBuilderTrackAt: createBuilderTrackIndex([...existingSegments, ...(knownSegments ?? [])]),
+    ferryChargeMode: FerryChargeMode.EveryConnection,
+  };
 
   // Ferry adjacency: when Dijkstra reaches a ferry port, it can cross to the
   // partner port for free (the cost to build TO the port was already paid;
@@ -624,7 +645,7 @@ export function computeBuildSegments(
   // Extract up to maxSegments new segments from the path.
   // For targeted builds with a direct path, pick the first valid run (start of optimal route).
   const pickFirstRun = hasTargets && earlyTermPath !== null;
-  return extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts, ferryEdgeKeys, validColdStartKeys, majorCityLookup, pickFirstRun);
+  return extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, costContext, ferryEdgeKeys, validColdStartKeys, majorCityLookup, pickFirstRun);
 }
 
 /**
@@ -670,7 +691,7 @@ function extractSegments(
   grid: Map<string, GridPointData>,
   budget: number,
   maxSegments: number,
-  ferryPortCosts: Map<string, number>,
+  costContext: SegmentCostContext<GridPointData>,
   ferryEdgeKeys: Set<string>,
   validColdStartKeys: Set<string>,
   majorCityLookup: Map<string, string>,
@@ -700,7 +721,7 @@ function extractSegments(
       continue;
     }
 
-    const seg = buildSegment(path[i], path[i + 1], grid, ferryPortCosts);
+    const seg = buildSegment(path[i], path[i + 1], grid, costContext);
     if (!seg) {
       // Can't build this segment — finalize current run
       if (currentRun.length > 0 && runStartKey !== null) {
