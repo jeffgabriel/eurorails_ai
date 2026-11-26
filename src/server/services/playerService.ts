@@ -887,7 +887,7 @@ export class PlayerService {
    *
    * @returns the amount charged and the player's money afterwards.
    */
-  private static async settleTurnBuildCost(
+  static async settleTurnBuildCost(
     client: PoolClient,
     gameId: string,
     playerId: string,

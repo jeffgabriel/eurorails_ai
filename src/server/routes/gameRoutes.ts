@@ -1,6 +1,7 @@
 import express from 'express';
 import { GameService } from '../services/gameService';
-import { VictoryService, MajorCityCoordinate } from '../services/victoryService';
+import { VictoryService, VictoryNotFinalTurnError } from '../services/victoryService';
+import { TurnGuardError } from '../services/turnGuard';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { requireGameMembership } from '../middleware/gameMembership';
 import { db } from '../db';
@@ -206,14 +207,13 @@ router.post('/:gameId/end', authenticateToken, async (req, res) => {
     }
 });
 
-// Declare victory - called when a player believes they've met win conditions
+// Declare victory - called when a player believes they've met win conditions.
+// The server identifies the player from the session and checks eligibility
+// against persisted money and track; any `playerId` or `connectedCities` in the
+// body is ignored.
 router.post('/:gameId/declare-victory', authenticateToken, async (req, res) => {
     try {
         const { gameId } = req.params;
-        const { playerId, connectedCities } = req.body as {
-            playerId: string;
-            connectedCities: MajorCityCoordinate[];
-        };
         const userId = req.user?.id;
 
         if (!userId) {
@@ -223,37 +223,14 @@ router.post('/:gameId/declare-victory', authenticateToken, async (req, res) => {
             });
         }
 
-        if (!playerId || !connectedCities || !Array.isArray(connectedCities)) {
-            return res.status(400).json({
-                error: 'VALIDATION_ERROR',
-                details: 'Player ID and connected cities array are required'
-            });
-        }
-
-        // Validate player belongs to user
-        const playerCheck = await db.query(
-            'SELECT id, name, user_id FROM players WHERE id = $1 AND game_id = $2',
-            [playerId, gameId]
-        );
-
-        if (playerCheck.rows.length === 0) {
+        if (!isUuid(gameId)) {
             return res.status(404).json({
-                error: 'NOT_FOUND',
-                details: 'Player not found in game'
+                error: 'Not found',
+                details: 'Game not found'
             });
         }
 
-        if (playerCheck.rows[0].user_id !== userId) {
-            return res.status(403).json({
-                error: 'FORBIDDEN',
-                details: 'Cannot declare victory for another player'
-            });
-        }
-
-        const playerName = playerCheck.rows[0].name;
-
-        // Attempt to declare victory
-        const result = await VictoryService.declareVictory(gameId, playerId, connectedCities);
+        const result = await VictoryService.declareVictoryForUser(gameId, userId);
 
         if (!result.success) {
             return res.status(400).json({
@@ -267,7 +244,7 @@ router.post('/:gameId/declare-victory', authenticateToken, async (req, res) => {
             emitVictoryTriggered(
                 gameId,
                 result.victoryState.triggerPlayerIndex,
-                playerName,
+                result.playerName ?? '',
                 result.victoryState.finalTurnPlayerIndex,
                 result.victoryState.victoryThreshold
             );
@@ -278,15 +255,19 @@ router.post('/:gameId/declare-victory', authenticateToken, async (req, res) => {
             victoryState: result.victoryState
         });
     } catch (error: any) {
+        if (error instanceof TurnGuardError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
         console.error('Error in /:gameId/declare-victory route:', error);
         return res.status(500).json({
             error: 'SERVER_ERROR',
-            details: error.message || 'An unexpected error occurred'
+            details: 'Failed to declare victory'
         });
     }
 });
 
-// Resolve victory - called after final turn to determine winner
+// Resolve victory - called by the final-turn player's client as their turn ends.
+// Only that player may resolve, and only during that turn.
 router.post('/:gameId/resolve-victory', authenticateToken, async (req, res) => {
     try {
         const { gameId } = req.params;
@@ -299,16 +280,14 @@ router.post('/:gameId/resolve-victory', authenticateToken, async (req, res) => {
             });
         }
 
-        // Check if this is actually the final turn
-        const isFinal = await VictoryService.isFinalTurn(gameId);
-        if (!isFinal) {
-            return res.status(400).json({
-                error: 'NOT_FINAL_TURN',
-                details: 'Victory can only be resolved after the final turn'
+        if (!isUuid(gameId)) {
+            return res.status(404).json({
+                error: 'Not found',
+                details: 'Game not found'
             });
         }
 
-        const result = await VictoryService.resolveVictory(gameId);
+        const result = await VictoryService.resolveVictoryForUser(gameId, userId);
 
         if (result.gameOver && result.winnerId && result.winnerName) {
             emitGameOver(gameId, result.winnerId, result.winnerName);
@@ -325,10 +304,19 @@ router.post('/:gameId/resolve-victory', authenticateToken, async (req, res) => {
 
         return res.status(200).json(result);
     } catch (error: any) {
+        if (error instanceof TurnGuardError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+        if (error instanceof VictoryNotFinalTurnError) {
+            return res.status(400).json({
+                error: 'NOT_FINAL_TURN',
+                details: error.message
+            });
+        }
         console.error('Error in /:gameId/resolve-victory route:', error);
         return res.status(500).json({
             error: 'SERVER_ERROR',
-            details: error.message || 'An unexpected error occurred'
+            details: 'Failed to resolve victory'
         });
     }
 });
