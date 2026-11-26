@@ -1,6 +1,9 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { TrackService } from '../services/trackService';
-import { getSocketIO } from '../services/socketService';
+import { ActionRestrictionError, PlayerService } from '../services/playerService';
+import { parseBuildPath, TrackBuildError } from '../services/trackBuild';
+import { TurnGuardError } from '../services/turnGuard';
+import { emitStatePatch, getSocketIO } from '../services/socketService';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { requireGameMembership } from '../middleware/gameMembership';
 import { db } from '../db';
@@ -68,6 +71,95 @@ router.post('/save', async (req, res) => {
             error: 'Server error',
             details: error.message || 'An unexpected error occurred'
         });
+    }
+});
+
+/** Tell the game's clients to reload track; best-effort, after the commit. */
+function emitTrackUpdated(gameId: string, playerId: string): void {
+    const io = getSocketIO();
+    if (io) {
+        io.to(gameId).emit('track:updated', { gameId, playerId, timestamp: Date.now() });
+    }
+}
+
+/** Map the errors the validated build/undo services throw to HTTP responses. */
+function sendTrackActionError(res: Response, route: string, error: unknown): Response {
+    if (error instanceof TurnGuardError || error instanceof TrackBuildError) {
+        return res.status(error.httpStatus).json(error.toResponseBody());
+    }
+    if (error instanceof ActionRestrictionError) {
+        return res.status(409).json({ error: 'Conflict', code: error.code, details: error.message });
+    }
+    console.error(`Error in ${route} route:`, error);
+    return res.status(500).json({
+        error: 'Server error',
+        details: error instanceof Error ? error.message : 'An unexpected error occurred'
+    });
+}
+
+/**
+ * Read the game id of a build/undo request, answering 401/400 itself when the
+ * request cannot proceed. The acting player always comes from the session.
+ */
+function readTrackActionRequest(req: Request, res: Response): { gameId: string; userId: string } | null {
+    const userId = req.user?.id;
+    if (!userId) {
+        res.status(401).json({ error: 'UNAUTHORIZED', details: 'Authentication required' });
+        return null;
+    }
+    const { gameId } = req.body as { gameId?: unknown };
+    if (typeof gameId !== 'string' || !isUuid(gameId)) {
+        res.status(400).json({ error: 'Validation error', details: 'A valid gameId is required' });
+        return null;
+    }
+    return { gameId, userId };
+}
+
+// Build track along a path of mileposts (authenticated, server-authoritative, #308).
+// Body: { gameId, path: [{ row, col }, ...] }. The server validates every
+// section, computes its cost, and stores it; the cost is charged at settlement.
+router.post('/build', authenticateToken, async (req: Request, res: Response) => {
+    const request = readTrackActionRequest(req, res);
+    if (!request) return res;
+    try {
+        const path = parseBuildPath((req.body as { path?: unknown }).path);
+        const result = await PlayerService.buildTrackForUser(request.gameId, request.userId, path);
+        emitTrackUpdated(request.gameId, result.playerId);
+        return res.status(200).json({
+            segments: result.segments,
+            cost: result.cost,
+            turnBuildCost: result.turnBuildCost,
+            money: result.money,
+        });
+    } catch (error: unknown) {
+        return sendTrackActionError(res, '/build', error);
+    }
+});
+
+// Undo the last track section built this turn (authenticated, server-authoritative, #308).
+// Body: { gameId }.
+router.post('/undo-segment', authenticateToken, async (req: Request, res: Response) => {
+    const request = readTrackActionRequest(req, res);
+    if (!request) return res;
+    try {
+        const result = await PlayerService.undoTrackSegmentForUser(request.gameId, request.userId);
+        emitTrackUpdated(request.gameId, result.playerId);
+        try {
+            // Money only changes when the section had already been settled.
+            await emitStatePatch(request.gameId, {
+                players: [{ id: result.playerId, money: result.money }],
+            } as any);
+        } catch (emitError) {
+            console.error('Post-commit emit failed in /undo-segment (track was removed):', emitError);
+        }
+        return res.status(200).json({
+            removedSegment: result.removedSegment,
+            refunded: result.refunded,
+            turnBuildCost: result.turnBuildCost,
+            money: result.money,
+        });
+    } catch (error: unknown) {
+        return sendTrackActionError(res, '/undo-segment', error);
     }
 });
 

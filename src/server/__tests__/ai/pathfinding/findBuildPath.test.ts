@@ -68,6 +68,19 @@ jest.mock('../../../../../configuration/waterCrossings.json', () => ({
   nonRiverWaterEdges: [],
 }), { virtual: true });
 
+// Segment costs come from the shared cost module (#308), which reads water
+// crossings from shared config; route it to the same mock the Dijkstra uses.
+jest.mock('../../../../shared/config/waterCrossings', () => ({
+  getWaterCrossingExtraCost: jest.fn(
+    (from: { row: number; col: number }, to: { row: number; col: number }): number => {
+      const topology = jest.requireMock('../../../services/MapTopology') as {
+        getWaterCrossingCost: (fromRow: number, fromCol: number, toRow: number, toCol: number) => number;
+      };
+      return topology.getWaterCrossingCost(from.row, from.col, to.row, to.col);
+    },
+  ),
+}));
+
 // computeBuildSegments mock for isNearExistingTrack
 jest.mock('../../../services/ai/computeBuildSegments', () => ({
   isNearExistingTrack: jest.fn((row: number, col: number, existingTrackIndex: Set<string>) => {

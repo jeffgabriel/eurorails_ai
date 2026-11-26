@@ -34,6 +34,17 @@ import {
   isCityMilepostOf,
   sumMovementUsed,
 } from "./trainMovement";
+import {
+  buildActionsOf,
+  pathToBuildEdges,
+  planTrackBuild,
+  PlannedTrackSegment,
+  TrackBuildEdge,
+  TrackBuildError,
+  TrackBuildErrorCode,
+  TurnActionBuild,
+} from "./trackBuild";
+import { TrackCostCoord } from "../../shared/services/trackBuildCost";
 import { InitialBuildService } from "./InitialBuildService";
 import {
   appendTurnAction,
@@ -52,6 +63,9 @@ import {
  * train purchase, discard hand, borrow and restart.
  */
 const MERCY_ACTION_STATUSES: readonly GameStatus[] = ["initialBuild", "active"];
+
+/** Statuses in which track may be built: the opening build turns and normal play. */
+const TRACK_BUILD_STATUSES: readonly GameStatus[] = ["initialBuild", "active"];
 
 // ── Event-card restriction errors ────────────────────────────────
 
@@ -2483,8 +2497,10 @@ export class PlayerService {
       const currentLoads: unknown = playerRow.loads;
       const currentLoadCount = Array.isArray(currentLoads) ? currentLoads.length : 0;
 
-      // Track spend this turn (server-side)
-      const trackState = await TrackService.getTrackState(gameId, playerId);
+      // Track spend this turn (server-side). Read on the transaction's client:
+      // a pooled read here would need a second connection while this one
+      // holds the player row lock.
+      const trackState = await TrackService.getTrackState(gameId, playerId, client);
       const turnBuildCost = trackState?.turnBuildCost ?? 0;
 
       // Validate target train type
@@ -2830,111 +2846,392 @@ export class PlayerService {
   }
 
   /**
-   * Build track for a player. Atomically UPSERTs player_tracks and deducts cost
-   * from the player's money. Validates sufficient funds before deducting.
-   * Used by both human players and bots.
+   * Validate, price and store new track inside the caller's transaction
+   * (issue #308). The one write path for track built through the server:
+   * `buildTrackForUser` (humans) and `buildTrackForPlayer` (bots) both end here.
+   *
+   * Nothing about the board is taken from the caller: the builder's and every
+   * other player's track are read (and locked) here, each section's cost is
+   * recomputed, and the rules in `planTrackBuild` are applied. The event-card
+   * build restrictions are read on `client`, never through the pool, because
+   * the caller already holds row locks.
+   *
+   * Logs one `build` entry per section in `turn_actions`, and charges in one
+   * of two ways, never both:
+   * - `chargeNow: false` (humans): the cost is added to
+   *   `player_tracks.turn_build_cost`, the spend not yet taken from `money`;
+   *   `settleTurnBuildCost` charges it later.
+   * - `chargeNow: true` (bots): the cost is taken from `money` here and
+   *   `turn_build_cost` is left alone, so no later settlement can charge it.
+   *
+   * The caller must hold the player's row FOR UPDATE.
+   *
+   * @throws TrackBuildError when a build rule is broken.
+   * @throws ActionRestrictionError when an active event card forbids the build.
+   */
+  private static async applyTrackBuild(
+    client: PoolClient,
+    args: {
+      gameId: string;
+      playerId: string;
+      money: number;
+      turnNumber: number;
+      chargeNow: boolean;
+      /** Turns the builder's stored track into the sections to build. */
+      edgesFor: (ownSegments: readonly TrackSegment[]) => TrackBuildEdge[];
+    },
+  ): Promise<{ segments: TrackSegment[]; cost: number; turnBuildCost: number; money: number }> {
+    const { gameId, playerId, turnNumber } = args;
+    let money = args.money;
+
+    // Every player's track in the game, locked so right of way cannot be raced.
+    const trackRows = await client.query(
+      `SELECT player_id, segments, turn_build_cost,
+              COALESCE(pending_flood_rebuilds, '[]'::jsonb) AS pending_flood_rebuilds
+       FROM player_tracks
+       WHERE game_id = $1
+       ORDER BY player_id
+       FOR UPDATE`,
+      [gameId],
+    );
+    let ownSegments: TrackSegment[] = [];
+    let unsettledCost = 0;
+    let pendingFloodRebuilds: TrackSegment[] = [];
+    const otherPlayersSegments: TrackSegment[] = [];
+    for (const row of trackRows.rows) {
+      const segments = PlayerService.parseTrackSegments(row.segments);
+      if (row.player_id === playerId) {
+        ownSegments = segments;
+        unsettledCost = Number(row.turn_build_cost ?? 0);
+        pendingFloodRebuilds = PlayerService.parseTrackSegments(row.pending_flood_rebuilds);
+      } else {
+        otherPlayersSegments.push(...segments);
+      }
+    }
+
+    const actionsRow = await client.query(
+      `SELECT actions
+       FROM turn_actions
+       WHERE player_id = $1 AND game_id = $2 AND turn_number = $3
+       FOR UPDATE`,
+      [playerId, gameId, turnNumber],
+    );
+    const buildsThisTurn = buildActionsOf(actionsRow.rows[0]?.actions);
+    const loggedSpend = buildsThisTurn.reduce(
+      (sum: number, action: TurnActionBuild): number => sum + action.segment.cost,
+      0,
+    );
+
+    const plan = planTrackBuild({
+      edges: args.edgesFor(ownSegments),
+      ownSegments,
+      otherPlayersSegments,
+      money,
+      // The action log survives a mid-turn settlement (which zeroes
+      // turn_build_cost); turn_build_cost also counts track saved through the
+      // legacy /tracks/save route. The larger of the two is this turn's spend.
+      turnSpent: Math.max(unsettledCost, loggedSpend),
+      unsettledCost,
+      majorCityStartsThisTurn: buildsThisTurn.flatMap(
+        (action: TurnActionBuild): string[] => (action.majorCityStart ? [action.majorCityStart] : []),
+      ),
+    });
+    const newSegments = plan.segments.map((planned: PlannedTrackSegment): TrackSegment => planned.segment);
+
+    // ── Event card restriction checks ─────────────────────────────────────
+    // Build restrictions from active event effects (Snow blocked_terrain, Rail Strike)
+    const buildRestrictions = await activeEffectManager.getBuildRestrictions(gameId, client);
+    for (const seg of newSegments) {
+      const segDestKey = `${seg.to.row},${seg.to.col}`;
+      const buildBlockResult = isBuildBlockedAtMilepost(buildRestrictions, segDestKey, playerId);
+      if (buildBlockResult.blocked) {
+        console.warn(
+          `[PlayerService] Build rejected by event restriction: reason=${buildBlockResult.reason} gameId=${gameId} playerId=${playerId} destKey=${segDestKey}`,
+        );
+        const errorCode: ActionRestrictionErrorCode =
+          buildBlockResult.reason === 'blocked_terrain' ? 'SNOW_BLOCKED_TERRAIN' : 'BUILD_BLOCKED';
+        const message =
+          buildBlockResult.reason === 'blocked_terrain'
+            ? `Build blocked by active event (Snow): destination milepost ${segDestKey} is in the blocked terrain zone`
+            : `Build blocked by active event (Rail Strike): player ${playerId} cannot build track this turn`;
+        throw new ActionRestrictionError(errorCode, message);
+      }
+    }
+
+    // Active Flood effects block rebuilding across the flooded river
+    // (Product Decision 2: Flood does NOT emit a BuildRestriction — we check floodedRiver directly)
+    const activeEffects = await activeEffectManager.getActiveEffects(gameId, client);
+    for (const seg of newSegments) {
+      const floodResult = isFloodRebuildBlocked(activeEffects, seg);
+      if (floodResult.blocked) {
+        console.warn(
+          `[PlayerService] Build rejected by event restriction: type=flood_rebuild gameId=${gameId} playerId=${playerId} river=${floodResult.river}`,
+        );
+        throw new ActionRestrictionError(
+          'FLOOD_BRIDGE_REBUILD_BLOCKED',
+          `Build blocked: cannot rebuild track across the ${floodResult.river} river while Flood event is active`,
+        );
+      }
+    }
+    // ── End restriction checks ────────────────────────────────────────────
+
+    // Bridges rebuilt here no longer need rebuilding.
+    const updatedPendingRebuilds = pendingFloodRebuilds.filter(
+      (pending: TrackSegment): boolean =>
+        !newSegments.some((built: TrackSegment): boolean => areSegmentsEqual(pending, built)),
+    );
+
+    const allSegments = [...ownSegments, ...newSegments];
+    const totalCost = allSegments.reduce((sum: number, seg: TrackSegment): number => sum + seg.cost, 0);
+    const turnBuildCost = args.chargeNow ? unsettledCost : unsettledCost + plan.cost;
+    await client.query(
+      `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp, pending_flood_rebuilds)
+       VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+       ON CONFLICT (game_id, player_id)
+       DO UPDATE SET segments = $3, total_cost = $4, turn_build_cost = $5, last_build_timestamp = NOW(), pending_flood_rebuilds = $6`,
+      [gameId, playerId, JSON.stringify(allSegments), totalCost, turnBuildCost, JSON.stringify(updatedPendingRebuilds)],
+    );
+
+    const buildActions: TurnActionBuild[] = plan.segments.map(
+      (planned: PlannedTrackSegment): TurnActionBuild => ({ kind: "build", ...planned }),
+    );
+    await client.query(
+      `INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
+       VALUES ($1, $2, $3, $4::jsonb)
+       ON CONFLICT (player_id, game_id, turn_number)
+       DO UPDATE SET actions = turn_actions.actions || $4::jsonb, updated_at = CURRENT_TIMESTAMP`,
+      [playerId, gameId, turnNumber, JSON.stringify(buildActions)],
+    );
+
+    if (args.chargeNow) {
+      const moneyResult = await client.query(
+        `UPDATE players SET money = money - $1 WHERE id = $2 RETURNING money`,
+        [plan.cost, playerId],
+      );
+      money = Number(moneyResult.rows[0]?.money);
+    }
+
+    return { segments: newSegments, cost: plan.cost, turnBuildCost, money };
+  }
+
+  /** `player_tracks` JSONB comes back parsed; older rows and test setups may hold a string. */
+  private static parseTrackSegments(raw: unknown): TrackSegment[] {
+    const parsed: unknown = typeof raw === "string" ? JSON.parse(raw || "[]") : raw;
+    return Array.isArray(parsed) ? (parsed as TrackSegment[]) : [];
+  }
+
+  /**
+   * Build track for a bot (server-internal; humans use `buildTrackForUser`).
+   *
+   * Goes through the same validation as a human build (`applyTrackBuild`):
+   * only the endpoints of `newSegments` are used. Their `cost` fields are
+   * ignored and recomputed, and the bot's existing track is read from the
+   * database rather than taken from the caller.
+   *
+   * Bots are charged in the same transaction, for exactly the validated cost;
+   * they never carry unsettled spend in `turn_build_cost`, so the end-of-turn
+   * settlement that charges humans has nothing to charge them.
+   *
+   * @returns the bot's money after the charge, the cost charged, and the
+   *   sections as stored (with server-computed costs).
+   * @throws TrackBuildError when a build rule is broken.
+   * @throws ActionRestrictionError when an active event card forbids the build.
    */
   static async buildTrackForPlayer(
     gameId: string,
     playerId: string,
     newSegments: TrackSegment[],
-    existingSegments: TrackSegment[],
-    cost: number,
-  ): Promise<{ remainingMoney: number; cardsDrawnDuringAction: number }> {
-    const allSegments = [...existingSegments, ...newSegments];
-    const totalCost = allSegments.reduce((s, seg) => s + seg.cost, 0);
-
+  ): Promise<{ remainingMoney: number; cardsDrawnDuringAction: number; cost: number; segments: TrackSegment[] }> {
     const client = await db.connect();
     try {
       await client.query("BEGIN");
 
-      // Validate player has sufficient funds
       const playerResult = await client.query(
-        `SELECT money FROM players WHERE id = $1 AND game_id = $2 FOR UPDATE`,
+        `SELECT money, current_turn_number FROM players WHERE id = $1 AND game_id = $2 FOR UPDATE`,
         [playerId, gameId],
       );
       if (playerResult.rows.length === 0) {
         throw new Error("Player not found in game");
       }
-      const currentMoney = playerResult.rows[0].money as number;
-      if (currentMoney < cost) {
-        throw new Error(
-          `Insufficient funds: need ${cost}, have ${currentMoney}`,
-        );
-      }
 
-      // ── Event card restriction checks ─────────────────────────────────────
-      // Check build restrictions from active event effects (Snow blocked_terrain, Rail Strike)
-      const buildRestrictions = await activeEffectManager.getBuildRestrictions(gameId);
-      for (const seg of newSegments) {
-        const segDestKey = `${seg.to.row},${seg.to.col}`;
-        const buildBlockResult = isBuildBlockedAtMilepost(buildRestrictions, segDestKey, playerId);
-        if (buildBlockResult.blocked) {
-          console.warn(
-            `[PlayerService] Build rejected by event restriction: reason=${buildBlockResult.reason} gameId=${gameId} playerId=${playerId} destKey=${segDestKey}`,
-          );
-          const errorCode: ActionRestrictionErrorCode =
-            buildBlockResult.reason === 'blocked_terrain' ? 'SNOW_BLOCKED_TERRAIN' : 'BUILD_BLOCKED';
-          const message =
-            buildBlockResult.reason === 'blocked_terrain'
-              ? `Build blocked by active event (Snow): destination milepost ${segDestKey} is in the blocked terrain zone`
-              : `Build blocked by active event (Rail Strike): player ${playerId} cannot build track this turn`;
-          throw new ActionRestrictionError(errorCode, message);
-        }
-      }
-
-      // Check for active Flood effects blocking river rebuild
-      // (Product Decision 2: Flood does NOT emit a BuildRestriction — we check floodedRiver directly)
-      const activeEffects = await activeEffectManager.getActiveEffects(gameId);
-      for (const seg of newSegments) {
-        const floodResult = isFloodRebuildBlocked(activeEffects, seg);
-        if (floodResult.blocked) {
-          console.warn(
-            `[PlayerService] Build rejected by event restriction: type=flood_rebuild gameId=${gameId} playerId=${playerId} river=${floodResult.river}`,
-          );
-          throw new ActionRestrictionError(
-            'FLOOD_BRIDGE_REBUILD_BLOCKED',
-            `Build blocked: cannot rebuild track across the ${floodResult.river} river while Flood event is active`,
-          );
-        }
-      }
-      // ── End restriction checks ────────────────────────────────────────────
-
-      // 1. Compute updated pending_flood_rebuilds: remove any segments that match the newly built ones.
-      //    We read the current value inside the already-locked transaction (the player_tracks row
-      //    was locked by the FOR UPDATE on the players table above, and the UPSERT will re-lock it).
-      const pendingRow = await client.query(
-        `SELECT COALESCE(pending_flood_rebuilds, '[]'::jsonb) AS pending_flood_rebuilds
-         FROM player_tracks
-         WHERE game_id = $1 AND player_id = $2`,
-        [gameId, playerId],
-      );
-      const rawPending: TrackSegment[] = pendingRow.rows.length > 0
-        ? (pendingRow.rows[0].pending_flood_rebuilds as TrackSegment[])
-        : [];
-      const updatedPendingRebuilds = rawPending.filter(
-        pending => !newSegments.some(built => areSegmentsEqual(pending, built)),
-      );
-
-      // 2. UPSERT player_tracks — also persist the updated pending_flood_rebuilds
-      await client.query(
-        `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp, pending_flood_rebuilds)
-         VALUES ($1, $2, $3, $4, $5, NOW(), $6)
-         ON CONFLICT (game_id, player_id)
-         DO UPDATE SET segments = $3, total_cost = $4, turn_build_cost = $5, last_build_timestamp = NOW(), pending_flood_rebuilds = $6`,
-        [gameId, playerId, JSON.stringify(allSegments), totalCost, cost, JSON.stringify(updatedPendingRebuilds)],
-      );
-
-      // 2. Deduct money
-      const moneyResult = await client.query(
-        `UPDATE players SET money = money - $1 WHERE id = $2 RETURNING money`,
-        [cost, playerId],
-      );
+      const built = await PlayerService.applyTrackBuild(client, {
+        gameId,
+        playerId,
+        money: Number(playerResult.rows[0].money),
+        turnNumber: Number(playerResult.rows[0].current_turn_number ?? 1),
+        chargeNow: true,
+        edgesFor: (): TrackBuildEdge[] =>
+          newSegments.map((seg: TrackSegment): TrackBuildEdge => ({
+            from: { row: seg.from.row, col: seg.from.col },
+            to: { row: seg.to.row, col: seg.to.col },
+          })),
+      });
 
       await client.query("COMMIT");
 
-      const remainingMoney = moneyResult.rows[0]?.money as number;
-      return { remainingMoney, cardsDrawnDuringAction: 0 };
+      return {
+        remainingMoney: built.money,
+        cardsDrawnDuringAction: 0,
+        cost: built.cost,
+        segments: built.segments,
+      };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Build track for the calling user's player along `path`, an ordered list of
+   * mileposts (issue #308). Server-authoritative: the turn guard picks the
+   * player from the session, and `applyTrackBuild` validates and prices the
+   * track.
+   *
+   * Money is NOT deducted here. The cost is added to `turn_build_cost` and
+   * charged once by `settleTurnBuildCost` (end of turn, or the explicit
+   * settle / victory calls), which is how track saved through the legacy
+   * `/api/tracks/save` route is charged too. Charging in both places would
+   * bill the same track twice.
+   *
+   * @returns the sections built (server-priced), their total cost, the turn's
+   *   unsettled build spend, and the player's money (unchanged).
+   * @throws TurnGuardError when the user may not act right now.
+   * @throws TrackBuildError when a build rule is broken.
+   * @throws ActionRestrictionError when an active event card forbids the build.
+   */
+  static async buildTrackForUser(
+    gameId: string,
+    userId: string,
+    path: readonly TrackCostCoord[],
+  ): Promise<{ playerId: string; segments: TrackSegment[]; cost: number; turnBuildCost: number; money: number }> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      const { player } = await lockPlayerForUserTurn(client, gameId, userId, {
+        allowedStatuses: TRACK_BUILD_STATUSES,
+      });
+      const built = await PlayerService.applyTrackBuild(client, {
+        gameId,
+        playerId: player.id,
+        money: Number(player.money),
+        turnNumber: Number(player.turnNumber ?? 1),
+        chargeNow: false,
+        edgesFor: (ownSegments: readonly TrackSegment[]): TrackBuildEdge[] =>
+          pathToBuildEdges(path, ownSegments),
+      });
+      await client.query("COMMIT");
+      return { playerId: player.id, ...built };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Remove the last track section the calling user built this turn and give
+   * its cost back (issue #308).
+   *
+   * Undo is strictly last-in-first-out across the turn's action log: the
+   * player's most recent logged action must be a `build` entry. That keeps the
+   * network connected (a section is always removed before the one it hangs
+   * off) and matches the order of the client's undo stack.
+   *
+   * The refund comes off the unsettled `turn_build_cost` first; whatever a
+   * mid-turn settlement already charged is returned to `money`.
+   *
+   * A section a Flood erased after it was built is gone already: its log entry
+   * is dropped and nothing is refunded.
+   *
+   * @throws TurnGuardError when the user may not act right now.
+   * @throws TrackBuildError NoSegmentToUndo when the last action is not a build.
+   */
+  static async undoTrackSegmentForUser(
+    gameId: string,
+    userId: string,
+  ): Promise<{ playerId: string; removedSegment: TrackSegment; refunded: number; turnBuildCost: number; money: number }> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      const { player } = await lockPlayerForUserTurn(client, gameId, userId, {
+        allowedStatuses: TRACK_BUILD_STATUSES,
+      });
+      const playerId = player.id;
+      const turnNumber = Number(player.turnNumber ?? 1);
+
+      const actionsRow = await client.query(
+        `SELECT actions
+         FROM turn_actions
+         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3
+         FOR UPDATE`,
+        [playerId, gameId, turnNumber],
+      );
+      const actions: unknown[] = Array.isArray(actionsRow.rows[0]?.actions) ? actionsRow.rows[0].actions : [];
+      const last = buildActionsOf(actions.slice(-1))[0];
+      if (!last) {
+        throw new TrackBuildError(
+          TrackBuildErrorCode.NoSegmentToUndo,
+          actions.length === 0
+            ? "No track built this turn to undo"
+            : "The last action this turn is not a track build",
+        );
+      }
+
+      const trackRow = await client.query(
+        `SELECT segments, turn_build_cost
+         FROM player_tracks
+         WHERE game_id = $1 AND player_id = $2
+         FOR UPDATE`,
+        [gameId, playerId],
+      );
+      const segments = PlayerService.parseTrackSegments(trackRow.rows[0]?.segments);
+      const unsettledCost = Number(trackRow.rows[0]?.turn_build_cost ?? 0);
+
+      let index = -1;
+      for (let i = segments.length - 1; i >= 0; i--) {
+        if (areSegmentsEqual(segments[i], last.segment)) {
+          index = i;
+          break;
+        }
+      }
+
+      let refunded = 0;
+      let turnBuildCost = unsettledCost;
+      let money = Number(player.money);
+      if (index >= 0) {
+        refunded = last.segment.cost;
+        const fromUnsettled = Math.min(refunded, unsettledCost);
+        const fromMoney = refunded - fromUnsettled;
+        turnBuildCost = unsettledCost - fromUnsettled;
+        const remaining = [...segments.slice(0, index), ...segments.slice(index + 1)];
+        const totalCost = remaining.reduce((sum: number, seg: TrackSegment): number => sum + seg.cost, 0);
+        await client.query(
+          `UPDATE player_tracks
+           SET segments = $1, total_cost = $2, turn_build_cost = $3
+           WHERE game_id = $4 AND player_id = $5`,
+          [JSON.stringify(remaining), totalCost, turnBuildCost, gameId, playerId],
+        );
+        if (fromMoney > 0) {
+          const moneyRow = await client.query(
+            `UPDATE players SET money = money + $1 WHERE game_id = $2 AND id = $3 RETURNING money`,
+            [fromMoney, gameId, playerId],
+          );
+          money = Number(moneyRow.rows[0]?.money ?? money);
+        }
+      }
+
+      await client.query(
+        `UPDATE turn_actions
+         SET actions = $1::jsonb
+         WHERE player_id = $2 AND game_id = $3 AND turn_number = $4`,
+        [JSON.stringify(actions.slice(0, -1)), playerId, gameId, turnNumber],
+      );
+
+      await client.query("COMMIT");
+      return { playerId, removedSegment: last.segment, refunded, turnBuildCost, money };
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
