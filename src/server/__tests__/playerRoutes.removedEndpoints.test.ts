@@ -51,6 +51,9 @@ describe('Removed player endpoints (#301)', () => {
     ['/api/players/create', { gameId: 'game-1', player: { name: 'P', color: '#FF0000' } }],
     ['/api/players/game/game-1/status', { status: 'active' }],
     ['/api/players/fulfill-demand', { gameId: 'game-1', playerId: 'p1', city: 'Paris', loadType: 'Coal', cardId: 1 }],
+    // #305: replaced by DELETE /api/game/:id/players/:playerId and POST /api/game/:id/end
+    ['/api/players/delete', { gameId: 'game-1', playerId: 'p1' }],
+    ['/api/players/game/game-1/end', {}],
   ])('should return 404 for POST %s', async (path: string, body: object) => {
     const res = await request(app).post(path).send(body);
 

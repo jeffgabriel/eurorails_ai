@@ -618,35 +618,6 @@ export class PlayerService {
     }
   }
 
-  static async deletePlayer(gameId: string, playerId: string): Promise<void> {
-    const client = await db.connect();
-    try {
-      await client.query("BEGIN");
-
-      // First delete the player's movement history
-      const deleteMovementHistoryQuery =
-        "DELETE FROM movement_history WHERE player_id = $1";
-      await client.query(deleteMovementHistoryQuery, [playerId]);
-
-      // First delete the player's tracks
-      const deleteTracksQuery =
-        "DELETE FROM player_tracks WHERE player_id = $1";
-      await client.query(deleteTracksQuery, [playerId]);
-
-      // Then delete the player
-      const deletePlayerQuery =
-        "DELETE FROM players WHERE game_id = $1 AND id = $2";
-      await client.query(deletePlayerQuery, [gameId, playerId]);
-
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
-  }
-
   /**
    * Get all players for a game, with optional filtering of hand data for security
    * @param gameId - The game ID

@@ -6,6 +6,8 @@ import { requireGameMembership } from '../middleware/gameMembership';
 import { db } from '../db';
 import { emitVictoryTriggered, emitGameOver, emitTieExtended, emitStatePatch } from '../services/socketService';
 import { ActiveEffectManager } from '../services/ActiveEffectManager';
+import { GameSettingsService, GameSettingsError } from '../services/gameSettingsService';
+import { isUuid } from '../utils/uuid';
 
 const router = express.Router();
 
@@ -123,6 +125,83 @@ router.post('/updateCameraState', authenticateToken, async (req, res) => {
         return res.status(500).json({
             error: 'Server error',
             details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
+// Delete a player from a game (Settings menu). Creator only.
+router.delete('/:gameId/players/:playerId', authenticateToken, async (req, res) => {
+    try {
+        const { gameId, playerId } = req.params;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!isUuid(gameId) || !isUuid(playerId)) {
+            return res.status(404).json({
+                error: 'Not found',
+                details: 'Player not found in game'
+            });
+        }
+
+        const result = await GameSettingsService.removePlayer(gameId, userId, playerId);
+
+        // No state patch here: other clients still hold the deleted player in their
+        // list, so a shifted index alone would point them at the wrong player.
+        // They pick up the new list on their next game load.
+
+        return res.status(200).json({
+            message: 'Player deleted successfully',
+            currentPlayerIndex: result.currentPlayerIndex
+        });
+    } catch (error: any) {
+        if (error instanceof GameSettingsError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+        console.error('Error in DELETE /:gameId/players/:playerId route:', error);
+        return res.status(500).json({
+            error: 'Server error',
+            details: 'Failed to delete player'
+        });
+    }
+});
+
+// End a game (Settings menu). Creator only.
+router.post('/:gameId/end', authenticateToken, async (req, res) => {
+    try {
+        const { gameId } = req.params;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!isUuid(gameId)) {
+            return res.status(404).json({
+                error: 'Not found',
+                details: 'Game not found'
+            });
+        }
+
+        await GameSettingsService.endGame(gameId, userId);
+
+        return res.status(200).json({ message: 'Game ended successfully' });
+    } catch (error: any) {
+        if (error instanceof GameSettingsError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
+        }
+        console.error('Error in POST /:gameId/end route:', error);
+        return res.status(500).json({
+            error: 'Server error',
+            details: 'Failed to end game'
         });
     }
 });
