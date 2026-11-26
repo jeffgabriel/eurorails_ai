@@ -128,10 +128,12 @@ describe('TrackDrawingManager.calculateTrackCost parity with pre-#307 implementa
 
   // Track that touches every other major-city milepost and one port of every other ferry.
   const touchedMajor = majorCityPoints.filter((_, i) => i % 2 === 0).map(touching);
+  // Among the selected ferries, alternate which end is touched (first port, second port,
+  // first port, ...) so both "same port" and "far port" already-connected cases are covered.
   const touchedFerry = (mapConfig.ferryConnections ?? [])
-    .filter((_, i) => i % 2 === 0)
-    .map((ferry, i) => {
-      const port = ferry.connections[i % 2];
+    .filter((_, ferryIndex) => ferryIndex % 2 === 0)
+    .map((ferry, selectedIndex) => {
+      const port = ferry.connections[selectedIndex % 2];
       return touching(grid[port.row][port.col]);
     });
   const someTrack: TrackSegment[] = [...touchedMajor, ...touchedFerry];
