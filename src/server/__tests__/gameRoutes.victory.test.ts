@@ -1,7 +1,7 @@
 import express from 'express';
 import request from 'supertest';
 import gameRoutes from '../routes/gameRoutes';
-import { VictoryService } from '../services/victoryService';
+import { VictoryService, VictoryNotFinalTurnError } from '../services/victoryService';
 import { emitStatePatch, emitGameOver, emitTieExtended } from '../services/socketService';
 import type { Request, Response, NextFunction } from 'express';
 import type { User } from '../../shared/types/AuthTypes';
@@ -26,35 +26,39 @@ const app = express();
 app.use(express.json());
 app.use('/api/game', gameRoutes);
 
+const GAME_ID = '11111111-1111-4111-8111-111111111111';
+
 describe('victory resolution HTTP synchronization', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    jest.mocked(VictoryService.isFinalTurn).mockResolvedValue(true);
   });
 
   it.each([false, true])('returns the committed reset without announcing a winner or tie (broadcast fails: %s)', async (broadcastFails) => {
     const victoryState = {
       triggered: false, triggerPlayerIndex: -1, finalTurnPlayerIndex: -1, victoryThreshold: 250,
     };
-    jest.mocked(VictoryService.resolveVictory).mockResolvedValue({ gameOver: false, victoryState });
+    jest.mocked(VictoryService.resolveVictoryForUser).mockResolvedValueOnce({ gameOver: false, victoryState });
     if (broadcastFails) {
       jest.mocked(emitStatePatch).mockRejectedValueOnce(new Error('sequence database unavailable'));
     }
 
-    const result = await request(app).post('/api/game/game-1/resolve-victory');
+    const result = await request(app).post(`/api/game/${GAME_ID}/resolve-victory`);
 
     expect(result.status).toBe(200);
     expect(result.body).toEqual({ gameOver: false, victoryState });
-    expect(emitStatePatch).toHaveBeenCalledWith('game-1', { victoryState });
+    expect(VictoryService.resolveVictoryForUser).toHaveBeenCalledWith(GAME_ID, 'user');
+    expect(emitStatePatch).toHaveBeenCalledWith(GAME_ID, { victoryState });
     expect(emitGameOver).not.toHaveBeenCalled();
     expect(emitTieExtended).not.toHaveBeenCalled();
   });
 
-  it('does not resolve or broadcast when a final round is not active', async () => {
-    jest.mocked(VictoryService.isFinalTurn).mockResolvedValue(false);
-    const result = await request(app).post('/api/game/game-1/resolve-victory');
+  it('does not broadcast when a final round is not active', async () => {
+    jest.mocked(VictoryService.resolveVictoryForUser).mockRejectedValueOnce(new VictoryNotFinalTurnError());
+    const result = await request(app).post(`/api/game/${GAME_ID}/resolve-victory`);
     expect(result.status).toBe(400);
-    expect(VictoryService.resolveVictory).not.toHaveBeenCalled();
+    expect(result.body.error).toBe('NOT_FINAL_TURN');
+    expect(emitGameOver).not.toHaveBeenCalled();
+    expect(emitTieExtended).not.toHaveBeenCalled();
     expect(emitStatePatch).not.toHaveBeenCalled();
   });
 });
