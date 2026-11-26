@@ -506,6 +506,9 @@ describe('PlayerService.deliverLoadForUser — delivery restrictions', () => {
             hand: [31],
             loads: [LoadType.Coal],
             turnNumber: 1,
+            // The train is in Hamburg: deliveries require it (#312)
+            position_row: 20,
+            position_col: 47,
           }],
         });
       }
@@ -548,6 +551,9 @@ describe('PlayerService.deliverLoadForUser — delivery restrictions', () => {
             hand: [31],
             loads: [LoadType.Coal],
             turnNumber: 1,
+            // The train is in Hamburg: deliveries require it (#312)
+            position_row: 20,
+            position_col: 47,
           }],
         });
       }
@@ -714,11 +720,12 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
   it('allows movement when no active effects', async () => {
     setupFullMoveMocks();
 
+    // First placement must be a city milepost (#312): Berlin centre
     await expect(
       PlayerService.moveTrainForUser({
         gameId: GAME_ID,
         userId: USER_ID,
-        to: { row: 6, col: 5 },
+        to: { row: 24, col: 52 },
       }),
     ).resolves.toBeDefined();
   });
@@ -810,14 +817,14 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
       },
     ];
     mockActiveEffectManager.getMovementRestrictions.mockResolvedValue(restrictions);
-    // Use standard mocks — null position means first placement, no track usage
+    // Use standard mocks — null position means first placement (at a city: Berlin centre), no track usage
     setupFullMoveMocks();
 
     await expect(
       PlayerService.moveTrainForUser({
         gameId: GAME_ID,
         userId: USER_ID,
-        to: { row: 6, col: 5 },
+        to: { row: 24, col: 52 },
       }),
     ).resolves.toBeDefined();
   });
@@ -845,18 +852,19 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
     const restrictions: MovementRestriction[] = [
       {
         type: 'half_rate',
-        zone: [mpKey(6, 5)],
+        zone: [mpKey(24, 52)],
       },
     ];
     mockActiveEffectManager.getMovementRestrictions.mockResolvedValue(restrictions);
     setupFullMoveMocks();
 
     // half_rate does not reject — it caps movement speed. The move should still resolve.
+    // (First placement must be a city milepost, #312: Berlin centre.)
     await expect(
       PlayerService.moveTrainForUser({
         gameId: GAME_ID,
         userId: USER_ID,
-        to: { row: 6, col: 5 },
+        to: { row: 24, col: 52 },
       }),
     ).resolves.toBeDefined();
 

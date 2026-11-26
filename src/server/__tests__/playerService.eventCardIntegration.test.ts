@@ -258,6 +258,9 @@ describe('PlayerService.deliverLoadForUser × EventCardService (BE-005)', () => 
             hand: [cardId, 2, 3],
             loads: [resource],
             turnNumber: 1,
+            // The train is in Paris: deliveries require it (#312)
+            position_row: 29,
+            position_col: 32,
           }],
         });
       }
