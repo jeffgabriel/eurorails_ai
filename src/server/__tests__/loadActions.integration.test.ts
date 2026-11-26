@@ -304,7 +304,7 @@ describe('Load pickup and drop (#310)', () => {
       await createGame();
       await setTrain(activePlayerId, { at: BERLIN });
       await dropChip('Berlin', LoadType.Cars);
-      jest.spyOn(activeEffectManager, 'getPickupDeliveryRestrictions').mockResolvedValue([
+      const restrictionRead = jest.spyOn(activeEffectManager, 'getPickupDeliveryRestrictions').mockResolvedValue([
         // The key the restriction check uses for the city (for a major city, one of its mileposts).
         { type: 'no_pickup_delivery_in_zone', zone: [getCityMilepointKey('Berlin')] },
       ] as any);
@@ -313,6 +313,8 @@ describe('Load pickup and drop (#310)', () => {
 
       expect(res.status).toBe(409);
       expect(res.body.code).toBe('COASTAL_STRIKE_BLOCKED');
+      // The restriction read runs on the transaction's client, not a second pooled connection.
+      expect(restrictionRead).toHaveBeenCalledWith(gameId, expect.objectContaining({ query: expect.any(Function) }));
       expect(await loadsOf(activePlayerId)).toEqual([]);
       expect(await droppedChips()).toEqual([{ city_name: 'Berlin', type: LoadType.Cars }]);
       expect(await loggedActions(activePlayerId)).toEqual([]);

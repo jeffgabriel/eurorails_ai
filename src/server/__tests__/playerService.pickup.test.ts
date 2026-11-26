@@ -148,6 +148,32 @@ describe('PlayerService.pickupLoadForPlayer', () => {
       expect(sqlCalls.indexOf(chipCall![0])).toBeLessThan(sqlCalls.indexOf('COMMIT'));
     });
 
+    it('should not take a second pooled connection while the transaction is open', async () => {
+      mockClient.query.mockImplementation((sql: string) => {
+        if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
+        if (sql.includes('SELECT loads')) {
+          return Promise.resolve({
+            rows: [{ loads: [], trainType: TrainType.Freight }],
+          });
+        }
+        if (sql.includes('UPDATE players SET loads')) {
+          return Promise.resolve({
+            rows: [{ loads: [LoadType.Coal] }],
+          });
+        }
+        return Promise.resolve({ rows: [] });
+      });
+
+      await PlayerService.pickupLoadForPlayer(gameId, playerId, loadType, cityName);
+
+      // Every read, the event-restriction read included, uses the transaction's client.
+      expect(db.query).not.toHaveBeenCalled();
+      const effectRead = mockClient.query.mock.calls.find(
+        (call: any[]) => typeof call[0] === 'string' && call[0].includes('active_event'),
+      );
+      expect(effectRead).toBeDefined();
+    });
+
     it('should not touch load_chips when cityName is empty', async () => {
       mockClient.query.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();

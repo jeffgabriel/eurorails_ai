@@ -2500,15 +2500,18 @@ export class PlayerService {
 
   /**
    * Refuse a pickup at a city where an active event (coastal Strike) forbids it.
+   * Reads through the caller's transaction client, so it needs no second
+   * pooled connection while the caller holds row locks.
    *
    * @throws ActionRestrictionError when the city is in the strike zone.
    */
   private static async assertPickupNotRestricted(
+    client: PoolClient,
     gameId: string,
     playerId: string,
     cityName: string,
   ): Promise<void> {
-    const pickupRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId);
+    const pickupRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId, client);
     const pickupCityKey = getCityMilepointKey(cityName) ?? '';
     const pickupBlocked = isPickupDeliveryBlocked(pickupRestrictions, pickupCityKey);
     if (pickupBlocked.blocked) {
@@ -2561,7 +2564,7 @@ export class PlayerService {
 
       // A full train is refused with the capacity error before the event check, as before.
       if (currentLoads.length < capacity) {
-        await PlayerService.assertPickupNotRestricted(gameId, playerId, cityName);
+        await PlayerService.assertPickupNotRestricted(client, gameId, playerId, cityName);
       }
 
       const { updatedLoads } = await pickupLoadInTransaction(client, {
@@ -2623,7 +2626,7 @@ export class PlayerService {
         boardRules: { position: { row: playerRow.position_row, col: playerRow.position_col } },
       });
       // Thrown after the writes above; the ROLLBACK below discards them.
-      await PlayerService.assertPickupNotRestricted(gameId, playerId, cityName);
+      await PlayerService.assertPickupNotRestricted(client, gameId, playerId, cityName);
 
       await appendTurnAction(client, gameId, playerId, Number(playerRow.turnNumber ?? 1), {
         kind: "pickup",
