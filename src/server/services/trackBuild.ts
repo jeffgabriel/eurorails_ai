@@ -49,6 +49,8 @@ export enum TrackBuildErrorCode {
   InsufficientFunds = 9,
   /** The player's last action this turn is not a track build. */
   NoSegmentToUndo = 10,
+  /** A train was upgraded or crossgraded this turn; a purchase replaces building. */
+  TrainPurchasedThisTurn = 11,
 }
 
 const MALFORMED_REQUEST_CODES: ReadonlySet<TrackBuildErrorCode> = new Set([

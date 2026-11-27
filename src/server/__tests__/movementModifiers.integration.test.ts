@@ -618,7 +618,7 @@ describe('Movement modifiers (#313)', () => {
     });
   });
 
-  describe('crossgrade and movement in one turn', () => {
+  describe('train purchase, movement and building in one turn', () => {
     function purchase(kind: 'upgrade' | 'crossgrade', targetTrainType: TrainType): request.Test {
       return request(app)
         .post('/api/players/upgrade-train')
@@ -626,19 +626,28 @@ describe('Movement modifiers (#313)', () => {
         .send({ gameId, kind, targetTrainType });
     }
 
+    async function expectRefusedUnchanged(res: request.Response, trainType: TrainType): Promise<void> {
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.status).toBeLessThan(500);
+      const row = await moverRow();
+      expect(row.train_type).toBe(trainType);
+      expect(Number(row.money)).toBe(50);
+    }
+
     it('refuses a crossgrade after the train has moved this turn', async () => {
       await createGame({ trainType: TrainType.FastFreight });
       expect((await move(at(8))).status).toBe(200);
 
-      const res = await purchase('crossgrade', TrainType.HeavyFreight);
-      expect(res.status).toBeGreaterThanOrEqual(400);
-      expect(res.status).toBeLessThan(500);
-      const row = await moverRow();
-      expect(row.train_type).toBe(TrainType.FastFreight);
-      expect(Number(row.money)).toBe(50);
+      await expectRefusedUnchanged(await purchase('crossgrade', TrainType.HeavyFreight), TrainType.FastFreight);
 
       // The Fast Freight keeps the 4 mileposts it had left.
       expect((await move(at(12))).status).toBe(200);
+    });
+
+    it('refuses an upgrade after the train has moved this turn', async () => {
+      await createGame();
+      expect((await move(at(3))).status).toBe(200);
+      await expectRefusedUnchanged(await purchase('upgrade', TrainType.FastFreight), TrainType.Freight);
     });
 
     it('allows crossgrade then move, at the new train\'s speed', async () => {
@@ -651,11 +660,44 @@ describe('Movement modifiers (#313)', () => {
       expect(res.body.remainingMovement).toBe(0);
     });
 
-    it('still allows an upgrade after moving', async () => {
+    it('allows upgrade then move, at the new train\'s speed', async () => {
       await createGame();
-      expect((await move(at(9))).status).toBe(200);
       expect((await purchase('upgrade', TrainType.FastFreight)).status).toBe(200);
-      expect((await moverRow()).train_type).toBe(TrainType.FastFreight);
+      const res = await move(at(12));
+      expect(res.status).toBe(200);
+      expect(res.body.milepostsMoved).toBe(12);
+    });
+
+    it('refuses any purchase after track was built this turn', async () => {
+      for (const [kind, from, to] of [
+        ['upgrade', TrainType.Freight, TrainType.FastFreight],
+        ['crossgrade', TrainType.FastFreight, TrainType.HeavyFreight],
+      ] as Array<['upgrade' | 'crossgrade', TrainType, TrainType]>) {
+        await createGame({ trainType: from });
+        await db.query(
+          'UPDATE player_tracks SET turn_build_cost = 1 WHERE game_id = $1 AND player_id = $2',
+          [gameId, moverPlayerId]
+        );
+        await expectRefusedUnchanged(await purchase(kind, to), from);
+      }
+    });
+
+    it('refuses a second purchase, and track building, after a purchase this turn', async () => {
+      await createGame({ trainType: TrainType.FastFreight });
+      expect((await purchase('crossgrade', TrainType.HeavyFreight)).status).toBe(200);
+
+      const again = await purchase('crossgrade', TrainType.FastFreight);
+      expect(again.status).toBeGreaterThanOrEqual(400);
+      expect(again.status).toBeLessThan(500);
+      expect((await moverRow()).train_type).toBe(TrainType.HeavyFreight);
+
+      // Berlin milepost (24,51) -> clear (24,50) is a legal first build otherwise.
+      const build = await request(app)
+        .post('/api/tracks/build')
+        .set('Authorization', `Bearer ${moverToken}`)
+        .send({ gameId, path: [{ row: 24, col: 51 }, { row: 24, col: 50 }] });
+      expect(build.status).toBe(409);
+      expect(build.body.code).toBe('TrainPurchasedThisTurn');
     });
   });
 

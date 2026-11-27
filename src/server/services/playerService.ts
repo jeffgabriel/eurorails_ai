@@ -55,6 +55,7 @@ import {
   appendTurnAction,
   dropLoadInTransaction,
   getDroppedLoadsInTransaction,
+  hasTrainPurchase,
   pickupLoadInTransaction,
   trayChangesForDrop,
   trayChangesForPickup,
@@ -2569,12 +2570,14 @@ export class PlayerService {
    * - upgrade (20M):
    *   - Freight -> FastFreight | HeavyFreight (choice)
    *   - FastFreight | HeavyFreight -> Superfreight
-   *   - Requires turn_build_cost === 0 (no track spend yet this turn)
    * - crossgrade (5M):
    *   - FastFreight <-> HeavyFreight
-   *   - Allowed even if track has been built this turn, as long as turn_build_cost <= 15
    *
-   * Server-authoritative on money + train_type. Track build-limit enforcement remains client-side.
+   * - any purchase: at most one per turn; not after building track this turn
+   *   (a purchase replaces building); not after moving this turn.
+   *
+   * Server-authoritative on money + train_type. The purchase is recorded in
+   * the turn's action log, so the validated build path refuses track after it.
    */
   static async purchaseTrainType(
     gameId: string,
@@ -2596,11 +2599,34 @@ export class PlayerService {
       const currentLoads: unknown = playerRow.loads;
       const currentLoadCount = Array.isArray(currentLoads) ? currentLoads.length : 0;
 
-      // Track spend this turn (server-side). Read on the transaction's client:
-      // a pooled read here would need a second connection while this one
-      // holds the player row lock.
+      // A train purchase takes the place of track building, and must come
+      // before any movement this turn (the movement used so far was counted
+      // against the old train). Both are read on this transaction's client.
+      const turnNumber: number = Number(playerRow.turnNumber ?? 1);
       const trackState = await TrackService.getTrackState(gameId, playerId, client);
       const turnBuildCost = trackState?.turnBuildCost ?? 0;
+      const turnActionsResult = await client.query(
+        `SELECT actions FROM turn_actions
+         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3
+         FOR UPDATE`,
+        [playerId, gameId, turnNumber]
+      );
+      const turnActions: unknown = turnActionsResult.rows[0]?.actions;
+      if (hasTrainPurchase(turnActions)) {
+        throw new Error("Cannot buy a train twice in one turn");
+      }
+      if (turnBuildCost !== 0 || buildActionsOf(turnActions).length > 0) {
+        throw new Error(`Cannot ${kind} after building track this turn`);
+      }
+      const movedResult = await client.query(
+        `SELECT movement_path FROM movement_history
+         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
+        [playerId, gameId, turnNumber]
+      );
+      const movedPath: unknown = movedResult.rows[0]?.movement_path;
+      if (Array.isArray(movedPath) && movedPath.length > 0) {
+        throw new Error(`Cannot ${kind} after moving this turn`);
+      }
 
       // Validate target train type
       const isValidTrainType = Object.values(TrainType).includes(targetTrainType);
@@ -2613,9 +2639,6 @@ export class PlayerService {
 
       if (kind === "upgrade") {
         cost = 20;
-        if (turnBuildCost !== 0) {
-          throw new Error("Cannot upgrade after building track this turn");
-        }
         const legalUpgrade =
           (currentTrainType === TrainType.Freight &&
             (targetTrainType === TrainType.FastFreight ||
@@ -2629,21 +2652,6 @@ export class PlayerService {
       } else {
         // crossgrade
         cost = 5;
-        if (turnBuildCost > 15) {
-          throw new Error("Cannot crossgrade after spending more than 15M on track this turn");
-        }
-        // A crossgrade changes the train's speed, so it must come before any
-        // movement this turn: the movement already used was counted against
-        // the old train. (An upgrade never lowers speed and stays allowed.)
-        const movedResult = await client.query(
-          `SELECT movement_path FROM movement_history
-           WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
-          [playerId, gameId, Number(playerRow.turnNumber ?? 1)]
-        );
-        const movedPath: unknown = movedResult.rows[0]?.movement_path;
-        if (Array.isArray(movedPath) && movedPath.length > 0) {
-          throw new Error("Cannot crossgrade after moving this turn");
-        }
         const targetCapacity = TRAIN_PROPERTIES[targetTrainType]?.capacity;
         if (typeof targetCapacity !== "number") {
           throw new Error("Invalid train type");
@@ -2677,6 +2685,15 @@ export class PlayerService {
          WHERE game_id = $3 AND id = $4`,
         [targetTrainType, cost, gameId, playerId]
       );
+
+      // Recorded so a build later this turn is refused (applyTrackBuild).
+      await appendTurnAction(client, gameId, playerId, turnNumber, {
+        kind: "purchase",
+        purchase: kind,
+        fromTrainType: currentTrainType,
+        toTrainType: targetTrainType,
+        cost,
+      });
 
       await client.query("COMMIT");
 
@@ -3027,6 +3044,12 @@ export class PlayerService {
        FOR UPDATE`,
       [playerId, gameId, turnNumber],
     );
+    if (hasTrainPurchase(actionsRow.rows[0]?.actions)) {
+      throw new TrackBuildError(
+        TrackBuildErrorCode.TrainPurchasedThisTurn,
+        "No track may be built in a turn in which a train was bought",
+      );
+    }
     const buildsThisTurn = buildActionsOf(actionsRow.rows[0]?.actions);
     const loggedSpend = buildsThisTurn.reduce(
       (sum: number, action: TurnActionBuild): number => sum + action.segment.cost,
