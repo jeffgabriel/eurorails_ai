@@ -389,6 +389,7 @@ describe('JIRA-156 Bug B / JIRA-191: A3 now uses build-origin preview instead of
       { toRow: 3, toCol: 3 },
       snapshot,
       expect.any(Number),
+      false,
     );
 
     // getNetworkFrontier must NOT be called in the A3 path (JIRA-191 removes it)

@@ -494,7 +494,8 @@ export class AIStrategyEngine {
         const existingSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
         const buildStepsDropped = existingSteps.filter(s => s.type === AIActionType.BuildTrack).length;
         const stepsWithoutBuild = existingSteps.filter(s => s.type !== AIActionType.BuildTrack);
-        const newSteps = [...stepsWithoutBuild, stage3.pendingUpgradeAction];
+        // A purchase must come before any movement this turn (PlayerService.purchaseTrainType).
+        const newSteps = [stage3.pendingUpgradeAction, ...stepsWithoutBuild];
         decision.plan = newSteps.length === 1
           ? newSteps[0]
           : { type: 'MultiAction' as const, steps: newSteps };

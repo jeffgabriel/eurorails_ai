@@ -545,17 +545,17 @@ export class PlayerHandScene extends Phaser.Scene {
         disabledReason: canUpgrade ? undefined : (needsMoney(20) ? "Need 20M" : "Must upgrade before building"),
       });
 
-      const canCrossgrade = !needsMoney(5) && turnBuildCost <= 15;
+      const canCrossgrade = !needsMoney(5) && !hasAnyTrackThisTurn;
       options.push({
         kind: "crossgrade",
         targetTrainType: TrainType.HeavyFreight,
         cost: 5,
         title: "Crossgrade: Heavy",
-        subtitle: "3 loads, 9 moves (limit 15M build)",
+        subtitle: "3 loads, 9 moves",
         enabled: canCrossgrade,
         disabledReason: canCrossgrade
           ? undefined
-          : (needsMoney(5) ? "Need 5M" : "Track spend must be ≤ 15M"),
+          : (needsMoney(5) ? "Need 5M" : "Must crossgrade before building"),
       });
     } else if (localPlayer.trainType === TrainType.HeavyFreight) {
       const canUpgrade = !needsMoney(20) && !hasAnyTrackThisTurn;
@@ -569,17 +569,17 @@ export class PlayerHandScene extends Phaser.Scene {
         disabledReason: canUpgrade ? undefined : (needsMoney(20) ? "Need 20M" : "Must upgrade before building"),
       });
 
-      const canCrossgrade = !needsMoney(5) && turnBuildCost <= 15;
+      const canCrossgrade = !needsMoney(5) && !hasAnyTrackThisTurn;
       options.push({
         kind: "crossgrade",
         targetTrainType: TrainType.FastFreight,
         cost: 5,
         title: "Crossgrade: Fast",
-        subtitle: "2 loads, 12 moves (limit 15M build)",
+        subtitle: "2 loads, 12 moves",
         enabled: canCrossgrade,
         disabledReason: canCrossgrade
           ? undefined
-          : (needsMoney(5) ? "Need 5M" : "Track spend must be ≤ 15M"),
+          : (needsMoney(5) ? "Need 5M" : "Must crossgrade before building"),
       });
     } else {
       // Superfreight: no upgrade options
@@ -1035,8 +1035,6 @@ export class PlayerHandScene extends Phaser.Scene {
       const msg = (result.errorMessage || "Purchase failed").toLowerCase();
       if (msg.includes("too many loads")) {
         this.showToast("Current loads could not be transferred to new train.");
-      } else if (msg.includes("spending more than 15m") || msg.includes("15m")) {
-        this.showToast("Crossgrade requires track spend ≤ 15M this turn.");
       } else if (msg.includes("insufficient")) {
         this.showToast("Insufficient funds for that train change.");
       } else {
@@ -1046,13 +1044,8 @@ export class PlayerHandScene extends Phaser.Scene {
     }
 
     // Apply per-turn build rules locally
-    if (kind === "upgrade") {
-      // Full upgrade consumes build phase: no drawing mode for remainder of turn
-      this.trackDrawingManager.setDrawingDisabledForTurn(true);
-    } else {
-      // Crossgrade reduces remaining build allowance to 15M this turn
-      this.trackDrawingManager.setTurnBuildLimit(15);
-    }
+    // Any train purchase takes the place of building: no drawing for the rest of the turn.
+    this.trackDrawingManager.setDrawingDisabledForTurn(true);
 
     // Refresh our local view of game state (same object reference updated by GameStateService)
     this.gameState = this.gameStateService.getGameState();

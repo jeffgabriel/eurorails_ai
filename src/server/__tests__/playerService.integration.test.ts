@@ -564,7 +564,7 @@ describe('PlayerService Integration Tests', () => {
             ).rejects.toThrow('Cannot upgrade after building track this turn');
         });
 
-        it('should allow crossgrade after building as long as turn_build_cost <= 15', async () => {
+        it('should block crossgrade after any track was built this turn', async () => {
             const playerId = uuidv4();
             const userId = uuidv4();
             await db.query(
@@ -595,15 +595,9 @@ describe('PlayerService Integration Tests', () => {
                 [gameId, playerId, JSON.stringify([]), 0, 12]
             );
 
-            const updated = await PlayerService.purchaseTrainType(
-                gameId,
-                userId,
-                'crossgrade',
-                TrainType.HeavyFreight
-            );
-
-            expect(updated.trainType).toBe(TrainType.HeavyFreight);
-            expect(updated.money).toBe(45);
+            await expect(
+                PlayerService.purchaseTrainType(gameId, userId, 'crossgrade', TrainType.HeavyFreight)
+            ).rejects.toThrow('Cannot crossgrade after building track this turn');
         });
 
         it('should block crossgrade if turn_build_cost > 15', async () => {
@@ -639,7 +633,7 @@ describe('PlayerService Integration Tests', () => {
 
             await expect(
                 PlayerService.purchaseTrainType(gameId, userId, 'crossgrade', TrainType.FastFreight)
-            ).rejects.toThrow('Cannot crossgrade after spending more than 15M on track this turn');
+            ).rejects.toThrow('Cannot crossgrade after building track this turn');
         });
 
         it('should block crossgrade if current loads exceed target capacity', async () => {

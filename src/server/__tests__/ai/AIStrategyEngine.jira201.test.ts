@@ -374,8 +374,16 @@ describe('JIRA-201: F1 injection drops BuildTrack when UpgradeTrain is injected'
 
     const result = await AIStrategyEngine.takeTurn('game-jira201', 'bot-jira201');
 
-    // (a) The UpgradeTrain should be the executed action
-    expect(result.action).toBe(AIActionType.UpgradeTrain);
+    // (a) The UpgradeTrain is executed, and before the move: a purchase must
+    // come before any movement in the turn. `result.action` names the last step.
+    const { PlayerService } = jest.requireMock('../../services/playerService') as {
+      PlayerService: { purchaseTrainType: jest.Mock; moveTrainForUser: jest.Mock };
+    };
+    expect(PlayerService.purchaseTrainType).toHaveBeenCalledTimes(1);
+    expect(PlayerService.purchaseTrainType.mock.invocationCallOrder[0]).toBeLessThan(
+      PlayerService.moveTrainForUser.mock.invocationCallOrder[0],
+    );
+    expect(result.action).toBe(AIActionType.MoveTrain);
 
     // (c) phaseBStripped must be false — the validator saw no BUILD_UPGRADE_EXCLUSION conflict
     expect(result.turnValidation?.phaseBStripped).toBe(false);

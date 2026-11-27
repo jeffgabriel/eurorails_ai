@@ -381,25 +381,86 @@ describe('Movement enforcement (#312)', () => {
       expect((await moverRow()).money).toBe(50);
     });
 
-    it('uses the opponent shortcut, and charges its fee, when the own route does not fit', async () => {
-      // The train is at at(8), having already used 4 of its 9 mileposts coming from at(12).
+    /** The train is at at(8), having already used 4 of its 9 mileposts coming from at(12). */
+    async function createGameWithFiveMilepostsLeft(): Promise<void> {
       await createGame({ opponentSegments: shortcut, position: at(8) });
       await db.query(
         'INSERT INTO movement_history (player_id, game_id, turn_number, movement_path) VALUES ($1, $2, 1, $3)',
         [moverPlayerId, gameId, JSON.stringify([{ from: at(12), to: at(8), cost: 4 }])]
       );
+    }
+
+    async function opponentMoney(): Promise<number> {
+      const result = await db.query('SELECT money FROM players WHERE id = $1', [opponentPlayerId]);
+      return result.rows[0].money;
+    }
+
+    it('refuses the move, and charges nothing, when only an opponent shortcut the fee preview does not show would fit', async () => {
+      await createGameWithFiveMilepostsLeft();
 
       // at(8) -> START with 5 left: the own line is 8 mileposts, too far. Own track to
-      // at(5) and then the shortcut is 3 + 1 = 4.
+      // at(5) and then the opponent shortcut would be 3 + 1 = 4, but the client's fee
+      // preview (the unbounded own route) shows no fee, so that route is not taken.
+      const res = await move(START);
+
+      expect(res.status).toBe(400);
+      expect(res.body.details).toMatch(/beyond the 5 of 9 mileposts left/);
+      const row = await moverRow();
+      expect(row.money).toBe(50);
+      expect(row.position_col).toBe(at(8).col);
+      expect(await opponentMoney()).toBe(50);
+      expect(await storedCosts()).toEqual([4]);
+      const actions = await db.query('SELECT 1 FROM turn_actions WHERE game_id = $1', [gameId]);
+      expect(actions.rows).toHaveLength(0);
+    });
+
+    it('takes the opponent shortcut, at no new fee, when that opponent was already paid this turn', async () => {
+      await createGameWithFiveMilepostsLeft();
+      await db.query(
+        'INSERT INTO turn_actions (player_id, game_id, turn_number, actions) VALUES ($1, $2, 1, $3::jsonb)',
+        [
+          moverPlayerId,
+          gameId,
+          JSON.stringify([{
+            kind: 'move',
+            from: at(12),
+            to: at(8),
+            ownersPaid: [{ playerId: opponentPlayerId, amount: 4 }],
+            feeTotal: 4,
+          }]),
+        ]
+      );
+
       const res = await move(START);
 
       expect(res.status).toBe(200);
       expect(res.body.milepostsMoved).toBe(4);
-      expect(res.body.feeTotal).toBe(4);
-      expect(res.body.remainingMovement).toBe(1);
+      expect(res.body.feeTotal).toBe(0);
+      expect((await moverRow()).money).toBe(50);
+      expect(await opponentMoney()).toBe(50);
+    });
+
+    it('charges once for a route that needs opponent track, and not again for a second move over it', async () => {
+      // Own track START..at(3); the only way on to at(7) is the opponent's line.
+      await createGame({
+        moverSegments: line(ROW, START.col, 3),
+        opponentSegments: line(ROW, at(3).col, 4),
+      });
+
+      const first = await move(at(5));
+      expect(first.status).toBe(200);
+      expect(first.body.milepostsMoved).toBe(5);
+      expect(first.body.feeTotal).toBe(4);
+      expect(first.body.ownersPaid).toEqual([{ playerId: opponentPlayerId, amount: 4 }]);
       expect((await moverRow()).money).toBe(46);
-      const opponent = await db.query('SELECT money FROM players WHERE id = $1', [opponentPlayerId]);
-      expect(opponent.rows[0].money).toBe(54);
+      expect(await opponentMoney()).toBe(54);
+
+      const second = await move(at(7));
+      expect(second.status).toBe(200);
+      expect(second.body.milepostsMoved).toBe(2);
+      expect(second.body.feeTotal).toBe(0);
+      expect((await moverRow()).money).toBe(46);
+      expect(await opponentMoney()).toBe(54);
     });
   });
 

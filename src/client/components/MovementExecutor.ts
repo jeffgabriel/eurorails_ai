@@ -226,10 +226,18 @@ export class MovementExecutor {
 
       // Ensure the movement deduction from canMoveTo is applied to the refreshed object.
       // A move that ends movement (ferry port) already left it at zero.
+      // The server also halves what is left when the train is in, or enters, a
+      // half-rate (Snow) zone. It reports the movement it will allow next; never
+      // show more than that. (The client can hold less: its ferry half rate is
+      // not known to the server yet.)
       if (refreshedPlayer.trainState) {
+        const afterDistance = Math.max(0, remainingMovementAfterValidation - (serverDistance - clientDistance));
+        const serverRemaining = moveApiResult.remainingMovement;
         refreshedPlayer.trainState.remainingMovement = moveResult.endMovement
           ? remainingMovementAfterValidation
-          : Math.max(0, remainingMovementAfterValidation - (serverDistance - clientDistance));
+          : typeof serverRemaining === "number"
+            ? Math.min(afterDistance, Math.max(0, serverRemaining))
+            : afterDistance;
       }
 
       // Create movement history entry (client-only, for direction rules)

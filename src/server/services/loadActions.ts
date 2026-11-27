@@ -69,6 +69,26 @@ export interface TurnActionDrop {
   displaced: LoadType[];
 }
 
+/**
+ * `turn_actions` entry for a train upgrade or crossgrade. A purchase takes the
+ * place of track building for the turn, and it is not undoable.
+ */
+export interface TurnActionTrainPurchase {
+  kind: "purchase";
+  purchase: "upgrade" | "crossgrade";
+  fromTrainType: string;
+  toTrainType: string;
+  cost: number;
+}
+
+/** True when the turn's action log holds a train upgrade or crossgrade. */
+export function hasTrainPurchase(actions: unknown): boolean {
+  return (
+    Array.isArray(actions) &&
+    actions.some((action: unknown): boolean => (action as { kind?: unknown } | null)?.kind === "purchase")
+  );
+}
+
 export interface TrainGridPosition {
   row: number | null;
   col: number | null;
@@ -140,7 +160,7 @@ export async function appendTurnAction(
   gameId: string,
   playerId: string,
   turnNumber: number,
-  action: TurnActionPickup | TurnActionDrop,
+  action: TurnActionPickup | TurnActionDrop | TurnActionTrainPurchase,
 ): Promise<void> {
   await client.query(
     `INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
