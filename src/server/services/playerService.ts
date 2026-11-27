@@ -64,7 +64,11 @@ import {
  */
 const MERCY_ACTION_STATUSES: readonly GameStatus[] = ["initialBuild", "active"];
 
-/** Statuses in which track may be built: the opening build turns and normal play. */
+/**
+ * Statuses in which track may be built: the opening build turns and normal
+ * play. Kept apart from MERCY_ACTION_STATUSES, which has the same value today
+ * but answers a different rule and may change on its own.
+ */
 const TRACK_BUILD_STATUSES: readonly GameStatus[] = ["initialBuild", "active"];
 
 // ── Event-card restriction errors ────────────────────────────────

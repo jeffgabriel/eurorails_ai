@@ -233,8 +233,9 @@ function toSegmentEnd(point: GridPointData): TrackSegment["from"] {
  * 2. the ends are neighbours on the hex grid;
  * 3. the ends are not in the same major city (no track in the red area);
  * 4. no track, of any player, already joins them (right of way);
- * 5. one end is on the player's network, is the far port of a ferry line the
- *    player has reached, or is a major city milepost;
+ * 5. the section starts (`from`) on the player's network, at the far port of
+ *    a ferry line the player has reached, or at a major city milepost; `to`
+ *    is the milepost being built to and paid for;
  * 6. at most {@link MAJOR_CITY_SECTIONS_PER_TURN} sections leave one major
  *    city milepost per turn;
  * 7. the cost comes from the shared cost module; a ferry line is paid for
@@ -325,26 +326,21 @@ export function planTrackBuild(input: TrackBuildPlanInput): TrackBuildPlan {
       );
     }
 
-    const fromOnNetwork = isOnNetwork(fromKey);
-    const toOnNetwork = isOnNetwork(toKey);
+    // The request fixes the direction: track is built from `from` to `to`, and
+    // `to` is the milepost paid for. `from` must therefore be a legal start,
+    // or a caller could send a section backwards to pay for the cheap end.
     const fromIsMajorCity = majorCityLookup.has(fromKey);
-    const toIsMajorCity = majorCityLookup.has(toKey);
-    if (!fromOnNetwork && !toOnNetwork && !fromIsMajorCity && !toIsMajorCity) {
+    if (!isOnNetwork(fromKey) && !fromIsMajorCity) {
       throw new TrackBuildError(
         TrackBuildErrorCode.NotConnected,
-        `Track between (${fromKey}) and (${toKey}) must connect to your track or start from a major city`,
+        `Track from (${fromKey}) to (${toKey}) must start on your track, at the far port of a ferry line you have reached, or at a major city`,
       );
     }
 
-    // A section leaves a major city milepost when it touches one and its other
-    // end is not yet on the player's network. Direction in the request does
-    // not matter, so sending a section backwards cannot dodge the limit.
-    let majorCityStart: string | undefined;
-    if (fromIsMajorCity && !toOnNetwork) {
-      majorCityStart = fromKey;
-    } else if (toIsMajorCity && !fromOnNetwork) {
-      majorCityStart = toKey;
-    }
+    // A section leaves a major city milepost when it starts there and its far
+    // end is not yet on the player's network.
+    const majorCityStart: string | undefined =
+      fromIsMajorCity && !isOnNetwork(toKey) ? fromKey : undefined;
     if (majorCityStart !== undefined) {
       const count = (majorCityStartCounts.get(majorCityStart) ?? 0) + 1;
       if (count > MAJOR_CITY_SECTIONS_PER_TURN) {

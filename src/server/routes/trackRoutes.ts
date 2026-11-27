@@ -54,15 +54,7 @@ router.post('/save', async (req, res) => {
 
         await TrackService.saveTrackState(gameId, playerId, trackState);
 
-        // Emit track update event to all clients in the game room
-        const io = getSocketIO();
-        if (io) {
-            io.to(gameId).emit('track:updated', {
-                gameId,
-                playerId,
-                timestamp: Date.now()
-            });
-        }
+        emitTrackUpdated(gameId, playerId);
 
         return res.status(200).json({ message: 'Track state saved successfully' });
     } catch (error: any) {

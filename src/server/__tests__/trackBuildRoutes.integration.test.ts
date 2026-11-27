@@ -10,6 +10,10 @@
  * - Milano milepost (41,42) next to alpine (40,43) and mountain (41,43).
  * - Portsmouth–Le Havre ferry (4M): ports (21,28) and (25,29). London milepost
  *   (20,30) -> clear (20,29) -> port (21,28); far side (25,29), (25,30), (26,30).
+ *
+ * Cleanup: each test creates its own game. `afterEach` restores mocks and
+ * deletes that game's rows child-first (turn_actions, player_tracks, players,
+ * games); `afterAll` deletes the users created in `beforeAll`.
  */
 
 import request from 'supertest';
@@ -24,6 +28,7 @@ import { TrackService } from '../services/trackService';
 import { TrackBuildError, TrackBuildErrorCode } from '../services/trackBuild';
 import { getWaterCrossingExtraCost } from '../../shared/config/waterCrossings';
 import { TerrainType, TrackSegment, TrainType } from '../../shared/types/GameTypes';
+import { withOneFreeConnection } from './utils/pool';
 
 async function runQuery<T>(queryFn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await db.connect();
@@ -153,33 +158,6 @@ describe('Server-validated track building (#308)', () => {
       .post('/api/players/settle-build-cost')
       .set('Authorization', `Bearer ${token}`)
       .send({ gameId });
-  }
-
-  /**
-   * Runs `action` while every pooled connection but one is held. A transaction
-   * that reads through the pool as well as its own connection would wait on
-   * the pool forever here, so the action is given a deadline.
-   */
-  async function withOneFreeConnection<T>(action: () => PromiseLike<T>): Promise<T> {
-    const poolSize = parseInt(process.env.DB_MAX_CONNECTIONS || '10');
-    const held: PoolClient[] = [];
-    let timer: NodeJS.Timeout | undefined;
-    let pending: Promise<T> | undefined;
-    try {
-      for (let i = 0; i < poolSize - 1; i++) {
-        held.push(await db.connect());
-      }
-      pending = Promise.resolve(action());
-      const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Request needed more than one pooled connection')), 3000);
-      });
-      return await Promise.race([pending, deadline]);
-    } finally {
-      clearTimeout(timer);
-      held.forEach(client => client.release());
-      // Let a stalled request finish now that connections are free.
-      await pending?.then(() => undefined, () => undefined);
-    }
   }
 
   beforeAll(async () => {

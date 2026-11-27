@@ -92,15 +92,14 @@ describe('planTrackBuild', () => {
       expect(typeof result.segments[0].segment.to.x).toBe('number');
     });
 
-    it('extends the player\'s own network, in either direction', () => {
+    it('extends the player\'s own network', () => {
       const own = track([[24, 51], [24, 50]]);
       const next = getHexNeighbors(24, 50).find(
         (n: TrackCostCoord): boolean => !getMajorCityLookup().has(`${n.row},${n.col}`),
       )!;
       const forward = plan({ ownSegments: own, edges: [{ from: c(24, 50), to: next }] });
-      const backward = plan({ ownSegments: own, edges: [{ from: next, to: c(24, 50) }] });
       expect(forward.segments[0].majorCityStart).toBeUndefined();
-      expect(backward.cost).toBe(forward.cost);
+      expect(forward.segments[0].segment.to).toMatchObject({ row: next.row, col: next.col });
     });
 
     it('chains sections: each may hang off the one before it', () => {
@@ -167,7 +166,8 @@ describe('planTrackBuild', () => {
 
     it('UnknownMilepost for a water milepost', () => {
       const water = [...loadGridPoints().values()].find(p => p.terrain === TerrainType.Water);
-      if (!water) return; // the map lists no water mileposts
+      expect(water).toBeDefined();
+      if (!water) return; // narrows the type
       const neighbor = c(water.row, water.col + 1);
       expectRejection(
         () => plan({ edges: [{ from: neighbor, to: c(water.row, water.col) }] }),
@@ -196,6 +196,23 @@ describe('planTrackBuild', () => {
 
     it('NotConnected away from the player\'s track and from any major city', () => {
       expectRejection(() => plan({ edges: [edge([24, 50], [23, 50])] }), TrackBuildErrorCode.NotConnected, 409);
+    });
+
+    it('NotConnected for a section sent backwards, from a new milepost onto the player\'s track', () => {
+      // Own track Milano (41,41) -> clear (40,41). The alpine milepost (39,40)
+      // is the new one: built forwards it costs 5M; sent backwards it would be
+      // priced as the clear milepost, so it is refused.
+      const grid = loadGridPoints();
+      expect(getMajorCityLookup().get('41,41')).toBe('Milano');
+      expect(grid.get('40,41')?.terrain).toBe(TerrainType.Clear);
+      expect(grid.get('39,40')?.terrain).toBe(TerrainType.Alpine);
+      const own = track([[41, 41], [40, 41]]);
+      expect(plan({ ownSegments: own, edges: [edge([40, 41], [39, 40])] }).cost).toBe(5);
+      expectRejection(
+        () => plan({ ownSegments: own, edges: [edge([39, 40], [40, 41])] }),
+        TrackBuildErrorCode.NotConnected,
+        409,
+      );
     });
 
     it('NotConnected from the far port of a ferry the player has not reached', () => {
@@ -245,12 +262,12 @@ describe('planTrackBuild', () => {
       );
     });
 
-    it('MajorCityTurnLimit counts sections built earlier this turn, and reversed sections', () => {
+    it('MajorCityTurnLimit counts sections built earlier this turn', () => {
       expectRejection(
         () => plan({
           ownSegments: track([[24, 51], [24, 50]], [[24, 51], [23, 50]]),
           majorCityStartsThisTurn: ['24,51', '24,51'],
-          edges: [edge([25, 50], [24, 51])],
+          edges: [edge([24, 51], [25, 50])],
         }),
         TrackBuildErrorCode.MajorCityTurnLimit,
         409,
