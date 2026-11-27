@@ -143,6 +143,15 @@ describe('Movement enforcement (#312)', () => {
       .send({ gameId, to: { ...to, x: 0, y: 0 }, ...extra });
   }
 
+  /**
+   * Track on the far side of the first ferry line: its port B, a landing
+   * milepost at (2000,2000), then nine more mileposts along row 2000.
+   */
+  function ferryTrack(): object[] {
+    const landing: Node = { row: 2000, col: 2000 };
+    return [segment(getFerryEdges()[0].pointB, landing), ...line(2000, 2000, 9)];
+  }
+
   async function moverRow(): Promise<any> {
     const result = await db.query('SELECT * FROM players WHERE id = $1', [moverPlayerId]);
     return result.rows[0];
@@ -480,9 +489,7 @@ describe('Movement enforcement (#312)', () => {
       // The bot planner starts counting from the paired port, then calls moveTrainForUser
       // with the train still at the port it arrived at, and no movementCost.
       const ferry = getFerryEdges()[0];
-      const landing: Node = { row: 2000, col: 2000 };
-      const moverSegments = [segment(ferry.pointB, landing), ...line(2000, 2000, 9)];
-      await createGame({ position: ferry.pointA, moverSegments, isBot: true });
+      await createGame({ position: ferry.pointA, moverSegments: ferryTrack(), isBot: true });
 
       await expect(
         PlayerService.moveTrainForUser({ gameId, userId: moverUserId, to: { row: 2000, col: 2005 } }),
@@ -636,8 +643,6 @@ describe('Movement enforcement (#312)', () => {
 
   describe('ferry crossing (#314)', () => {
     const ferry = getFerryEdges()[0];
-    const landing: Node = { row: 2000, col: 2000 };
-    const ferryTrack = (): object[] => [segment(ferry.pointB, landing), ...line(2000, 2000, 9)];
 
     it('crosses as the first move of the turn for no mileposts, then moves at half rate', async () => {
       await createGame({ position: ferry.pointA, moverSegments: ferryTrack() });
@@ -719,7 +724,7 @@ describe('Movement enforcement (#312)', () => {
       return players.find((p) => p.id === moverPlayerId)?.trainState.lastTraversedEdge;
     }
 
-    it('refuses to go straight back away from a city, and allows going on', async () => {
+    it('refuses to go straight back on a non-city milepost, and allows going on', async () => {
       await createGame();
       expect((await move(at(3))).status).toBe(200);
 

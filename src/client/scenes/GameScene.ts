@@ -716,7 +716,7 @@ export class GameScene extends Phaser.Scene {
       // the train ended the last turn on. The server then holds the rest of the
       // turn to half rate.
       if (this.playerStateService.getLocalPlayerId() === player.id) {
-        const crossed = await this.playerStateService.moveTrainWithFees(
+        const crossingResult = await this.playerStateService.moveTrainWithFees(
           {
             x: result.newPosition.x,
             y: result.newPosition.y,
@@ -725,8 +725,10 @@ export class GameScene extends Phaser.Scene {
           },
           this.gameState.id
         );
-        if (!crossed) {
-          // Refused: the train stays on the port and the turn is not halved.
+        if (!crossingResult) {
+          // Refused: the train stays on the port and the turn is not halved. It
+          // can still cross later by a direct move to the far port, which the
+          // server accepts as the first move of a turn.
           const current = this.gameState.players.find((p) => p.id === player.id);
           if (current?.trainState) current.trainState.justCrossedFerry = false;
           player.trainState.justCrossedFerry = false;

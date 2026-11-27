@@ -349,6 +349,8 @@ export class PlayerStateService {
             return null;
         }
 
+        // Cleared before the request, so a call that throws leaves no earlier reason behind.
+        this.lastMoveError = null;
         try {
             const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/move-train`, {
                 method: 'POST',
@@ -359,7 +361,6 @@ export class PlayerStateService {
                 })
             });
 
-            this.lastMoveError = null;
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
                 console.error('Failed to move train:', errorData);
