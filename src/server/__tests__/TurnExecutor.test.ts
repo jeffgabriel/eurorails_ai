@@ -120,8 +120,6 @@ describe('TurnExecutor', () => {
         'game-1',
         'bot-1',
         [seg],
-        [existingSeg],
-        3,
       );
     });
 

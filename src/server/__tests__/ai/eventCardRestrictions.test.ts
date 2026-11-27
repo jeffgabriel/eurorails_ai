@@ -334,6 +334,36 @@ describe('BuildPhasePlanner.run — Flood rebuild pre-step', () => {
     expect(result.plans[0].type).toBe(AIActionType.BuildTrack);
   });
 
+  it('skips a pending rebuild whose gap another player has since built across', async () => {
+    const seg = makeSegment(10, 5, 10, 6);
+
+    const snapshot = makeBaseSnapshot({
+      activeEffects: [],
+      bot: {
+        ...makeBaseSnapshot().bot,
+        pendingFloodRebuilds: [seg],
+      },
+      // The opponent's track runs the other way across the same two mileposts.
+      allPlayerTracks: [
+        { playerId: 'opponent-1', segments: [makeSegment(10, 6, 10, 5)] },
+      ] as WorldSnapshot['allPlayerTracks'],
+    });
+
+    const result = await BuildPhasePlanner.run(
+      makePhaseAResult() as any,
+      snapshot,
+      makeContext(),
+      makeTrace(),
+    );
+
+    // The server would refuse this rebuild (right of way), so it must not be planned.
+    const rebuilds = result.plans.filter(
+      p => p.type === AIActionType.BuildTrack &&
+        (p as any).segments?.some((s: any) => s.from.row === 10 && s.to.row === 10 && s.from.col + s.to.col === 11),
+    );
+    expect(rebuilds).toHaveLength(0);
+  });
+
   it('skips flood rebuild pre-step when pendingFloodRebuilds is empty', async () => {
     const snapshot = makeBaseSnapshot({
       activeEffects: [],

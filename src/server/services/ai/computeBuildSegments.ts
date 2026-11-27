@@ -253,15 +253,16 @@ export function computeBuildSegments(
   }
 
   // Inputs for the shared segment-cost function (cost assigned to built segments).
-  // Bots charge the ferry cost on every segment that ends on a ferry port; the
-  // client only charges a player's first connection to a ferry line. That
-  // difference predates the shared module and is kept explicit here.
+  // A ferry line is paid for once, on the builder's first connection to either
+  // port — the mode the server charges with (#308), so the budget the bot plans
+  // against is the price it will pay. Segments planned earlier in the same run
+  // are not in this index, so a run can only over-estimate, never under.
   const costContext: SegmentCostContext<GridPointData> = {
     isMajorCityPoint: (point: GridPointData): boolean => majorCityLookup.has(makeKey(point.row, point.col)),
     getFerryAt: (point: GridPointData): SegmentCostFerry | undefined =>
       ferryByPortKey.get(makeKey(point.row, point.col)),
     hasBuilderTrackAt: createBuilderTrackIndex([...existingSegments, ...(knownSegments ?? [])]),
-    ferryChargeMode: FerryChargeMode.EveryConnection,
+    ferryChargeMode: FerryChargeMode.FirstConnectionOnly,
   };
 
   // Ferry adjacency: when Dijkstra reaches a ferry port, it can cross to the

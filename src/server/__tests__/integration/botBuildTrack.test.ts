@@ -340,8 +340,6 @@ describe('Bot Build Track Flow (Integration)', () => {
         gameId,
         botId,
         [seg],
-        [existingSeg],
-        1,
       );
 
       // Verify audit log (INSERT INTO bot_turn_audits) — via db.query (best-effort, post-commit)
@@ -377,13 +375,12 @@ describe('Bot Build Track Flow (Integration)', () => {
 
       expect(result.action).toBe(AIActionType.BuildTrack);
 
-      // Verify PlayerService received both existing and new segments
+      // Only the new segments are handed over: PlayerService reads the bot's
+      // existing track from the database and appends to it (#308).
       expect(mockBuildTrackForPlayer).toHaveBeenCalledWith(
         gameId,
         botId,
         [newSeg],
-        [existingSeg],
-        1,
       );
     });
   });

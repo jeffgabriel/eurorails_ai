@@ -1,7 +1,13 @@
-import { db } from '../db/index';
 import { PlayerService } from '../services/playerService';
 import { TrackSegment } from '../../shared/types/TrackTypes';
 import { TerrainType } from '../../shared/types/GameTypes';
+
+/**
+ * Transaction behaviour of PlayerService.buildTrackForPlayer (the bot build
+ * path) against a mocked database: locking, the UPSERT, the charge, rollback.
+ * The build rules themselves are covered in trackBuild.test.ts, and the whole
+ * path against a real database in trackBuildRoutes.integration.test.ts.
+ */
 
 // Mock the database module
 jest.mock('../db/index', () => {
@@ -12,7 +18,6 @@ jest.mock('../db/index', () => {
   return {
     db: {
       connect: jest.fn().mockResolvedValue(mockClient),
-      // Default: return empty rows so activeEffectManager queries don't fail
       query: jest.fn().mockResolvedValue({ rows: [] }),
     },
     __mockClient: mockClient,
@@ -22,255 +27,196 @@ jest.mock('../db/index', () => {
 const { __mockClient: mockClient } = jest.requireMock('../db/index') as {
   __mockClient: { query: jest.Mock; release: jest.Mock };
 };
+const mockPool = (jest.requireMock('../db/index') as { db: { query: jest.Mock } }).db;
+
+function segment(
+  from: [number, number],
+  to: [number, number],
+  terrain: TerrainType,
+  cost: number,
+): TrackSegment {
+  return {
+    from: { x: 0, y: 0, row: from[0], col: from[1], terrain: TerrainType.MajorCity },
+    to: { x: 0, y: 0, row: to[0], col: to[1], terrain },
+    cost,
+  };
+}
 
 describe('PlayerService.buildTrackForPlayer', () => {
   const gameId = 'game-123';
   const playerId = 'player-456';
 
-  const existingSegments: TrackSegment[] = [
-    { from: { x: 0, y: 0, row: 1, col: 1, terrain: TerrainType.Clear }, to: { x: 1, y: 0, row: 1, col: 2, terrain: TerrainType.Clear }, cost: 1 },
-  ];
+  // Real mileposts: (41,42) is a Milano milepost; its neighbours (40,42) and
+  // (41,43) are mountain (2M) and (40,43) is alpine (5M).
+  const existingSegments: TrackSegment[] = [segment([41, 42], [40, 42], TerrainType.Mountain, 2)];
+  // The caller's costs are deliberately wrong: the server must ignore them.
   const newSegments: TrackSegment[] = [
-    { from: { x: 1, y: 0, row: 1, col: 2, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 2, col: 2, terrain: TerrainType.Mountain }, cost: 2 },
-    { from: { x: 1, y: 1, row: 2, col: 2, terrain: TerrainType.Mountain }, to: { x: 1, y: 2, row: 3, col: 2, terrain: TerrainType.Alpine }, cost: 5 },
+    segment([41, 42], [41, 43], TerrainType.Mountain, 0),
+    segment([41, 42], [40, 43], TerrainType.Alpine, 99),
   ];
-  const cost = 7; // sum of new segments
+  const serverCost = 7; // 2 (mountain) + 5 (alpine)
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-
-    mockClient.query.mockImplementation((sql: string) => {
-      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
-        return Promise.resolve();
+  /** Answer the queries buildTrackForPlayer makes, by the SQL they contain. */
+  function mockDatabase(opts: {
+    money?: number | null;
+    stored?: TrackSegment[];
+    failOn?: { sql: string; message: string };
+  } = {}): void {
+    const { money = 50, stored = existingSegments, failOn } = opts;
+    mockClient.query.mockImplementation((sql: string, params?: unknown[]) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return Promise.resolve();
+      if (failOn && sql.includes(failOn.sql)) return Promise.reject(new Error(failOn.message));
+      if (sql.includes('SELECT money')) {
+        return Promise.resolve({ rows: money === null ? [] : [{ money, current_turn_number: 3 }] });
+      }
+      if (sql.includes('FROM player_tracks')) {
+        return Promise.resolve({
+          rows: stored.length === 0
+            ? []
+            : [{ player_id: playerId, segments: stored, turn_build_cost: 0, pending_flood_rebuilds: [] }],
+        });
+      }
+      if (sql.includes('UPDATE players SET money')) {
+        return Promise.resolve({ rows: [{ money: money! - Number(params?.[0]) }] });
       }
       return Promise.resolve({ rows: [] });
     });
-  });
+  }
 
-  afterEach(() => {
-    jest.restoreAllMocks();
+  function queryCall(fragment: string): unknown[] | undefined {
+    return mockClient.query.mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && call[0].includes(fragment),
+    );
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDatabase();
   });
 
   describe('happy path', () => {
-    it('should build track and deduct money', async () => {
-      mockClient.query.mockImplementation((sql: string, params?: any[]) => {
-        if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
-        if (sql.includes('SELECT money')) {
-          return Promise.resolve({ rows: [{ money: 50 }] });
-        }
-        if (sql.includes('INSERT INTO player_tracks')) {
-          return Promise.resolve({ rows: [] });
-        }
-        if (sql.includes('UPDATE players SET money')) {
-          return Promise.resolve({ rows: [{ money: 43 }] });
-        }
-        return Promise.resolve({ rows: [] });
-      });
+    it('builds track, charges the recomputed cost and commits', async () => {
+      const result = await PlayerService.buildTrackForPlayer(gameId, playerId, newSegments);
 
-      const result = await PlayerService.buildTrackForPlayer(
-        gameId, playerId, newSegments, existingSegments, cost,
-      );
-
-      expect(result.remainingMoney).toBe(43);
+      expect(result.cost).toBe(serverCost);
+      expect(result.remainingMoney).toBe(50 - serverCost);
+      expect(result.segments.map((seg: TrackSegment): number => seg.cost)).toEqual([2, 5]);
       expect(mockClient.query).toHaveBeenCalledWith('BEGIN');
       expect(mockClient.query).toHaveBeenCalledWith('COMMIT');
       expect(mockClient.release).toHaveBeenCalled();
     });
 
-    it('should use FOR UPDATE row locking on money check', async () => {
-      mockClient.query.mockImplementation((sql: string) => {
-        if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
-        if (sql.includes('SELECT money')) {
-          return Promise.resolve({ rows: [{ money: 50 }] });
-        }
-        if (sql.includes('INSERT INTO player_tracks')) {
-          return Promise.resolve({ rows: [] });
-        }
-        if (sql.includes('UPDATE players SET money')) {
-          return Promise.resolve({ rows: [{ money: 43 }] });
-        }
-        return Promise.resolve({ rows: [] });
-      });
+    it('locks the player row and every track row in the game', async () => {
+      await PlayerService.buildTrackForPlayer(gameId, playerId, newSegments);
 
-      await PlayerService.buildTrackForPlayer(
-        gameId, playerId, newSegments, existingSegments, cost,
-      );
-
-      const selectCall = mockClient.query.mock.calls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('SELECT money'),
-      );
-      expect(selectCall![0]).toContain('FOR UPDATE');
+      expect(queryCall('SELECT money')![0]).toContain('FOR UPDATE');
+      const trackRead = queryCall('FROM player_tracks')!;
+      expect(trackRead[0]).toContain('FOR UPDATE');
+      expect(trackRead[1]).toEqual([gameId]);
     });
 
-    it('should UPSERT player_tracks with combined segments', async () => {
-      mockClient.query.mockImplementation((sql: string, params?: any[]) => {
-        if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
-        if (sql.includes('SELECT money')) {
-          return Promise.resolve({ rows: [{ money: 50 }] });
-        }
-        if (sql.includes('INSERT INTO player_tracks')) {
-          return Promise.resolve({ rows: [] });
-        }
-        if (sql.includes('UPDATE players SET money')) {
-          return Promise.resolve({ rows: [{ money: 43 }] });
-        }
-        return Promise.resolve({ rows: [] });
-      });
+    it('UPSERTs the track read from the database plus the new sections', async () => {
+      await PlayerService.buildTrackForPlayer(gameId, playerId, newSegments);
 
-      await PlayerService.buildTrackForPlayer(
-        gameId, playerId, newSegments, existingSegments, cost,
-      );
-
-      const upsertCall = mockClient.query.mock.calls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('INSERT INTO player_tracks'),
-      );
-      expect(upsertCall).toBeDefined();
-      expect(upsertCall![0]).toContain('ON CONFLICT');
-      // Verify combined segments are passed
-      const params = upsertCall![1]!;
-      expect(params[0]).toBe(gameId);       // $1 game_id
-      expect(params[1]).toBe(playerId);     // $2 player_id
-      const parsed = JSON.parse(params[2]); // $3 segments JSON
-      expect(parsed).toHaveLength(3);       // 1 existing + 2 new
-      expect(params[3]).toBe(8);            // $4 totalCost (1+2+5)
-      expect(params[4]).toBe(7);            // $5 turn_build_cost (cost param)
+      const upsertCall = queryCall('INSERT INTO player_tracks')!;
+      expect(upsertCall[0]).toContain('ON CONFLICT');
+      const params = upsertCall[1] as unknown[];
+      expect(params[0]).toBe(gameId);                  // $1 game_id
+      expect(params[1]).toBe(playerId);                // $2 player_id
+      const parsed = JSON.parse(params[2] as string);  // $3 segments JSON
+      expect(parsed).toHaveLength(3);                  // 1 stored + 2 new
+      expect(params[3]).toBe(2 + serverCost);          // $4 total_cost
+      // $5 turn_build_cost: a bot is charged at once, so nothing is left unsettled
+      expect(params[4]).toBe(0);
     });
 
-    it('should build with empty existing segments', async () => {
-      mockClient.query.mockImplementation((sql: string) => {
-        if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
-        if (sql.includes('SELECT money')) {
-          return Promise.resolve({ rows: [{ money: 20 }] });
-        }
-        if (sql.includes('INSERT INTO player_tracks')) {
-          return Promise.resolve({ rows: [] });
-        }
-        if (sql.includes('UPDATE players SET money')) {
-          return Promise.resolve({ rows: [{ money: 13 }] });
-        }
-        return Promise.resolve({ rows: [] });
-      });
+    it('logs one build action per section for the turn', async () => {
+      await PlayerService.buildTrackForPlayer(gameId, playerId, newSegments);
 
-      const result = await PlayerService.buildTrackForPlayer(
-        gameId, playerId, newSegments, [], cost,
-      );
+      const params = queryCall('INSERT INTO turn_actions')![1] as unknown[];
+      expect(params.slice(0, 3)).toEqual([playerId, gameId, 3]);
+      const actions = JSON.parse(params[3] as string);
+      expect(actions).toHaveLength(2);
+      expect(actions[0]).toMatchObject({ kind: 'build', majorCityStart: '41,42', segment: { cost: 2 } });
+    });
+
+    it('builds from a major city when the player has no track row yet', async () => {
+      mockDatabase({ money: 20, stored: [] });
+
+      const result = await PlayerService.buildTrackForPlayer(gameId, playerId, newSegments);
 
       expect(result.remainingMoney).toBe(13);
+    });
+
+    it('reads everything on the transaction client, never through the pool', async () => {
+      await PlayerService.buildTrackForPlayer(gameId, playerId, newSegments);
+
+      expect(mockPool.query).not.toHaveBeenCalled();
     });
   });
 
   describe('insufficient funds', () => {
-    it('should throw when player has less money than cost', async () => {
-      mockClient.query.mockImplementation((sql: string) => {
-        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return Promise.resolve();
-        if (sql.includes('SELECT money')) {
-          return Promise.resolve({ rows: [{ money: 5 }] });
-        }
-        return Promise.resolve({ rows: [] });
-      });
+    it('throws when the player has less money than the recomputed cost', async () => {
+      mockDatabase({ money: 5 });
 
       await expect(
-        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments, existingSegments, cost),
+        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments),
       ).rejects.toThrow('Insufficient funds: need 7, have 5');
     });
 
-    it('should rollback on insufficient funds', async () => {
-      mockClient.query.mockImplementation((sql: string) => {
-        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return Promise.resolve();
-        if (sql.includes('SELECT money')) {
-          return Promise.resolve({ rows: [{ money: 3 }] });
-        }
-        return Promise.resolve({ rows: [] });
-      });
+    it('rolls back on insufficient funds', async () => {
+      mockDatabase({ money: 3 });
 
       await expect(
-        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments, existingSegments, cost),
+        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments),
       ).rejects.toThrow();
 
       expect(mockClient.query).toHaveBeenCalledWith('ROLLBACK');
       expect(mockClient.release).toHaveBeenCalled();
+      expect(queryCall('INSERT INTO player_tracks')).toBeUndefined();
     });
   });
 
   describe('player not found', () => {
-    it('should throw when player does not exist', async () => {
-      mockClient.query.mockImplementation((sql: string) => {
-        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return Promise.resolve();
-        if (sql.includes('SELECT money')) {
-          return Promise.resolve({ rows: [] });
-        }
-        return Promise.resolve({ rows: [] });
-      });
+    it('throws when the player does not exist', async () => {
+      mockDatabase({ money: null });
 
       await expect(
-        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments, existingSegments, cost),
+        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments),
       ).rejects.toThrow('Player not found in game');
     });
   });
 
   describe('transaction rollback on DB failure', () => {
-    it('should rollback when UPSERT fails', async () => {
-      mockClient.query.mockImplementation((sql: string) => {
-        if (sql === 'BEGIN' || sql === 'ROLLBACK') return Promise.resolve();
-        if (sql.includes('SELECT money')) {
-          return Promise.resolve({ rows: [{ money: 50 }] });
-        }
-        if (sql.includes('INSERT INTO player_tracks')) {
-          return Promise.reject(new Error('UPSERT failed'));
-        }
-        return Promise.resolve({ rows: [] });
-      });
+    it('rolls back when the UPSERT fails', async () => {
+      mockDatabase({ failOn: { sql: 'INSERT INTO player_tracks', message: 'UPSERT failed' } });
 
       await expect(
-        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments, existingSegments, cost),
+        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments),
       ).rejects.toThrow('UPSERT failed');
 
       expect(mockClient.query).toHaveBeenCalledWith('ROLLBACK');
       expect(mockClient.release).toHaveBeenCalled();
     });
 
-    it('should rollback when money UPDATE fails', async () => {
-      mockClient.query.mockImplementation((sql: string) => {
-        if (sql === 'BEGIN' || sql === 'ROLLBACK') return Promise.resolve();
-        if (sql.includes('SELECT money')) {
-          return Promise.resolve({ rows: [{ money: 50 }] });
-        }
-        if (sql.includes('INSERT INTO player_tracks')) {
-          return Promise.resolve({ rows: [] });
-        }
-        if (sql.includes('UPDATE players SET money')) {
-          return Promise.reject(new Error('Money update failed'));
-        }
-        return Promise.resolve({ rows: [] });
-      });
+    it('rolls back when the money UPDATE fails', async () => {
+      mockDatabase({ failOn: { sql: 'UPDATE players SET money', message: 'Money update failed' } });
 
       await expect(
-        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments, existingSegments, cost),
+        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments),
       ).rejects.toThrow('Money update failed');
 
       expect(mockClient.query).toHaveBeenCalledWith('ROLLBACK');
     });
 
-    it('should not call UPDATE if UPSERT fails (atomicity)', async () => {
-      mockClient.query.mockImplementation((sql: string) => {
-        if (sql === 'BEGIN' || sql === 'ROLLBACK') return Promise.resolve();
-        if (sql.includes('SELECT money')) {
-          return Promise.resolve({ rows: [{ money: 50 }] });
-        }
-        if (sql.includes('INSERT INTO player_tracks')) {
-          return Promise.reject(new Error('UPSERT failed'));
-        }
-        return Promise.resolve({ rows: [] });
-      });
+    it('does not charge if the UPSERT fails (atomicity)', async () => {
+      mockDatabase({ failOn: { sql: 'INSERT INTO player_tracks', message: 'UPSERT failed' } });
 
       await expect(
-        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments, existingSegments, cost),
+        PlayerService.buildTrackForPlayer(gameId, playerId, newSegments),
       ).rejects.toThrow();
 
-      const updateCalls = mockClient.query.mock.calls.filter(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('UPDATE players SET money'),
-      );
-      expect(updateCalls).toHaveLength(0);
+      expect(queryCall('UPDATE players SET money')).toBeUndefined();
     });
   });
 });

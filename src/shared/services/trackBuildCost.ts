@@ -3,9 +3,10 @@
  * new track section costs (ECU millions).
  *
  * Used by:
+ * - the server (`planTrackBuild`, #308), which prices every section built by a
+ *   human or a bot and ignores any cost the caller sends
  * - the client (`TrackDrawingManager.calculateTrackCost`)
- * - the bots (`computeBuildSegments`)
- * - (planned, #308) the server, to recompute costs submitted by clients
+ * - the bots (`computeBuildSegments`, `findBuildPath`)
  *
  * The function depends only on plain data (row/col/terrain plus a few lookups
  * supplied through {@link SegmentCostContext}), never on Phaser objects, so it
@@ -42,21 +43,22 @@ export interface SegmentCostFerry {
 }
 
 /**
- * How a segment that ends on a ferry port is charged.
- *
- * The client and the bots disagree today; each caller keeps its current
- * behaviour by choosing a mode explicitly.
+ * How a segment that ends on a ferry port is charged. Callers choose a mode
+ * explicitly.
  */
 export enum FerryChargeMode {
   /**
-   * Client behaviour: the builder pays the ferry cost only when none of the
-   * line's two ports is on their track yet; any later segment into either port
-   * costs 0 (before water-crossing surcharge).
+   * The rule, and what the server charges everyone (#308): the builder pays
+   * the ferry cost only when none of the line's two ports is on their track
+   * yet; any later segment into either port costs 0 (before water-crossing
+   * surcharge). Also used by the client and by the bots' segment builder.
    */
   FirstConnectionOnly = 0,
   /**
-   * Bot behaviour: every segment that ends on a ferry port pays the ferry
-   * cost, regardless of the builder's existing track.
+   * Every segment that ends on a ferry port pays the ferry cost, regardless of
+   * the builder's existing track. Not a price anyone is charged: it is the
+   * upper-bound estimate the bots' path search (`findBuildPath`) ranks paths
+   * with, matching its Dijkstra edge weights.
    */
   EveryConnection = 1,
 }

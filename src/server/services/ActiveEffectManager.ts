@@ -189,9 +189,12 @@ export class ActiveEffectManager {
 
   /**
    * Aggregate build restrictions across all active effects (read-only).
+   *
+   * @param client  Pass the caller's transaction client when calling inside a
+   *   transaction (see `getActiveEffects`).
    */
-  async getBuildRestrictions(gameId: string): Promise<BuildRestriction[]> {
-    const effects = await this.getActiveEffects(gameId);
+  async getBuildRestrictions(gameId: string, client?: PoolClient): Promise<BuildRestriction[]> {
+    const effects = await this.getActiveEffects(gameId, client);
     return effects.flatMap(e => e.restrictions.build);
   }
 

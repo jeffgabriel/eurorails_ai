@@ -353,8 +353,10 @@ export class TurnExecutor {
   }
 
   /**
-   * BuildTrack: delegate to PlayerService.buildTrackForPlayer which handles
-   * UPSERT player_tracks and UPDATE money in a transaction.
+   * BuildTrack: delegate to PlayerService.buildTrackForPlayer, which validates
+   * the segments against the build rules, recomputes their cost, and does the
+   * UPSERT player_tracks and UPDATE money in one transaction (issue #308).
+   * The plan's own cost is only an estimate; the result carries what was charged.
    * Audit INSERT and socket emit are best-effort post-commit.
    */
   private static async handleBuildTrack(
@@ -362,18 +364,16 @@ export class TurnExecutor {
     snapshot: WorldSnapshot,
     startTime: number,
   ): Promise<ExecutionResult> {
-    const newSegments = plan.segments ?? [];
-    const cost = plan.estimatedCost ?? newSegments.reduce((s, seg) => s + seg.cost, 0);
+    const plannedSegments = plan.segments ?? [];
+    const plannedCost = plan.estimatedCost ?? plannedSegments.reduce((s, seg) => s + seg.cost, 0);
 
-    // Delegate to PlayerService — handles UPSERT + money deduction in a transaction
+    // Delegate to PlayerService — validation, pricing, UPSERT + money deduction in a transaction
     let buildResult: Awaited<ReturnType<typeof PlayerService.buildTrackForPlayer>>;
     try {
       buildResult = await PlayerService.buildTrackForPlayer(
         snapshot.gameId,
         snapshot.bot.playerId,
-        newSegments,
-        snapshot.bot.existingSegments,
-        cost,
+        plannedSegments,
       );
     } catch (buildError) {
       if (buildError instanceof ActionRestrictionError) {
@@ -394,6 +394,11 @@ export class TurnExecutor {
       throw buildError;
     }
     const { remainingMoney } = buildResult;
+    // What the server charged and stored. It can be below the plan's estimate
+    // (a ferry line is paid for once), never above it. The fallbacks only
+    // matter to callers that stub the service with a partial result.
+    const cost = buildResult.cost ?? plannedCost;
+    const newSegments = buildResult.segments ?? plannedSegments;
 
     // 3. Post-commit: audit record (best-effort — don't let a missing table
     //    undo a successful track build)

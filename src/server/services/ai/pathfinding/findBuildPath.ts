@@ -20,6 +20,13 @@ import {
   TerrainType,
 } from '../../../../shared/types/GameTypes';
 import {
+  computeSegmentBuildCost,
+  FerryChargeMode,
+  SegmentCostContext,
+  SegmentCostFerry,
+  TrackCostCoord,
+} from '../../../../shared/services/trackBuildCost';
+import {
   getHexNeighbors,
   getTerrainCost,
   getWaterCrossingCost,
@@ -131,17 +138,39 @@ class MinHeap {
 /**
  * Convert a path of GridCoord[] into TrackSegments for only the NEW edges.
  *
- * Segment cost = terrain cost + water crossing cost (NO parallel penalty —
- * the penalty affects Dijkstra path selection, not the cost assigned to
- * built segments).
+ * Segment cost comes from the shared track-cost module. NO parallel penalty —
+ * the penalty affects Dijkstra path selection, not the cost assigned to built
+ * segments.
+ *
+ * Ferry ports are priced with `EveryConnection` on purpose. These costs are a
+ * planning estimate: `totalCost` ranks candidate paths, and it must agree with
+ * the Dijkstra edge weights above, which charge the ferry cost for every edge
+ * into a port. The server charges a ferry line once (#308), so this estimate
+ * can only be at or above the real price. Pricing with `FirstConnectionOnly`
+ * here would make a redundant second link into an already-connected port
+ * cost 0 and tie with not building it.
  */
 function pathToSegments(
   path: GridCoord[],
   existingEdges: Set<string>,
   grid: Map<string, GridPointData>,
   majorCityLookup: Map<string, string>,
-  ferryPortCosts: Map<string, number>,
+  ferryByPortKey: Map<string, SegmentCostFerry>,
 ): TrackSegment[] {
+  // Mileposts the builder has track at: existing edges ("r,c-r,c") plus the
+  // segments this path has added so far.
+  const builderNodes = new Set<string>();
+  for (const edge of existingEdges) {
+    for (const nodeKey of edge.split('-')) builderNodes.add(nodeKey);
+  }
+  const costContext: SegmentCostContext<GridPointData> = {
+    isMajorCityPoint: (point: GridPointData): boolean => majorCityLookup.has(makeKey(point.row, point.col)),
+    getFerryAt: (point: GridPointData): SegmentCostFerry | undefined =>
+      ferryByPortKey.get(makeKey(point.row, point.col)),
+    hasBuilderTrackAt: (coord: TrackCostCoord): boolean => builderNodes.has(makeKey(coord.row, coord.col)),
+    ferryChargeMode: FerryChargeMode.EveryConnection,
+  };
+
   const segments: TrackSegment[] = [];
   for (let i = 0; i < path.length - 1; i++) {
     const fromCoord = path[i];
@@ -162,9 +191,6 @@ function pathToSegments(
     const fromPixel = gridToPixel(fromCoord.row, fromCoord.col);
     const toPixel = gridToPixel(toCoord.row, toCoord.col);
 
-    const baseCost = ferryPortCosts.get(toKey) ?? getTerrainCost(toData.terrain);
-    const waterExtra = getWaterCrossingCost(fromCoord.row, fromCoord.col, toCoord.row, toCoord.col);
-
     segments.push({
       from: {
         x: fromPixel.x,
@@ -180,8 +206,10 @@ function pathToSegments(
         col: toCoord.col,
         terrain: toData.terrain,
       },
-      cost: baseCost + waterExtra,
+      cost: computeSegmentBuildCost(fromData, toData, costContext),
     });
+    builderNodes.add(fromKey);
+    builderNodes.add(toKey);
   }
   return segments;
 }
@@ -224,12 +252,16 @@ export function findBuildPath(
 
   // Build ferry port adjacency and cost lookup
   const ferryPortCosts = new Map<string, number>();
+  const ferryByPortKey = new Map<string, SegmentCostFerry>();
   const ferryAdjacency = new Map<string, Array<{ row: number; col: number; cost: number }>>();
   for (const ferry of getFerryEdges()) {
     const aKey = makeKey(ferry.pointA.row, ferry.pointA.col);
     const bKey = makeKey(ferry.pointB.row, ferry.pointB.col);
+    const costFerry: SegmentCostFerry = { cost: ferry.cost, ports: [ferry.pointA, ferry.pointB] };
     ferryPortCosts.set(aKey, ferry.cost);
     ferryPortCosts.set(bKey, ferry.cost);
+    ferryByPortKey.set(aKey, costFerry);
+    ferryByPortKey.set(bKey, costFerry);
     if (!ferryAdjacency.has(aKey)) ferryAdjacency.set(aKey, []);
     if (!ferryAdjacency.has(bKey)) ferryAdjacency.set(bKey, []);
     ferryAdjacency.get(aKey)!.push({ row: ferry.pointB.row, col: ferry.pointB.col, cost: ferry.cost });
@@ -276,7 +308,7 @@ export function findBuildPath(
 
     if (currentKey === toKey) {
       const path = current.path;
-      const segments = pathToSegments(path, existingEdges, grid, majorCityLookup, ferryPortCosts);
+      const segments = pathToSegments(path, existingEdges, grid, majorCityLookup, ferryByPortKey);
       const totalCost = segments.reduce((sum, seg) => sum + seg.cost, 0);
       return { path, segments, totalCost };
     }

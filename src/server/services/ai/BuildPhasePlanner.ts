@@ -26,7 +26,9 @@ import {
   AIActionType,
   GridPoint,
   LlmAttempt,
+  TrackSegment,
 } from '../../../shared/types/GameTypes';
+import { areSegmentsEqual } from '../trackService';
 import { resolveBuildTarget } from './routeHelpers';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
@@ -77,6 +79,15 @@ export interface PhaseBResult {
  * Static-method only; no constructor.
  */
 export class BuildPhasePlanner {
+  /** True when another player's track already joins the two ends of `segment`. */
+  private static isEdgeTakenByOpponent(snapshot: WorldSnapshot, segment: TrackSegment): boolean {
+    return (snapshot.allPlayerTracks ?? []).some(
+      (playerTrack: WorldSnapshot['allPlayerTracks'][number]): boolean =>
+        playerTrack.playerId !== snapshot.bot.playerId &&
+        playerTrack.segments.some((other: TrackSegment): boolean => areSegmentsEqual(other, segment)),
+    );
+  }
+
   /**
    * Run Phase B: capped-city check + build target resolution + build execution.
    *
@@ -178,6 +189,12 @@ export class BuildPhasePlanner {
     if (pendingRebuilds.length > 0 && !phaseAResult.hasDelivery) {
       const activeEffects = snapshot.activeEffects ?? [];
       for (const seg of pendingRebuilds) {
+        // Right of way: if another player has since built across this gap, the
+        // server will refuse the rebuild every turn (#308). Skip it so the bot
+        // falls through to normal routing instead of retrying forever.
+        if (BuildPhasePlanner.isEdgeTakenByOpponent(snapshot, seg)) {
+          continue;
+        }
         const floodStillActive = isFloodRebuildBlocked(activeEffects, seg);
         if (!floodStillActive.blocked) {
           // Flood has cleared — this segment can be rebuilt now

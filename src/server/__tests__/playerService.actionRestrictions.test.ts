@@ -101,7 +101,8 @@ function mpKey(row: number, col: number): string {
 // ── DB setup helpers ──────────────────────────────────────────────────────────
 
 /**
- * Configure mock responses for buildTrackForPlayer DB calls.
+ * Configure mock responses for buildTrackForPlayer DB calls. The player has no
+ * track and no opponents do either, so builds must start from a major city.
  */
 function setupBuildMocks(opts: { money?: number } = {}): void {
   const { money = 50 } = opts;
@@ -110,7 +111,7 @@ function setupBuildMocks(opts: { money?: number } = {}): void {
       return Promise.resolve();
     }
     if (sql.includes('SELECT money')) {
-      return Promise.resolve({ rows: [{ money }] });
+      return Promise.resolve({ rows: [{ money, current_turn_number: 1 }] });
     }
     if (sql.includes('INSERT INTO player_tracks')) {
       return Promise.resolve({ rows: [] });
@@ -152,14 +153,17 @@ function setupPickupMocks(opts: { loads?: LoadType[] } = {}): void {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
+  // Real, legal builds (the server validates them): each leaves a major city
+  // milepost — Berlin (24,51) into clear (24,50); Milano (41,42) into alpine
+  // (40,43) and into mountain (41,43).
   const clearSegments: TrackSegment[] = [
-    makeSegment(1, 1, 1, 2, TerrainType.Clear, 1),
+    makeSegment(24, 51, 24, 50, TerrainType.Clear, 1),
   ];
   const alpineSegments: TrackSegment[] = [
-    makeSegment(1, 1, 2, 2, TerrainType.Alpine, 5),
+    makeSegment(41, 42, 40, 43, TerrainType.Alpine, 5),
   ];
   const mountainSegments: TrackSegment[] = [
-    makeSegment(3, 3, 4, 4, TerrainType.Mountain, 2),
+    makeSegment(41, 42, 41, 43, TerrainType.Mountain, 2),
   ];
 
   beforeEach(() => {
@@ -181,7 +185,7 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     setupBuildMocks();
 
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments, [], 1),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments),
     ).resolves.toBeDefined();
   });
 
@@ -189,17 +193,17 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     setupBuildMocks();
 
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, alpineSegments, [], 5),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, alpineSegments),
     ).resolves.toBeDefined();
   });
 
   it('calls getBuildRestrictions with correct gameId for every build', async () => {
     setupBuildMocks();
 
-    await PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments, [], 1)
+    await PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments)
       .catch(() => {});
 
-    expect(mockActiveEffectManager.getBuildRestrictions).toHaveBeenCalledWith(GAME_ID);
+    expect(mockActiveEffectManager.getBuildRestrictions).toHaveBeenCalledWith(GAME_ID, mockClient);
   });
 
   // ── Snow blocked_terrain: Alpine ─────────────────────────────────────────
@@ -209,14 +213,14 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     const restrictions: BuildRestriction[] = [
       {
         type: 'blocked_terrain',
-        zone: [mpKey(2, 2)], // destination of alpineSegments
+        zone: [mpKey(40, 43)], // destination of alpineSegments
       },
     ];
     mockActiveEffectManager.getBuildRestrictions.mockResolvedValue(restrictions);
     setupBuildMocks();
 
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, alpineSegments, [], 5),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, alpineSegments),
     ).rejects.toThrow();
   });
 
@@ -224,14 +228,14 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     const restrictions: BuildRestriction[] = [
       {
         type: 'blocked_terrain',
-        zone: [mpKey(2, 2)],
+        zone: [mpKey(40, 43)],
       },
     ];
     mockActiveEffectManager.getBuildRestrictions.mockResolvedValue(restrictions);
     setupBuildMocks();
 
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, alpineSegments, [], 5),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, alpineSegments),
     ).rejects.toThrow(/block|restrict|Snow|terrain/i);
   });
 
@@ -241,14 +245,14 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     const restrictions: BuildRestriction[] = [
       {
         type: 'blocked_terrain',
-        zone: [mpKey(4, 4)], // destination of mountainSegments
+        zone: [mpKey(41, 43)], // destination of mountainSegments
       },
     ];
     mockActiveEffectManager.getBuildRestrictions.mockResolvedValue(restrictions);
     setupBuildMocks();
 
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, mountainSegments, [], 2),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, mountainSegments),
     ).rejects.toThrow();
   });
 
@@ -263,7 +267,7 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     setupBuildMocks();
 
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, mountainSegments, [], 2),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, mountainSegments),
     ).resolves.toBeDefined();
   });
 
@@ -280,7 +284,7 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     setupBuildMocks();
 
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments, [], 1),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments),
     ).resolves.toBeDefined();
   });
 
@@ -297,7 +301,7 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     setupBuildMocks();
 
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments, [], 1),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments),
     ).rejects.toThrow();
   });
 
@@ -312,7 +316,7 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     setupBuildMocks();
 
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments, [], 1),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments),
     ).rejects.toThrow(/build|strike|restrict/i);
   });
 
@@ -327,7 +331,7 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     setupBuildMocks();
 
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments, [], 1),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments),
     ).resolves.toBeDefined();
   });
 
@@ -336,11 +340,11 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
   it('calls getActiveEffects to check for Flood rebuild blocking', async () => {
     setupBuildMocks();
 
-    await PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments, [], 1)
+    await PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments)
       .catch(() => {});
 
     // After implementation: getActiveEffects must be called to check Flood
-    expect(mockActiveEffectManager.getActiveEffects).toHaveBeenCalledWith(GAME_ID);
+    expect(mockActiveEffectManager.getActiveEffects).toHaveBeenCalledWith(GAME_ID, mockClient);
   });
 
   it('allows build when no Flood effect is active', async () => {
@@ -348,7 +352,7 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     setupBuildMocks();
 
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments, [], 1),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments),
     ).resolves.toBeDefined();
   });
 
@@ -371,10 +375,10 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     // Rhine river segments will need to be identified by getRiverEdgeKeys
     // The build segments may or may not cross the Rhine — the test verifies
     // that the check is attempted (getActiveEffects is called)
-    await PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments, [], 1)
+    await PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments)
       .catch(() => {});
 
-    expect(mockActiveEffectManager.getActiveEffects).toHaveBeenCalledWith(GAME_ID);
+    expect(mockActiveEffectManager.getActiveEffects).toHaveBeenCalledWith(GAME_ID, mockClient);
   });
 });
 
@@ -906,7 +910,7 @@ describe('PlayerService — concurrent restrictions (Snow + Strike)', () => {
     const restrictions: BuildRestriction[] = [
       {
         type: 'blocked_terrain',
-        zone: [mpKey(2, 2)],
+        zone: [mpKey(40, 43)],
         // No blockedTerrain — zone is pre-filtered by ActiveEffectManager
       },
       {
@@ -919,9 +923,9 @@ describe('PlayerService — concurrent restrictions (Snow + Strike)', () => {
     mockActiveEffectManager.getPickupDeliveryRestrictions.mockResolvedValue([]);
     setupBuildMocks();
 
-    const alpineSegments = [makeSegment(1, 1, 2, 2, TerrainType.Alpine, 5)];
+    const alpineSegments = [makeSegment(41, 42, 40, 43, TerrainType.Alpine, 5)];
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, alpineSegments, [], 5),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, alpineSegments),
     ).rejects.toThrow();
   });
 
@@ -962,9 +966,9 @@ describe('PlayerService.buildTrackForPlayer — Flood expiry', () => {
     mockActiveEffectManager.getActiveEffects.mockResolvedValue([]);
     setupBuildMocks();
 
-    const clearSegments = [makeSegment(1, 1, 1, 2, TerrainType.Clear, 1)];
+    const clearSegments = [makeSegment(24, 51, 24, 50, TerrainType.Clear, 1)];
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments, [], 1),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments),
     ).resolves.toBeDefined();
   });
 
@@ -987,9 +991,9 @@ describe('PlayerService.buildTrackForPlayer — Flood expiry', () => {
     mockActiveEffectManager.getActiveEffects.mockResolvedValue([snowEffect]);
     setupBuildMocks();
 
-    const clearSegments = [makeSegment(1, 1, 1, 2, TerrainType.Clear, 1)];
+    const clearSegments = [makeSegment(24, 51, 24, 50, TerrainType.Clear, 1)];
     await expect(
-      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments, [], 1),
+      PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, clearSegments),
     ).resolves.toBeDefined();
   });
 });
