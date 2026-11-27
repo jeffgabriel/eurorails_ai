@@ -368,13 +368,19 @@ export class TrainMovementManager {
 
     // If arriving at a ferry port, set up ferry state and end movement
     if (point.terrain === TerrainType.FerryPort) {
-      currentPlayer.trainState.remainingMovement = 0;
-
       // Check if this is a ferry return trip (crossing from one ferry port to the other)
       // In that case, we should NOT set up a new ferry crossing - the player has
       // completed their crossing and should stay at this ferry port
       // Use the already-computed value from early in the method
       const isReturnTrip = isMovingBackAcrossFerryEarly;
+
+      if (isReturnTrip) {
+        // A direct crossing. The server accepts it only as the first move of the
+        // turn and then holds the turn to half rate; MovementExecutor takes the
+        // movement left from the server's answer.
+        return { canMove: true, endMovement: false, message: "Ferry crossed - moving at half rate", distance };
+      }
+      currentPlayer.trainState.remainingMovement = 0;
 
       // Set ferry state if ferry connection exists AND this is NOT a return trip
       if (point.ferryConnection && !isReturnTrip) {
@@ -387,13 +393,6 @@ export class TrainMovementManager {
           currentSide: isCurrentFrom ? from : to,
           otherSide: isCurrentFrom ? to : from,
         };
-      } else if (isReturnTrip) {
-        // For return trips, we don't set ferry state (to prevent teleportation),
-        // but we DO need to set justCrossedFerry so half-speed applies next turn.
-        // The ferry crossing is complete when the return trip move happens.
-        currentPlayer.trainState.justCrossedFerry = true;
-        // Clear movement history since we're at a new location after ferry crossing
-        currentPlayer.trainState.movementHistory = [];
       }
       return { canMove: true, endMovement: true, message: "Ferry port reached - ending movement", distance };
     }

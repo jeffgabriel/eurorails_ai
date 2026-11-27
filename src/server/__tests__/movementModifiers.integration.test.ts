@@ -634,38 +634,39 @@ describe('Movement modifiers (#313)', () => {
       expect(Number(row.money)).toBe(50);
     }
 
-    it('refuses a crossgrade after the train has moved this turn', async () => {
+    it('allows a crossgrade after the train has moved, and refuses any move after it', async () => {
       await createGame({ trainType: TrainType.FastFreight });
       expect((await move(at(8))).status).toBe(200);
 
-      await expectRefusedUnchanged(await purchase('crossgrade', TrainType.HeavyFreight), TrainType.FastFreight);
+      expect((await purchase('crossgrade', TrainType.HeavyFreight)).status).toBe(200);
+      expect((await moverRow()).train_type).toBe(TrainType.HeavyFreight);
 
-      // The Fast Freight keeps the 4 mileposts it had left.
-      expect((await move(at(12))).status).toBe(200);
+      const res = await move(at(9));
+      expect(res.status).toBe(400);
+      expect(res.body.details).toMatch(/cannot move after a train upgrade or crossgrade/);
+      expect((await moverRow()).position_col).toBe(at(8).col);
     });
 
-    it('refuses an upgrade after the train has moved this turn', async () => {
+    it('allows an upgrade after the train has moved, and refuses any move after it', async () => {
       await createGame();
       expect((await move(at(3))).status).toBe(200);
-      await expectRefusedUnchanged(await purchase('upgrade', TrainType.FastFreight), TrainType.Freight);
-    });
 
-    it('allows crossgrade then move, at the new train\'s speed', async () => {
-      await createGame({ trainType: TrainType.FastFreight });
-      expect((await purchase('crossgrade', TrainType.HeavyFreight)).status).toBe(200);
-
-      expect((await move(at(10))).status).toBe(400);
-      const res = await move(at(9));
-      expect(res.status).toBe(200);
-      expect(res.body.remainingMovement).toBe(0);
-    });
-
-    it('allows upgrade then move, at the new train\'s speed', async () => {
-      await createGame();
       expect((await purchase('upgrade', TrainType.FastFreight)).status).toBe(200);
-      const res = await move(at(12));
-      expect(res.status).toBe(200);
-      expect(res.body.milepostsMoved).toBe(12);
+
+      expect((await move(at(4))).status).toBe(400);
+      const players = await PlayerService.getPlayers(gameId, moverUserId);
+      expect(players.find((p) => p.id === moverPlayerId)?.trainState.remainingMovement).toBe(0);
+    });
+
+    it('refuses a move after a purchase even when the train had not moved yet', async () => {
+      for (const [kind, from, to] of [
+        ['upgrade', TrainType.Freight, TrainType.FastFreight],
+        ['crossgrade', TrainType.FastFreight, TrainType.HeavyFreight],
+      ] as Array<['upgrade' | 'crossgrade', TrainType, TrainType]>) {
+        await createGame({ trainType: from });
+        expect((await purchase(kind, to)).status).toBe(200);
+        expect((await move(at(1))).status).toBe(400);
+      }
     });
 
     it('refuses any purchase after track was built this turn', async () => {

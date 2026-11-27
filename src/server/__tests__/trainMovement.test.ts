@@ -2,6 +2,7 @@
  * #312: server-side movement rules — the per-turn milepost budget and the
  * route a move is charged for.
  * #313: event modifiers — half rate, blocked mileposts, Rail Strike.
+ * #314: ferry crossings and the reversal rule.
  */
 
 import {
@@ -13,7 +14,14 @@ import {
   beginMoveAt,
   computeRemainingMovement,
   enterMilepost,
+  FerryAccess,
+  canReverseAt,
   findMovePathWithinBudget,
+  hasMovedThisTurn,
+  isFerryCrossing,
+  isFerryPortMilepost,
+  reversalBlockedAfterPath,
+  reversalBlockedMilepost,
   getTurnMovementAllowance,
   halfRateAllowance,
   hasNoMovementEventRules,
@@ -165,6 +173,7 @@ describe('findMovePathWithinBudget', () => {
       ownersUsed: new Set(),
       mileposts: 0,
       stateAfter: { remaining: 0, halfRateApplied: false },
+      usedFerry: false,
     });
   });
 
@@ -286,20 +295,184 @@ describe('findMovePathWithinBudget', () => {
     expect(result?.path).toHaveLength(2);
   });
 
-  it('does not count a ferry edge (ferry rules are issue #314)', () => {
+  describe('ferry lines (#314)', () => {
     const ferry = getFerryEdges()[0];
     const landing: Node = { row: 2000, col: 2000 };
-    const beyond: Node = { row: 2000, col: 2001 };
-    const allTracks = [track(ME, [segment(ferry.pointB, landing), segment(landing, beyond)])];
-    const result = findMovePathWithinBudget({
-      allTracks,
-      from: ferry.pointA,
-      to: beyond,
-      currentPlayerId: ME,
-      maxMileposts: 2,
+    const allTracks = [track(ME, [segment(ferry.pointB, landing), ...line(2000, 2000, 9)])];
+    const search = (from: Node, to: Node, ferryAccess?: FerryAccess, maxMileposts: number = 9) =>
+      findMovePathWithinBudget({ allTracks, from, to, currentPlayerId: ME, maxMileposts, ferryAccess });
+
+    it('does not use a ferry line by default', () => {
+      expect(search(ferry.pointA, ferry.pointB)).toBeNull();
+      expect(search(ferry.pointA, landing, FerryAccess.None)).toBeNull();
     });
-    expect(result?.mileposts).toBe(2);
-    expect(result?.path).toHaveLength(3);
+
+    it('crosses as the first edge for no mileposts and halves the rest of the turn', () => {
+      const crossing = search(ferry.pointA, ferry.pointB, FerryAccess.FromStart);
+      expect(crossing?.mileposts).toBe(0);
+      expect(crossing?.usedFerry).toBe(true);
+      expect(crossing?.stateAfter).toEqual({ remaining: 5, halfRateApplied: true });
+
+      // port B -> landing is 1 milepost, then 4 more: 5 in all at half rate
+      const far = search(ferry.pointA, { row: 2000, col: 2004 }, FerryAccess.FromStart);
+      expect(far?.mileposts).toBe(5);
+      expect(far?.stateAfter).toEqual({ remaining: 0, halfRateApplied: true });
+      expect(search(ferry.pointA, { row: 2000, col: 2005 }, FerryAccess.FromStart)).toBeNull();
+    });
+
+    it('does not halve again a turn that is already at half rate', () => {
+      const result = findMovePathWithinBudget({
+        allTracks,
+        from: ferry.pointA,
+        to: ferry.pointB,
+        currentPlayerId: ME,
+        maxMileposts: 5,
+        halfRateApplied: true,
+        ferryAccess: FerryAccess.FromStart,
+      });
+      expect(result?.stateAfter).toEqual({ remaining: 5, halfRateApplied: true });
+    });
+
+    it('does not run through a ferry line that is not the first edge', () => {
+      expect(search({ row: 2000, col: 2002 }, ferry.pointA, FerryAccess.FromStart)).toBeNull();
+      // only the diagnostic mode does
+      const open = search({ row: 2000, col: 2002 }, ferry.pointA, FerryAccess.Unrestricted);
+      expect(open?.mileposts).toBe(3);
+      expect(open?.stateAfter.halfRateApplied).toBe(false);
+    });
+  });
+
+  describe('noReturnTo (#314)', () => {
+    const allTracks = [track(ME, line(1000, 1000, 6))];
+    const from: Node = { row: 1000, col: 1003 };
+
+    it('refuses a route whose first edge leads back to the milepost', () => {
+      const args = { allTracks, from, currentPlayerId: ME, maxMileposts: 9, noReturnTo: { row: 1000, col: 1002 } };
+      expect(findMovePathWithinBudget({ ...args, to: { row: 1000, col: 1001 } })).toBeNull();
+      expect(findMovePathWithinBudget({ ...args, to: { row: 1000, col: 1005 } })?.mileposts).toBe(2);
+    });
+
+    it('may turn round on a city milepost further on', () => {
+      // 1003 -> Berlin (24,52) and back through 1003 to 1001
+      const viaCity = [track(ME, [...line(1000, 1000, 6), segment(from, { row: 24, col: 52 })])];
+      const result = findMovePathWithinBudget({
+        allTracks: viaCity,
+        from,
+        to: { row: 1000, col: 1001 },
+        currentPlayerId: ME,
+        maxMileposts: 9,
+        noReturnTo: { row: 1000, col: 1002 },
+      });
+      expect(result?.mileposts).toBe(4);
+      expect(result?.path[0].to).toEqual({ row: 24, col: 52 });
+    });
+
+    it('takes another way round when there is one', () => {
+      // a loop: 1003 -> 2000,1 -> 1001
+      const loop = [
+        track(ME, [
+          ...line(1000, 1000, 6),
+          segment(from, { row: 2000, col: 1 }),
+          segment({ row: 2000, col: 1 }, { row: 1000, col: 1001 }),
+        ]),
+      ];
+      const result = findMovePathWithinBudget({
+        allTracks: loop,
+        from,
+        to: { row: 1000, col: 1001 },
+        currentPlayerId: ME,
+        maxMileposts: 9,
+        noReturnTo: { row: 1000, col: 1002 },
+      });
+      expect(result?.path.map((edge) => edge.to)).toEqual([
+        { row: 2000, col: 1 },
+        { row: 1000, col: 1001 },
+      ]);
+    });
+  });
+});
+
+// ── #314: ferry ports and reversal ───────────────────────────────────────────
+
+describe('isFerryPortMilepost / canReverseAt', () => {
+  it('is true for both ends of every ferry line, whatever their terrain', () => {
+    const cityEnds: Node[] = [];
+    for (const ferry of getFerryEdges()) {
+      for (const end of [ferry.pointA, ferry.pointB]) {
+        expect(isFerryPortMilepost(end.row, end.col)).toBe(true);
+        expect(canReverseAt(end.row, end.col)).toBe(true);
+        if (isCityMilepost(end.row, end.col)) cityEnds.push(end);
+      }
+    }
+    // Dublin and Belfast are ferry ends with city terrain
+    expect(cityEnds.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('is true for a city milepost and false for a plain one or one off the map', () => {
+    expect(canReverseAt(24, 52)).toBe(true); // Berlin
+    expect(isFerryPortMilepost(24, 52)).toBe(false);
+    expect(canReverseAt(1000, 1000)).toBe(false);
+  });
+
+  it('knows a ferry crossing in either direction', () => {
+    const ferry = getFerryEdges()[0];
+    expect(isFerryCrossing(ferry.pointA, ferry.pointB)).toBe(true);
+    expect(isFerryCrossing(ferry.pointB, ferry.pointA)).toBe(true);
+    expect(isFerryCrossing(ferry.pointA, { row: 1000, col: 1000 })).toBe(false);
+  });
+});
+
+describe('reversalBlockedMilepost', () => {
+  const here: Node = { row: 1000, col: 1003 };
+  const before: Node = { row: 1000, col: 1002 };
+  const arrival = { from: { row: 1000, col: 1000 }, to: here, arrivedFrom: before };
+
+  it('is the milepost the train arrived from, this turn', () => {
+    expect(reversalBlockedMilepost({ position: here, thisTurnPath: [arrival], previousTurnPath: null })).toEqual(before);
+  });
+
+  it('carries over from the previous turn when the train has not moved yet', () => {
+    expect(reversalBlockedMilepost({ position: here, thisTurnPath: [], previousTurnPath: [arrival] })).toEqual(before);
+    expect(reversalBlockedMilepost({ position: here, thisTurnPath: undefined, previousTurnPath: [arrival] })).toEqual(before);
+  });
+
+  it('is null after a whole turn standing still', () => {
+    expect(reversalBlockedMilepost({ position: here, thisTurnPath: [], previousTurnPath: [] })).toBeNull();
+    expect(reversalBlockedMilepost({ position: here, thisTurnPath: null, previousTurnPath: null })).toBeNull();
+  });
+
+  it('is null on a city milepost or a ferry port', () => {
+    const berlin: Node = { row: 24, col: 52 };
+    const port = getFerryEdges()[0].pointA;
+    for (const position of [berlin, port]) {
+      const path = [{ from: before, to: position, arrivedFrom: before }];
+      expect(reversalBlockedMilepost({ position, thisTurnPath: path, previousTurnPath: null })).toBeNull();
+    }
+  });
+
+  it('is null when the last segment does not end where the train stands or has no arrivedFrom', () => {
+    const elsewhere = [{ from: before, to: { row: 1000, col: 1009 }, arrivedFrom: { row: 1000, col: 1008 } }];
+    expect(reversalBlockedMilepost({ position: here, thisTurnPath: elsewhere, previousTurnPath: null })).toBeNull();
+    const legacy = [{ from: before, to: here }];
+    expect(reversalBlockedMilepost({ position: here, thisTurnPath: legacy, previousTurnPath: null })).toBeNull();
+    const placement = [{ from: null, to: here, arrivedFrom: null }];
+    expect(reversalBlockedMilepost({ position: here, thisTurnPath: placement, previousTurnPath: null })).toBeNull();
+    expect(reversalBlockedMilepost({ position: null, thisTurnPath: [arrival], previousTurnPath: null })).toBeNull();
+  });
+});
+
+describe('reversalBlockedAfterPath / hasMovedThisTurn', () => {
+  it('is the milepost before the end of the route, unless the route ends where a train may reverse', () => {
+    expect(reversalBlockedAfterPath([{ row: 1000, col: 1000 }, { row: 1000, col: 1001 }, { row: 1000, col: 1002 }]))
+      .toEqual({ row: 1000, col: 1001 });
+    expect(reversalBlockedAfterPath([{ row: 1000, col: 1000 }, { row: 24, col: 52 }])).toBeNull();
+    expect(reversalBlockedAfterPath([{ row: 1000, col: 1000 }])).toBeNull();
+  });
+
+  it('counts any recorded segment as having moved', () => {
+    expect(hasMovedThisTurn([{ cost: 0 }])).toBe(true);
+    expect(hasMovedThisTurn([])).toBe(false);
+    expect(hasMovedThisTurn(null)).toBe(false);
   });
 });
 

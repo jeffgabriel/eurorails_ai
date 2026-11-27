@@ -698,7 +698,7 @@ export class GameScene extends Phaser.Scene {
     // Handle ferry state transitions and teleportation at turn start
     await this.handleFerryTurnTransition(newCurrentPlayer);
 
-    this.resetMovementForNewTurn(newCurrentPlayer);
+    this.resetMovementForNewTurn(this.currentPlayerObject(newCurrentPlayer));
   }
 
   /**
@@ -712,12 +712,34 @@ export class GameScene extends Phaser.Scene {
     );
 
     if (result.newPosition) {
+      // The crossing is a server move: the first move of the turn, from the port
+      // the train ended the last turn on. The server then holds the rest of the
+      // turn to half rate.
+      if (this.playerStateService.getLocalPlayerId() === player.id) {
+        const crossed = await this.playerStateService.moveTrainWithFees(
+          {
+            x: result.newPosition.x,
+            y: result.newPosition.y,
+            row: result.newPosition.row,
+            col: result.newPosition.col,
+          },
+          this.gameState.id
+        );
+        if (!crossed) {
+          // Refused: the train stays on the port and the turn is not halved.
+          const current = this.gameState.players.find((p) => p.id === player.id);
+          if (current?.trainState) current.trainState.justCrossedFerry = false;
+          player.trainState.justCrossedFerry = false;
+          return;
+        }
+      }
       await this.uiManager.updateTrainPosition(
         player.id,
         result.newPosition.x,
         result.newPosition.y,
         result.newPosition.row,
-        result.newPosition.col
+        result.newPosition.col,
+        { persist: false }
       );
     }
 
@@ -750,6 +772,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
+   * The live object for a player. A server state patch (the ferry crossing's
+   * move-train call sends one) replaces the objects in gameState.players, so a
+   * reference held across an await can be stale.
+   */
+  private currentPlayerObject(player: Player): Player {
+    return this.gameState.players.find((p) => p.id === player.id) ?? player;
+  }
+
+  /**
    * Reset a player's movement allowance for a new turn, halving it after a ferry
    * crossing or when the train starts the turn inside an active Snow zone (the
    * server enforces the Snow half rate; this keeps the displayed allowance in step).
@@ -767,6 +798,14 @@ export class GameScene extends Phaser.Scene {
       (useGameStore.getState().activeEffects ?? []).some(
         (effect) => effect.cardType === EventCardType.Snow && effect.affectedZone.includes(positionKey),
       );
+    // Moves of the turn that just ended become the train's direction; the history
+    // itself is per turn. With no moves last turn, the direction the server sent
+    // with the refreshed player (none after a turn standing still) stands.
+    const history = player.trainState.movementHistory ?? [];
+    if (history.length > 0) {
+      player.trainState.lastTraversedEdge = history[history.length - 1];
+      player.trainState.movementHistory = [];
+    }
     if (player.trainState.justCrossedFerry || startsInSnowZone) {
       player.trainState.remainingMovement = Math.ceil(trainProps.speed / 2);
       player.trainState.justCrossedFerry = false;
@@ -924,7 +963,7 @@ export class GameScene extends Phaser.Scene {
       await this.handleFerryTurnTransition(newCurrentPlayer);
       if (mySeq !== this.turnChangeSeq) return;
 
-      this.resetMovementForNewTurn(newCurrentPlayer);
+      this.resetMovementForNewTurn(this.currentPlayerObject(newCurrentPlayer));
 
       this.uiManager.updateGameState(this.gameState);
       this.uiManager.setupUIOverlay();
@@ -1076,6 +1115,9 @@ export class GameScene extends Phaser.Scene {
    * GameSocketCoordinatorDeps.onApplySpriteUpdates).
    */
   private applySpriteUpdates(updates: RefreshSpriteUpdate[]): void {
+    // Before the UI manager exists there are no sprites to move; create() places
+    // the trains from the patched state (same startup window as refreshGameUI).
+    if (!this.uiManager) return;
     if (!this.gameState.trainSprites) {
       this.gameState.trainSprites = new Map();
     }
@@ -1095,6 +1137,10 @@ export class GameScene extends Phaser.Scene {
 
   /** Refresh the UI overlay and loads reference panel after a server-driven state change. */
   private refreshGameUI(): void {
+    // The socket coordinator starts before the UI manager exists in create(); a
+    // state patch that lands in between has nothing to refresh yet (create()
+    // builds the overlay from the patched state).
+    if (!this.uiManager) return;
     this.uiManager.setupUIOverlay();
     // issue #176: hands are public — keep the reference panel in sync too.
     this.loadsReferencePanel?.setGameState(this.gameState);

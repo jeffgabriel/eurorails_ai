@@ -134,6 +134,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import type { StrategicRoute, GameContext } from '../../../shared/types/GameTypes';
 import { getFerryEdges } from '../../../shared/services/majorCityGroups';
+import { loadGridPoints } from '../../services/MapTopology';
 
 // ─── Geometry constants ───────────────────────────────────────────────────────
 
@@ -452,5 +453,56 @@ describe('ActionResolver.resolveMove — ferry truncation warn probe (R5)', () =
       // Guard did NOT fire: ferry port was not detected — different type of failure
       expect(warnCalls.some(msg => msg.includes('[Ferry] Path truncated'))).toBe(false);
     }
+  });
+});
+
+// ─── #314: the server's ferry and reversal rules ─────────────────────────────
+
+describe('ActionResolver.resolveMove — server ferry and reversal rules (#314)', () => {
+  it('does not cross from a port the bot reached earlier this turn', async () => {
+    const snapshot = makeSnapshot(HARWICH);
+    snapshot.bot.movedThisTurn = true;
+
+    const result = await ActionResolver.resolveMove({ to: 'Holland' }, snapshot, 4);
+
+    expect(result.success).toBe(false);
+  });
+
+  it('stops on the near end of a ferry line whose end is a city (Dublin)', async () => {
+    const ferry = getFerryEdges().find(f => f.name === 'Dublin_Liverpool');
+    if (!ferry) throw new Error('Dublin_Liverpool ferry not found');
+    const grid = loadGridPoints();
+    const isCity = (p: { row: number; col: number }): boolean =>
+      grid.get(`${p.row},${p.col}`)?.terrain === TerrainType.SmallCity;
+    const dublin = isCity(ferry.pointA) ? ferry.pointA : ferry.pointB;
+    const liverpool = isCity(ferry.pointA) ? ferry.pointB : ferry.pointA;
+    expect(isCity(dublin)).toBe(true);
+
+    const segments = [
+      makeSegment(1000, 1, 1000, 2),
+      makeSegment(1000, 2, dublin.row, dublin.col),
+      makeSegment(liverpool.row, liverpool.col, 1000, 5),
+    ];
+    const snapshot = makeSnapshot({ row: 1000, col: 1 });
+    snapshot.bot.existingSegments = segments;
+    snapshot.allPlayerTracks = [{ playerId: BOT_PLAYER_ID, segments }];
+
+    const result = await ActionResolver.resolveMove({ toRow: 1000, toCol: 5 }, snapshot, 9);
+
+    expect(result.success).toBe(true);
+    const plan = result.plan as TurnPlanMoveTrain;
+    expect(plan.path[plan.path.length - 1]).toEqual({ row: dublin.row, col: dublin.col });
+  });
+
+  it('does not plan a move straight back the way the bot came, away from a city', async () => {
+    const snapshot = makeSnapshot({ row: 17, col: 32 });
+    snapshot.bot.reversalBlockedTo = { row: 16, col: 32 };
+
+    const back = await ActionResolver.resolveMove({ toRow: 15, toCol: 30 }, snapshot, 9);
+    expect(back.success).toBe(false);
+    expect(back.error).toMatch(/reverse/i);
+
+    const onward = await ActionResolver.resolveMove({ toRow: 18, toCol: 34 }, snapshot, 9);
+    expect(onward.success).toBe(true);
   });
 });

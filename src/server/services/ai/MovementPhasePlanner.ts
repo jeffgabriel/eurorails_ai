@@ -30,7 +30,7 @@ import {
   TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
 import { isMovementHalfRate, isPickupDeliveryBlocked, getCityMilepointKey } from '../../services/restrictionPredicates';
-import { movementEventRulesFrom, walkMovePath } from '../trainMovement';
+import { movementEventRulesFrom, recordPlannedMove, walkMovePath } from '../trainMovement';
 import {
   resolveBuildTarget,
   applyStopEffectToLocalState,
@@ -566,6 +566,7 @@ export class MovementPhasePlanner {
           context.position = { row: dest.row, col: dest.col, city: cityName };
           snapshot.bot.position = { row: dest.row, col: dest.col };
         }
+        recordPlannedMove(snapshot.bot, movePlan.path);
 
         // Ferry arrival guard takes precedence over arrival stop action (R5).
         if (dest) {
@@ -791,6 +792,7 @@ export class MovementPhasePlanner {
                   const a3Miles = computeEffectivePathLength(a3MovePlan.path, majorCityLookupA3);
 
                   plans.push(a3MoveResult.plan);
+                  recordPlannedMove(snapshot.bot, a3MovePlan.path);
                   remainingBudget = budgetAfterMove(
                     a3MovePlan.path,
                     a3BudgetBeforeMove,
