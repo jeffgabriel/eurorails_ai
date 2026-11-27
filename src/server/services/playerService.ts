@@ -2632,6 +2632,18 @@ export class PlayerService {
         if (turnBuildCost > 15) {
           throw new Error("Cannot crossgrade after spending more than 15M on track this turn");
         }
+        // A crossgrade changes the train's speed, so it must come before any
+        // movement this turn: the movement already used was counted against
+        // the old train. (An upgrade never lowers speed and stays allowed.)
+        const movedResult = await client.query(
+          `SELECT movement_path FROM movement_history
+           WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
+          [playerId, gameId, Number(playerRow.turnNumber ?? 1)]
+        );
+        const movedPath: unknown = movedResult.rows[0]?.movement_path;
+        if (Array.isArray(movedPath) && movedPath.length > 0) {
+          throw new Error("Cannot crossgrade after moving this turn");
+        }
         const targetCapacity = TRAIN_PROPERTIES[targetTrainType]?.capacity;
         if (typeof targetCapacity !== "number") {
           throw new Error("Invalid train type");

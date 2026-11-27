@@ -485,6 +485,8 @@ export class ActionResolver {
     details: Record<string, string | number>,
     snapshot: WorldSnapshot,
     remainingSpeed?: number,
+    /** True when this turn's movement has already been halved (Snow), wherever the bot now stands. */
+    halfRateAlreadyApplied: boolean = false,
   ): Promise<ResolvedAction> {
     const toRow = details.toRow;
     const toCol = details.toCol;
@@ -635,6 +637,7 @@ export class ActionResolver {
         // halved for a ferry crossing, or when the caller passed the budget left for
         // a train standing in the zone (MovementPhasePlanner halves it there).
         const alreadyHalved =
+          halfRateAlreadyApplied ||
           ferryCrossing !== null ||
           snapshot.bot.ferryHalfSpeed === true ||
           (remainingSpeed !== undefined && eventRules.halfRateZone.has(fromKey));
@@ -1079,6 +1082,7 @@ export class ActionResolver {
           a.details ?? {},
           currentSnapshot,
           budgetRemaining,
+          budget.halfRateApplied,
         );
       } else {
         result = await ActionResolver.resolveSingleAction(

@@ -163,6 +163,21 @@ describe('ActionResolver.resolveMove — event movement rules (#313)', () => {
     expect(path?.[path.length - 1]).toEqual(at(5));
   });
 
+  it('does not halve again when the turn was already halved and the bot re-enters a zone', async () => {
+    // The bot stands outside the zone with 5 left of an already halved turn.
+    const zone = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(key);
+    const snapshot = makeSnapshot([snow(zone)]);
+    const again = await ActionResolver.resolveMove({ toRow: TARGET.row, toCol: TARGET.col }, snapshot, 5);
+    const once = await ActionResolver.resolveMove({ toRow: TARGET.row, toCol: TARGET.col }, snapshot, 5, true);
+    const lastOf = (result: typeof once): { row: number; col: number } | undefined => {
+      const path = result.success ? (result.plan as TurnPlanMoveTrain).path : [];
+      return path[path.length - 1];
+    };
+    // Without the flag the 3 left on entering are halved to 2: stop at 4.
+    expect(lastOf(again)).toEqual(at(4));
+    expect(lastOf(once)).toEqual(at(5));
+  });
+
   it('stops before a Snow-blocked milepost', async () => {
     const path = await resolveToTarget(makeSnapshot([snow([], [key(3)])]), 9);
     expect(path?.[path.length - 1]).toEqual(at(2));

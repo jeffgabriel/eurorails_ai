@@ -826,7 +826,7 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
 
     expect(result.plans).toContainEqual(movePlan);
     expect(result.hasDelivery).toBe(false);
-    expect(mockResolveMove).toHaveBeenCalledWith({ to: 'Berlin' }, snapshot, 9);
+    expect(mockResolveMove).toHaveBeenCalledWith({ to: 'Berlin' }, snapshot, 9, false);
   });
 
   it('breaks to Phase B when move fails (city unreachable on network)', async () => {
@@ -919,6 +919,7 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
       { toRow: 3, toCol: 3 },
       snapshot,
       9,
+      false,
     );
   });
 
@@ -1127,6 +1128,7 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
       { toRow: 3, toCol: 3 },
       snapshot,
       9,
+      false,
     );
   });
 

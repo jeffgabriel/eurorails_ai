@@ -618,6 +618,47 @@ describe('Movement modifiers (#313)', () => {
     });
   });
 
+  describe('crossgrade and movement in one turn', () => {
+    function purchase(kind: 'upgrade' | 'crossgrade', targetTrainType: TrainType): request.Test {
+      return request(app)
+        .post('/api/players/upgrade-train')
+        .set('Authorization', `Bearer ${moverToken}`)
+        .send({ gameId, kind, targetTrainType });
+    }
+
+    it('refuses a crossgrade after the train has moved this turn', async () => {
+      await createGame({ trainType: TrainType.FastFreight });
+      expect((await move(at(8))).status).toBe(200);
+
+      const res = await purchase('crossgrade', TrainType.HeavyFreight);
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.status).toBeLessThan(500);
+      const row = await moverRow();
+      expect(row.train_type).toBe(TrainType.FastFreight);
+      expect(Number(row.money)).toBe(50);
+
+      // The Fast Freight keeps the 4 mileposts it had left.
+      expect((await move(at(12))).status).toBe(200);
+    });
+
+    it('allows crossgrade then move, at the new train\'s speed', async () => {
+      await createGame({ trainType: TrainType.FastFreight });
+      expect((await purchase('crossgrade', TrainType.HeavyFreight)).status).toBe(200);
+
+      expect((await move(at(10))).status).toBe(400);
+      const res = await move(at(9));
+      expect(res.status).toBe(200);
+      expect(res.body.remainingMovement).toBe(0);
+    });
+
+    it('still allows an upgrade after moving', async () => {
+      await createGame();
+      expect((await move(at(9))).status).toBe(200);
+      expect((await purchase('upgrade', TrainType.FastFreight)).status).toBe(200);
+      expect((await moverRow()).train_type).toBe(TrainType.FastFreight);
+    });
+  });
+
   describe('bots under an active effect', () => {
     it('holds a bot that starts in a Snow zone to half rate', async () => {
       await createGame({ isBot: true });

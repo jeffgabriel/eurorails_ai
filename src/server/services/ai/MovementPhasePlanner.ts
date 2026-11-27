@@ -533,6 +533,7 @@ export class MovementPhasePlanner {
           { to: targetCity },
           snapshot,
           remainingBudget,
+          halfRateApplied,
         );
         if (trace.timing) {
           trace.timing.moveResolveMs += Date.now() - _moveResolveStart;
@@ -777,6 +778,7 @@ export class MovementPhasePlanner {
                   { toRow: previewBuildOrigin.row, toCol: previewBuildOrigin.col },
                   snapshot,
                   remainingBudget,
+                  halfRateApplied,
                 );
                 if (trace.timing) {
                   trace.timing.moveResolveMs += Date.now() - _a3MoveStart;
