@@ -7,8 +7,8 @@
  * caller checks whose turn it is and whether the train is already placed.
  */
 
-import { TerrainType } from "../../shared/types/GameTypes";
-import { gridToPixel, loadGridPoints, makeKey } from "./MapTopology";
+import { gridToPixel, makeKey } from "./MapTopology";
+import { isCityMilepost } from "./trainMovement";
 
 /** Why a train placement was refused. */
 export enum TrainPlacementErrorCode {
@@ -59,12 +59,6 @@ export interface TrainPlacement {
   y: number;
 }
 
-const CITY_TERRAINS: ReadonlySet<TerrainType> = new Set([
-  TerrainType.MajorCity,
-  TerrainType.MediumCity,
-  TerrainType.SmallCity,
-]);
-
 /**
  * Check a requested starting milepost and work out where the train stands.
  *
@@ -85,8 +79,7 @@ export function resolveTrainPlacement(target: unknown): TrainPlacement {
       "A starting milepost with an integer row and col is required",
     );
   }
-  const point = loadGridPoints().get(makeKey(row, col));
-  if (!point || !CITY_TERRAINS.has(point.terrain)) {
+  if (!isCityMilepost(row, col)) {
     throw new TrainPlacementError(
       TrainPlacementErrorCode.NotACity,
       `(${makeKey(row, col)}) is not a city: a train starts at a city`,
