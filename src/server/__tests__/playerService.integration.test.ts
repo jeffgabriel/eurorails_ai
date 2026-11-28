@@ -69,19 +69,6 @@ describe('PlayerService Integration Tests', () => {
         });
     });
 
-    describe('Game Operations', () => {
-        it('should create a new game', async () => {
-            const newGameId = uuidv4();
-            await PlayerService.createGame(newGameId);
-            const result = await db.query('SELECT * FROM games WHERE id = $1', [newGameId]);
-            expect(result.rows.length).toBe(1);
-        });
-
-        it('should not throw when creating duplicate game', async () => {
-            await expect(PlayerService.createGame(gameId)).resolves.not.toThrow();
-        });
-    });
-
     describe('Player Operations', () => {
         it('should create a new player', async () => {
             const player = {
@@ -103,43 +90,6 @@ describe('PlayerService Integration Tests', () => {
             const result = await db.query('SELECT * FROM players WHERE id = $1', [player.id]);
             expect(result.rows.length).toBe(1);
             expect(result.rows[0].loads).toEqual([]);
-        });
-
-        it('should update an existing player', async () => {
-            const playerId = uuidv4();
-            const player = {
-                id: playerId,
-                name: 'Test Player',
-                color: '#FF0000',
-                money: 50,
-                trainType: TrainType.Freight,
-                turnNumber: 1,
-                trainState: {
-                    position: {x: 0, y: 0, row: 0, col: 0},
-                    movementHistory: [],
-                    remainingMovement: 9,
-                    loads: [] as LoadType[]
-                },
-                hand: []
-            };
-            await PlayerService.createPlayer(gameId, player);
-
-            const updatedPlayer = {
-                ...player,
-                name: 'Updated Name',
-                money: 100,
-                trainState: {
-                    ...player.trainState,
-                    loads: [LoadType.Wheat]
-                }
-            };
-            await PlayerService.updatePlayer(gameId, updatedPlayer);
-
-            const result = await db.query('SELECT * FROM players WHERE id = $1', [playerId]);
-            expect(result.rows.length).toBeGreaterThan(0);
-            expect(result.rows[0].name).toBe('Updated Name');
-            expect(result.rows[0].money).toBe(100);
-            expect(result.rows[0].loads).toEqual([LoadType.Wheat]);
         });
 
         it('should prevent duplicate colors in the same game', async () => {

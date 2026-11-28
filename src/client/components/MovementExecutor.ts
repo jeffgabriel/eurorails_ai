@@ -31,8 +31,7 @@ export type TrainPositionUpdater = (
   x: number,
   y: number,
   row: number,
-  col: number,
-  opts?: { persist?: boolean }
+  col: number
 ) => Promise<void>;
 
 /**
@@ -276,15 +275,14 @@ export class MovementExecutor {
         refreshedPlayer.trainState.lastTraversedEdge = undefined;
       }
 
-      // Update train position visually without re-posting (already persisted by move-train)
+      // Show the train at its new position (move-train already stored it)
       if (this.trainPositionUpdater) {
         await this.trainPositionUpdater(
           currentPlayerId,
           destination.x,
           destination.y,
           destination.row,
-          destination.col,
-          { persist: false }
+          destination.col
         );
       }
 

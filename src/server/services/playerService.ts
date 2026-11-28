@@ -21,6 +21,7 @@ import {
   isPickupDeliveryBlocked,
 } from "./restrictionPredicates";
 import { cleanupGameState } from "./gameCleanupService";
+import { resolveTrainPlacement, TrainPlacement, TrainPlacementError, TrainPlacementErrorCode } from "./trainPlacement";
 import { lockPlayerForUserTurn } from "./turnGuard";
 import {
   MovementBudgetState,
@@ -388,21 +389,6 @@ export class PlayerService {
     return color.toLowerCase(); // Normalize to lowercase
   }
 
-  static async gameExists(gameId: string): Promise<boolean> {
-    const query = "SELECT id FROM games WHERE id = $1";
-    const result = await db.query(query, [gameId]);
-    return result.rows.length > 0;
-  }
-
-  static async playerExists(
-    gameId: string,
-    playerId: string
-  ): Promise<boolean> {
-    const query = "SELECT id FROM players WHERE game_id = $1 AND id = $2";
-    const result = await db.query(query, [gameId, playerId]);
-    return result.rows.length > 0;
-  }
-
   /**
    * Verify that a user is a player in the specified game
    * @param gameId - The game ID
@@ -413,15 +399,6 @@ export class PlayerService {
     const query = "SELECT id FROM players WHERE game_id = $1 AND user_id = $2 AND is_deleted = false LIMIT 1";
     const result = await db.query(query, [gameId, userId]);
     return result.rows.length > 0;
-  }
-
-  static async createGame(gameId: string): Promise<void> {
-    const query = `
-            INSERT INTO games (id, status)
-            VALUES ($1, 'setup')
-            ON CONFLICT (id) DO NOTHING
-        `;
-    await db.query(query, [gameId]);
   }
 
   static async createPlayer(gameId: string, player: Player, client?: any): Promise<void> {
@@ -544,135 +521,49 @@ export class PlayerService {
     }
   }
 
-  static async updatePlayer(gameId: string, player: Player): Promise<void> {
+  /**
+   * Put the calling user's train on the board at a city (issue #311).
+   *
+   * Server-authoritative: the turn guard picks the player from the session and
+   * confirms it is their turn. The train must not be on the board yet, and the
+   * target must be a city milepost (`resolveTrainPlacement`). Only the row and
+   * col of `to` are used; the pixel position comes from the map. Nothing else
+   * about the player changes.
+   *
+   * Once placed, a train moves only through `moveTrainForUser`.
+   *
+   * @throws TurnGuardError when the user may not act right now.
+   * @throws TrainPlacementError when the target is not a city or the train is
+   *   already placed.
+   */
+  static async placeTrainForUser(
+    gameId: string,
+    userId: string,
+    to: unknown,
+  ): Promise<{ playerId: string; position: TrainPlacement }> {
+    const position = resolveTrainPlacement(to);
     const client = await db.connect();
     try {
       await client.query("BEGIN");
-
-      // Validate and normalize color
-      const normalizedColor = this.validateColor(player.color);
-
-      // Check if game exists, create if it doesn't
-      const gameExists = await this.gameExists(gameId);
-      if (!gameExists) {
-        await this.createGame(gameId);
+      const { player } = await lockPlayerForUserTurn(client, gameId, userId, {
+        allowedStatuses: ["active", "initialBuild"],
+      });
+      if (player.position_row !== null || player.position_col !== null) {
+        throw new TrainPlacementError(
+          TrainPlacementErrorCode.AlreadyPlaced,
+          "Your train is already on the board",
+        );
       }
-
-      // Check if player exists
-      const exists = await this.playerExists(gameId, player.id);
-
-      if (!exists) {
-        await this.createPlayer(gameId, player, client);
-        await client.query("COMMIT");
-        return;
-      }
-
-      // First check if another player already has this color
-      const colorCheckQuery = `
-                SELECT id FROM players 
-                WHERE game_id = $1 AND color = $2 AND id != $3
-            `;
-      const colorCheckValues = [gameId, normalizedColor, player.id];
-      const colorCheckResult: QueryResult<PlayerRow> = await client.query(
-        colorCheckQuery,
-        colorCheckValues
+      await client.query(
+        `UPDATE players
+         SET position_x = $1, position_y = $2, position_row = $3, position_col = $4
+         WHERE game_id = $5 AND id = $6`,
+        [Math.round(position.x), Math.round(position.y), position.row, position.col, gameId, player.id],
       );
-
-      if (colorCheckResult.rows.length > 0) {
-        throw new Error("Color already taken by another player");
-      }
-
-      // Normalize the train type to match database format
-      const trainType = player.trainType || TrainType.Freight;
-
-      const query = `
-                UPDATE players 
-                SET name = $1, 
-                    user_id = $2,
-                    color = $3, 
-                    money = $4, 
-                    train_type = $5,
-                    position_x = $6,
-                    position_y = $7,
-                    position_row = $8,
-                    position_col = $9,
-                    current_turn_number = $12,
-                    hand = $13,
-                    loads = $14,
-                    camera_state = $15
-                WHERE game_id = $10 AND id = $11
-                RETURNING *
-            `;
-      // Determine money value with proper type checking
-      const moneyValue = typeof player.money === "number" ? player.money : 50;
-
-      // Get current position from database to preserve it if not provided in update
-      const currentPlayerQuery = await client.query(
-        'SELECT position_x, position_y, position_row, position_col FROM players WHERE game_id = $1 AND id = $2',
-        [gameId, player.id]
-      );
-      const currentPosition = currentPlayerQuery.rows[0];
-      
-      // Only update position if it's explicitly provided (not null/undefined)
-      // This allows partial updates (e.g., updating loads without affecting position)
-      const positionX = player.trainState?.position?.x !== undefined && player.trainState.position !== null
-        ? Math.round(player.trainState.position.x)
-        : (currentPosition?.position_x ?? null);
-      const positionY = player.trainState?.position?.y !== undefined && player.trainState.position !== null
-        ? Math.round(player.trainState.position.y)
-        : (currentPosition?.position_y ?? null);
-      const positionRow = player.trainState?.position?.row !== undefined && player.trainState.position !== null
-        ? Math.round(player.trainState.position.row)
-        : (currentPosition?.position_row ?? null);
-      const positionCol = player.trainState?.position?.col !== undefined && player.trainState.position !== null
-        ? Math.round(player.trainState.position.col)
-        : (currentPosition?.position_col ?? null);
-
-      const values = [
-        player.name,
-        player.userId || null,  // Include userId if provided
-        normalizedColor,
-        moneyValue,
-        trainType,
-        positionX,
-        positionY,
-        positionRow,
-        positionCol,
-        gameId,
-        player.id,
-        player.turnNumber,
-        // Ensure hand is an array and extract card IDs
-        Array.isArray(player.hand) ? player.hand.map((card: any) => typeof card === 'object' && card.id ? card.id : card) : [],
-        player.trainState.loads || [],
-        player.cameraState || null,
-      ];
-
-      const result: QueryResult<PlayerRow> = await client.query(query, values);
-
-      if (result.rows.length === 0) {
-        throw new Error("Player update failed");
-      }
-
-      // Note: movement_history is now persisted per-move in moveTrainForUser
-      // to ensure resilience against browser refresh mid-turn.
-      // We no longer write it here to avoid duplication.
-
       await client.query("COMMIT");
+      return { playerId: player.id, position };
     } catch (err) {
       await client.query("ROLLBACK");
-      console.error("Database error during player update:", err);
-
-      // Enhance error messages for common issues
-      if (err instanceof Error) {
-        if (err.message.includes("players_color_check")) {
-          throw new Error(
-            "Invalid color format. Must be a hex color code (e.g., #ff0000)"
-          );
-        }
-        if (err.message.includes("players_game_id_color_key")) {
-          throw new Error("Color already taken by another player");
-        }
-      }
       throw err;
     } finally {
       client.release();

@@ -198,7 +198,7 @@ describe('BotTurnPresenter', () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(deps.updateTrainPosition).toHaveBeenCalledWith('bot-1', 20, 20, 2, 2, { persist: false });
+      expect(deps.updateTrainPosition).toHaveBeenCalledWith('bot-1', 20, 20, 2, 2);
     });
 
     it('falls back to animateAlongPath when no actionTimeline is present', async () => {
@@ -222,7 +222,7 @@ describe('BotTurnPresenter', () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(deps.updateTrainPosition).toHaveBeenCalledWith('bot-1', 100, 100, 1, 1, { persist: false });
+      expect(deps.updateTrainPosition).toHaveBeenCalledWith('bot-1', 100, 100, 1, 1);
     });
 
     it('does not animate a flat path shorter than 2 points', () => {

@@ -93,8 +93,8 @@ export class TrainInteractionManager {
 
     // Set up callbacks for MovementExecutor
     this.movementExecutor.setTrainPositionUpdater(
-      (playerId, x, y, row, col, opts) =>
-        this.updateTrainPosition(playerId, x, y, row, col, opts)
+      (playerId, x, y, row, col) =>
+        this.updateTrainPosition(playerId, x, y, row, col)
     );
     this.movementExecutor.setExitMovementModeCallback(() =>
       this.exitTrainMovementMode()
@@ -399,13 +399,17 @@ export class TrainInteractionManager {
     this.movementModeController.resetMovementMode();
   }
 
+  /**
+   * Show a train at a position: updates local state and the sprite. It never
+   * writes to the server. A position reaches the server through a validated
+   * action (placing the train, or moving it).
+   */
   public async updateTrainPosition(
     playerId: string,
     x: number,
     y: number,
     row: number,
-    col: number,
-    opts?: { persist?: boolean }
+    col: number
   ): Promise<void> {
     const playerBefore = this.gameState.players.find((p) => p.id === playerId);
     if (!playerBefore) return;
@@ -420,24 +424,7 @@ export class TrainInteractionManager {
       };
     }
 
-    const shouldPersist = opts?.persist !== false;
-    if (shouldPersist && this.playerStateService.getLocalPlayerId() === playerId) {
-      await this.playerStateService.updatePlayerPosition(x, y, row, col, this.gameState.id);
-    }
-
-    // Re-fetch player after potential socket patch / async call.
-    const player = this.gameState.players.find((p) => p.id === playerId);
-    if (!player) return;
-    if (!player.trainState) {
-      player.trainState = {
-        position: null,
-        remainingMovement: 0,
-        movementHistory: [],
-        loads: [],
-      };
-    }
-    // Always set local position for rendering; server persistence already happened if enabled.
-    player.trainState.position = { x, y, row, col };
+    playerBefore.trainState.position = { x, y, row, col };
 
     // Delegate sprite management to TrainSpriteManager
     this.trainSpriteManager.createOrUpdateSprite(playerId, x, y, row, col);
@@ -472,6 +459,11 @@ export class TrainInteractionManager {
     this.trainSpriteManager.updateInteractivity();
   }
 
+  /**
+   * Put a player's train on the board at its starting city. For the local
+   * player the server places it first; if the server refuses, nothing changes
+   * and the player is told why.
+   */
   public async initializePlayerTrain(
     playerId: string,
     startX: number,
@@ -479,6 +471,19 @@ export class TrainInteractionManager {
     startRow: number,
     startCol: number
   ): Promise<void> {
+    if (this.playerStateService.getLocalPlayerId() === playerId) {
+      const refusal = await this.playerStateService.placeTrain(
+        startX,
+        startY,
+        startRow,
+        startCol,
+        this.gameState.id
+      );
+      if (refusal !== null) {
+        this.uiManager?.showHandToast?.(refusal);
+        return;
+      }
+    }
     await this.updateTrainPosition(
       playerId,
       startX,

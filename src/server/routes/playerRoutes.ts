@@ -6,100 +6,56 @@ import { emitStatePatch, getSocketIO } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { TurnGuardError } from '../services/turnGuard';
+import { TrainPlacementError } from '../services/trainPlacement';
 import { LoadActionError } from '../services/loadActions';
 import { GameSettingsService, GameSettingsError } from '../services/gameSettingsService';
 import { isUuid } from '../utils/uuid';
 
 const router = express.Router();
 
-// Update player
-router.post('/update', async (req, res) => {
+// Put the caller's train on the board at a city (authenticated, server-authoritative, #311).
+// Body: { gameId, to: { row, col } }. Allowed only on the caller's turn, while
+// the train is not yet on the board. Nothing else about the player changes.
+router.post('/place-train', authenticateToken, async (req, res) => {
     try {
-        const { gameId, player } = req.body;
+        const { gameId, to } = req.body as { gameId?: unknown; to?: unknown };
+        const userId = req.user?.id;
 
-        // Validate request
-        if (!gameId) {
-            console.error('Invalid request - missing gameId:', req.body);
-            return res.status(400).json({ 
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (typeof gameId !== 'string' || !isUuid(gameId)) {
+            return res.status(400).json({
                 error: 'Validation error',
-                details: 'Game ID is required'
+                details: 'A valid gameId is required'
             });
         }
 
-        if (!player) {
-            console.error('Invalid request - missing player:', req.body);
-            return res.status(400).json({ 
-                error: 'Validation error',
-                details: 'Player data is required'
-            });
+        const result = await PlayerService.placeTrainForUser(gameId, userId, to);
+
+        try {
+            const updatedPlayers = await PlayerService.getPlayers(gameId, userId);
+            const updatedPlayer = updatedPlayers.find(p => p.id === result.playerId);
+            if (updatedPlayer) {
+                await emitStatePatch(gameId, { players: [updatedPlayer] } as any);
+            }
+        } catch (emitError) {
+            console.error('Post-commit emit failed in /place-train (train was placed):', emitError);
         }
 
-        if (!player.id) {
-            console.error('Invalid request - missing player.id:', player);
-            return res.status(400).json({ 
-                error: 'Validation error',
-                details: 'Player ID is required'
-            });
+        return res.status(200).json({ position: result.position });
+    } catch (error: unknown) {
+        if (error instanceof TurnGuardError || error instanceof TrainPlacementError) {
+            return res.status(error.httpStatus).json(error.toResponseBody());
         }
-
-        if (!player.name) {
-            console.error('Invalid request - missing player.name:', player);
-            return res.status(400).json({ 
-                error: 'Validation error',
-                details: 'Player name is required'
-            });
-        }
-
-        if (!player.color) {
-            console.error('Invalid request - missing player.color:', player);
-            return res.status(400).json({ 
-                error: 'Validation error',
-                details: 'Player color is required'
-            });
-        }
-
-        await PlayerService.updatePlayer(gameId, player);
-
-        // Get updated player data for socket broadcast
-        // Issue #176: Hands are public, so broadcast full player data including hand
-        const updatedPlayers = await PlayerService.getPlayers(gameId, '');
-        const updatedPlayer = updatedPlayers.find(p => p.id === player.id);
-        
-        if (updatedPlayer) {
-            // Emit socket update with full player data (including public hand)
-            await emitStatePatch(gameId, {
-                players: [updatedPlayer]
-            } as any);
-        }
-
-        return res.status(200).json({ message: 'Player updated successfully' });
-    } catch (error: any) {
-        console.error('Error in /update route:', error);
-        
-        // Handle specific error cases
-        if (error.message.includes('Color already taken')) {
-            return res.status(409).json({ 
-                error: 'Color conflict',
-                details: error.message
-            });
-        }
-        if (error.message.includes('Invalid color format')) {
-            return res.status(400).json({ 
-                error: 'Validation error',
-                details: error.message
-            });
-        }
-        if (error.message === 'Player not found') {
-            return res.status(404).json({ 
-                error: 'Not found',
-                details: error.message
-            });
-        }
-        
-        // Generic error case
-        return res.status(500).json({ 
+        console.error('Error in /place-train route:', error);
+        return res.status(500).json({
             error: 'Server error',
-            details: error.message || 'An unexpected error occurred'
+            details: error instanceof Error ? error.message : 'An unexpected error occurred'
         });
     }
 });

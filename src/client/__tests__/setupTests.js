@@ -215,25 +215,6 @@ class MockScene extends Scene {
     }
   }
 
-  async savePlayerChanges() {
-    if (!this.nameInput?.value) {
-      this.errorText?.setText('Please enter a valid name');
-      return;
-    }
-    try {
-      await fetch('/api/players/update', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          gameId: this.gameState.id,
-          player: { name: this.nameInput.value, color: this.selectedColor },
-        }),
-      });
-    } catch {
-      this.errorText?.setText('Failed to update player');
-    }
-  }
-
   async endGame() {
     try {
       await fetch('/api/game/end', {

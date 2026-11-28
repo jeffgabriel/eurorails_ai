@@ -52,8 +52,7 @@ export interface BotTurnPresenterDeps {
     x: number,
     y: number,
     row: number,
-    col: number,
-    opts?: { persist?: boolean }
+    col: number
   ) => void;
   /** Look up display info (name/color) for a bot player by id. */
   resolveBotDisplay: (botPlayerId: string) => BotDisplay;
@@ -214,7 +213,7 @@ export class BotTurnPresenter {
       },
     ).then((finalPos) => {
       if (finalPos) {
-        this.deps.updateTrainPosition(botPlayerId, finalPos.x, finalPos.y, finalPos.row, finalPos.col, { persist: false });
+        this.deps.updateTrainPosition(botPlayerId, finalPos.x, finalPos.y, finalPos.row, finalPos.col);
       }
     }).catch(() => {});
   }
@@ -244,7 +243,7 @@ export class BotTurnPresenter {
       () => this.deps.getTrainSprite(botPlayerId),
     ).then((finalPos) => {
       if (finalPos) {
-        this.deps.updateTrainPosition(botPlayerId, finalPos.x, finalPos.y, finalPos.row, finalPos.col, { persist: false });
+        this.deps.updateTrainPosition(botPlayerId, finalPos.x, finalPos.y, finalPos.row, finalPos.col);
       }
     }).catch(() => {});
   }
