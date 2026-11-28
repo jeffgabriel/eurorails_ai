@@ -1,6 +1,6 @@
 /**
  * #308: server-validated track building.
- *   - POST /api/tracks/build         (caller's turn; body { gameId, path })
+ *   - POST /api/tracks/build         (caller's turn; body { gameId, path } or { gameId, segments })
  *   - POST /api/tracks/undo-segment  (caller's turn; body { gameId })
  *   - PlayerService.buildTrackForPlayer (bots) through the same validation
  *
@@ -25,7 +25,7 @@ import { db } from '../db';
 import { activeEffectManager } from '../services/ActiveEffectManager';
 import { PlayerService } from '../services/playerService';
 import { TrackService } from '../services/trackService';
-import { TrackBuildError, TrackBuildErrorCode } from '../services/trackBuild';
+import { MAX_BUILD_SECTIONS, TrackBuildError, TrackBuildErrorCode } from '../services/trackBuild';
 import { getWaterCrossingExtraCost } from '../../shared/config/waterCrossings';
 import { TerrainType, TrackSegment, TrainType } from '../../shared/types/GameTypes';
 import { withOneFreeConnection } from './utils/pool';
@@ -551,32 +551,82 @@ describe('Server-validated track building (#308)', () => {
     });
   });
 
-  describe('legacy POST /api/tracks/save keeps working alongside', () => {
-    function save(segments: TrackSegment[], turnBuildCost: number): request.Test {
-      return request(app).post('/api/tracks/save').send({
-        gameId,
-        playerId: firstPlayerId,
-        trackState: {
-          playerId: firstPlayerId, gameId, segments,
-          totalCost: turnBuildCost, turnBuildCost, lastBuildTimestamp: new Date(),
-        },
-      });
+  describe('POST /api/tracks/build — drawn sections', () => {
+    function buildSections(token: string, segments: unknown): request.Test {
+      return request(app)
+        .post('/api/tracks/build')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ gameId, segments });
     }
 
-    it('track saved the old way is still charged once at settlement', async () => {
+    it('builds stretches that do not join up in one request, at the server\'s prices', async () => {
       await createGame();
-      expect((await save([seg(p(24, 51), p(24, 50), 1)], 1)).status).toBe(200);
-      expect((await settle(firstToken)).body).toMatchObject({ charged: 1, money: 49 });
-      expect((await settle(firstToken)).body).toMatchObject({ charged: 0, money: 49 });
+      // Two branches out of the same major city milepost; the client's costs are ignored.
+      const res = await buildSections(firstToken, [
+        { from: p(41, 42), to: p(41, 43), cost: 0 },
+        { from: p(41, 42), to: p(40, 43), cost: 0 },
+      ]);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ cost: 7, turnBuildCost: 7, money: 50 });
+      expect(res.body.segments.map((s: TrackSegment) => s.cost)).toEqual([2, 5]);
+      expect(await moneyOf(firstPlayerId)).toBe(50);
+      expect((await settle(firstToken)).body).toMatchObject({ charged: 7, money: 43 });
     });
 
-    it('a turn that uses both routes is charged the sum, once', async () => {
+    it('builds nothing when any section is refused', async () => {
       await createGame();
-      expect((await save([seg(p(24, 51), p(24, 50), 1)], 1)).status).toBe(200);
-      const res = await build(firstToken, [p(24, 50), p(23, 50)]);
-      expect(res.body).toMatchObject({ cost: 1, turnBuildCost: 2, money: 50 });
-      expect((await settle(firstToken)).body).toMatchObject({ charged: 2, money: 48 });
-      expect((await settle(firstToken)).body).toMatchObject({ charged: 0, money: 48 });
+      const res = await buildSections(firstToken, [
+        { from: p(24, 51), to: p(24, 50) },
+        // Clear mileposts across the Channel: next to each other, but nowhere near the player's track.
+        { from: p(25, 29), to: p(25, 30) },
+      ]);
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('NotConnected');
+      expect(await trackRow(firstPlayerId)).toBeNull();
+    });
+
+    it.each([
+      ['an empty list', []],
+      ['a section with no end', [{ from: p(24, 51) }]],
+      ['a non-integer milepost', [{ from: p(24, 51), to: { row: 24.5, col: 50 } }]],
+      ['something that is not a list', 'segments'],
+      ['more sections than one turn could build', Array.from({ length: MAX_BUILD_SECTIONS + 1 }, () => ({ from: p(24, 51), to: p(24, 50) }))],
+    ])('returns 400 InvalidPath for %s', async (_name: string, segments: unknown) => {
+      await createGame();
+      const res = await buildSections(firstToken, segments);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('InvalidPath');
+    });
+
+    it('returns 400 InvalidPath when both a path and sections are sent', async () => {
+      await createGame();
+      const res = await build(firstToken, [p(24, 51), p(24, 50)], {
+        segments: [{ from: p(24, 51), to: p(24, 50) }],
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('InvalidPath');
+    });
+  });
+
+  describe('POST /api/tracks/save', () => {
+    it('is gone: the client can no longer write track or costs directly', async () => {
+      await createGame();
+      const res = await request(app)
+        .post('/api/tracks/save')
+        .set('Authorization', `Bearer ${firstToken}`)
+        .send({
+          gameId,
+          playerId: firstPlayerId,
+          trackState: {
+            playerId: firstPlayerId, gameId, segments: [seg(p(24, 51), p(24, 50), 0)],
+            totalCost: 0, turnBuildCost: 0, lastBuildTimestamp: new Date(),
+          },
+        });
+
+      expect(res.status).toBe(404);
+      expect(await trackRow(firstPlayerId)).toBeNull();
     });
   });
 

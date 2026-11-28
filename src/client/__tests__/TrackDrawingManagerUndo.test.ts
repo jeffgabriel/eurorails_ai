@@ -1,9 +1,44 @@
 import { TrackDrawingManager } from '../components/TrackDrawingManager';
-import { FullGameState, TerrainType, GridPoint } from '../../shared/types/GameTypes';
+import { FullGameState, TerrainType, GridPoint, TrackSegment } from '../../shared/types/GameTypes';
+import { TrackBuildResult, TrackUndoResult } from '../services/TrackService';
 import { PlayerTrackState } from '../../shared/types/TrackTypes';
 
-// Minimal fetch mock for tests
-(global as any).fetch = jest.fn(() => Promise.resolve({ ok: true, json: async () => ({}) }));
+/**
+ * Stands in for the server: it keeps the sections built this turn, prices them
+ * as sent, and undoes them last-in-first-out, like POST /api/tracks/build and
+ * /api/tracks/undo-segment.
+ */
+class FakeTrackService {
+  public built: TrackSegment[] = [];
+  public failing = false;
+
+  private turnBuildCost(): number {
+    return this.built.reduce((sum: number, seg: TrackSegment): number => sum + seg.cost, 0);
+  }
+
+  async buildTrack(_gameId: string, segments: readonly TrackSegment[]): Promise<TrackBuildResult> {
+    if (this.failing) return { ok: false, message: 'refused' };
+    this.built.push(...segments);
+    return {
+      ok: true,
+      segments: [...segments],
+      cost: segments.reduce((sum: number, seg: TrackSegment): number => sum + seg.cost, 0),
+      turnBuildCost: this.turnBuildCost(),
+    };
+  }
+
+  async undoLastSegment(_gameId: string): Promise<TrackUndoResult> {
+    const removedSegment = this.failing ? undefined : this.built.pop();
+    if (!removedSegment) return { ok: false, message: 'refused' };
+    return { ok: true, removedSegment, turnBuildCost: this.turnBuildCost(), money: 50 };
+  }
+
+  async loadAllTracks(): Promise<PlayerTrackState[]> {
+    return [];
+  }
+}
+let trackService: FakeTrackService;
+const fakeTrackService = (): any => trackService;
 
 // Mock Phaser dependencies
 const mockGraphics = {
@@ -40,12 +75,18 @@ const mockGameStateService = {
 } as any;
 
 describe('TrackDrawingManager Undo Feature', () => {
+  beforeEach(() => {
+    trackService = new FakeTrackService();
+  });
+
   it('should initialize segmentsDrawnThisTurn as an empty array', () => {
     const manager = new TrackDrawingManager(
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
     );
     expect(manager.segmentsDrawnThisTurn).toEqual([]);
   });
@@ -56,7 +97,9 @@ describe('TrackDrawingManager Undo Feature', () => {
         mockScene,
         mockMapContainer,
         mockGameState,
-        mockGridPoints
+        mockGridPoints,
+      undefined,
+      fakeTrackService()
       );
       expect(manager.hasDrawnThisTurn()).toBe(false);
     });
@@ -66,7 +109,9 @@ describe('TrackDrawingManager Undo Feature', () => {
         mockScene,
         mockMapContainer,
         mockGameState,
-        mockGridPoints
+        mockGridPoints,
+      undefined,
+      fakeTrackService()
       );
       (manager as any)["currentSegments"] = [
         {
@@ -83,7 +128,9 @@ describe('TrackDrawingManager Undo Feature', () => {
         mockScene,
         mockMapContainer,
         mockGameState,
-        mockGridPoints
+        mockGridPoints,
+      undefined,
+      fakeTrackService()
       );
       (manager as any).playerTracks.set(mockGameState.players[0].id, {
         playerId: mockGameState.players[0].id,
@@ -101,7 +148,9 @@ describe('TrackDrawingManager Undo Feature', () => {
         mockScene,
         mockMapContainer,
         mockGameState,
-        mockGridPoints
+        mockGridPoints,
+      undefined,
+      fakeTrackService()
       );
       const segment1 = {
         from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
@@ -117,6 +166,7 @@ describe('TrackDrawingManager Undo Feature', () => {
         lastBuildTimestamp: new Date()
       } as any);
       manager.segmentsDrawnThisTurn = [segment1 as any];
+      trackService.built = [segment1 as any];
 
       expect(manager.hasDrawnThisTurn()).toBe(true);
       await manager.undoLastSegment();
@@ -129,7 +179,9 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
     );
     // Simulate first drawing session
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -151,7 +203,9 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
     );
     // Simulate toggling drawing mode on/off without drawing
     (manager as any)["currentSegments"] = [];
@@ -165,7 +219,9 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
     );
     // First session: draw one segment
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -189,7 +245,9 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
     );
     // Simulate drawing and committing two segments
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -216,7 +274,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockMapContainer,
       mockGameState,
       mockGridPoints,
-      mockGameStateService
+      mockGameStateService,
+      fakeTrackService()
     );
     // Simulate drawing and committing two segments
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -243,7 +302,9 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
     );
     // Should not throw or change state
     expect(() => manager.undoLastSegment()).not.toThrow();
@@ -258,7 +319,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockMapContainer,
       mockGameState,
       mockGridPoints,
-      mockGameStateService
+      mockGameStateService,
+      fakeTrackService()
     );
     // Simulate drawing and committing three segments
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -297,7 +359,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockMapContainer,
       mockGameState,
       mockGridPoints,
-      mockGameStateService
+      mockGameStateService,
+      fakeTrackService()
     );
     // Simulate drawing and committing a segment
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -321,7 +384,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockMapContainer,
       mockGameState,
       mockGridPoints,
-      mockGameStateService
+      mockGameStateService,
+      fakeTrackService()
     );
     // Simulate drawing and committing a segment
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -341,7 +405,9 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
     );
     // Simulate drawing and committing a segment in turn 1
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -360,25 +426,118 @@ describe('TrackDrawingManager Undo Feature', () => {
     expect(playerTrackState.segments).toEqual([segment1]);
   });
 
-  it('should handle backend failure gracefully when undoing', async () => {
-    // Mock fetch to fail for this test
-    const originalFetch = (global as any).fetch;
-    (global as any).fetch = jest.fn(() => Promise.resolve({ ok: false, json: async () => ({ error: 'fail' }) }));
+  it('should change nothing when the server refuses the undo', async () => {
     const manager = new TrackDrawingManager(
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
     );
-    // Simulate drawing and committing a segment
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
     (manager as any)["currentSegments"] = [segment1];
     (manager as any)["turnBuildCost"] = 1;
     await (manager as any)["saveCurrentTracks"]();
-    // Undo last segment (should log error but not throw)
-    await expect(manager.undoLastSegment()).resolves.toBeUndefined();
-    // Restore fetch
-    (global as any).fetch = originalFetch;
+
+    trackService.failing = true;
+    await expect(manager.undoLastSegment()).resolves.toBe(false);
+
+    const playerId = mockGameState.players[0].id;
+    expect(manager.segmentsDrawnThisTurn).toEqual([segment1]);
+    expect((manager as any).playerTracks.get(playerId).segments).toEqual([segment1]);
+    expect(manager.getLastBuildCost(playerId)).toBe(1);
+  });
+
+  it('should take segments, costs and turn spend from the server response', async () => {
+    const manager = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
+    );
+    const drawn = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
+    const priced = { ...drawn, cost: 3 };
+    trackService.buildTrack = jest.fn().mockResolvedValue({ ok: true, segments: [priced], cost: 3, turnBuildCost: 3 });
+    (manager as any)["currentSegments"] = [drawn];
+    (manager as any)["turnBuildCost"] = 1;
+    await (manager as any)["saveCurrentTracks"]();
+
+    const playerId = mockGameState.players[0].id;
+    expect(trackService.buildTrack).toHaveBeenCalledWith(mockGameState.id, [drawn]);
+    expect(manager.segmentsDrawnThisTurn).toEqual([priced]);
+    expect((manager as any).playerTracks.get(playerId)).toMatchObject({ segments: [priced], totalCost: 3, turnBuildCost: 3 });
+    // Money is charged by the server at the end of the turn, not on commit.
+    expect(mockGameState.players[0].money).toBe(50);
+  });
+
+  it('should not duplicate sections when a socket reload lands before the build response', async () => {
+    const manager = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
+    );
+    const playerId = mockGameState.players[0].id;
+    const older = { from: { x: 9, y: 9, row: 5, col: 5, terrain: TerrainType.Clear }, to: { x: 9, y: 9, row: 5, col: 6, terrain: TerrainType.Clear }, cost: 2 };
+    const built = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
+    // While the build request is in flight, the track:updated reload replaces the
+    // stored state with one that already contains the new section.
+    trackService.buildTrack = jest.fn().mockImplementation(async () => {
+      (manager as any).playerTracks.set(playerId, {
+        playerId,
+        gameId: mockGameState.id,
+        segments: [older, { ...built }],
+        totalCost: 3,
+        turnBuildCost: 1,
+        lastBuildTimestamp: new Date()
+      });
+      return { ok: true, segments: [built], cost: 1, turnBuildCost: 1 };
+    });
+    (manager as any)["currentSegments"] = [built];
+    (manager as any)["turnBuildCost"] = 1;
+
+    await (manager as any)["saveCurrentTracks"]();
+
+    expect((manager as any).playerTracks.get(playerId)).toMatchObject({
+      segments: [older, built],
+      totalCost: 3,
+      turnBuildCost: 1,
+    });
+    expect(manager.segmentsDrawnThisTurn).toEqual([built]);
+  });
+
+  it('should drop the drawn segments and report why when the server refuses the build', async () => {
+    const manager = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
+    );
+    const hints: string[] = [];
+    const discarded: number[] = [];
+    const committed = jest.fn();
+    manager.setOnDrawingHint((message: string) => hints.push(message));
+    manager.setOnTrackSegmentsDiscarded((count: number) => discarded.push(count));
+    manager.setOnTrackSegmentsCommitted(committed);
+    const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
+    (manager as any)["currentSegments"] = [segment1];
+    (manager as any)["turnBuildCost"] = 1;
+
+    trackService.failing = true;
+    await (manager as any)["saveCurrentTracks"]();
+
+    expect(hints).toEqual(['refused']);
+    expect(discarded).toEqual([1]);
+    expect(committed).not.toHaveBeenCalled();
+    expect(manager.segmentsDrawnThisTurn).toEqual([]);
+    expect(manager.getLastBuildCost(mockGameState.players[0].id)).toBe(0);
   });
 
   it('should persist undo state and restore correctly after reload', async () => {
@@ -388,7 +547,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockMapContainer,
       mockGameState,
       mockGridPoints,
-      mockGameStateService
+      mockGameStateService,
+      fakeTrackService()
     );
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
     const segment2 = { from: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, to: { x: 2, y: 2, row: 0, col: 2, terrain: TerrainType.Clear }, cost: 2 };
@@ -404,7 +564,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockMapContainer,
       mockGameState,
       mockGridPoints,
-      mockGameStateService
+      mockGameStateService,
+      fakeTrackService()
     );
     // Mock TrackService to return the same segments
     (manager2 as any).playerTracks.set(

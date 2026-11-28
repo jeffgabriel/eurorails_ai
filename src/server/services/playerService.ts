@@ -48,10 +48,10 @@ import {
   PlannedTrackSegment,
   TrackBuildEdge,
   TrackBuildError,
+  TrackBuildRequest,
   TrackBuildErrorCode,
   TurnActionBuild,
 } from "./trackBuild";
-import { TrackCostCoord } from "../../shared/services/trackBuildCost";
 import { InitialBuildService } from "./InitialBuildService";
 import {
   appendTurnAction,
@@ -3089,8 +3089,8 @@ export class PlayerService {
       otherPlayersSegments,
       money,
       // The action log survives a mid-turn settlement (which zeroes
-      // turn_build_cost); turn_build_cost also counts track saved through the
-      // legacy /tracks/save route. The larger of the two is this turn's spend.
+      // turn_build_cost), so it is the turn's spend. turn_build_cost is kept
+      // as a floor for rows written before every build was logged.
       turnSpent: Math.max(unsettledCost, loggedSpend),
       unsettledCost,
       majorCityStartsThisTurn: buildsThisTurn.flatMap(
@@ -3245,16 +3245,15 @@ export class PlayerService {
   }
 
   /**
-   * Build track for the calling user's player along `path`, an ordered list of
-   * mileposts (issue #308). Server-authoritative: the turn guard picks the
-   * player from the session, and `applyTrackBuild` validates and prices the
-   * track.
+   * Build track for the calling user's player (issues #308, #309). The request
+   * is either a path of mileposts or the list of sections the player drew.
+   * Server-authoritative: the turn guard picks the player from the session,
+   * and `applyTrackBuild` validates and prices the track. The whole request is
+   * built or none of it is.
    *
-   * Money is NOT deducted here. The cost is added to `turn_build_cost` and
-   * charged once by `settleTurnBuildCost` (end of turn, or the explicit
-   * settle / victory calls), which is how track saved through the legacy
-   * `/api/tracks/save` route is charged too. Charging in both places would
-   * bill the same track twice.
+   * Money is NOT deducted here: the player pays once, when the turn ends. The
+   * cost is added to `turn_build_cost` and charged by `settleTurnBuildCost`
+   * (end of turn, or the explicit settle / victory calls).
    *
    * @returns the sections built (server-priced), their total cost, the turn's
    *   unsettled build spend, and the player's money (unchanged).
@@ -3265,7 +3264,7 @@ export class PlayerService {
   static async buildTrackForUser(
     gameId: string,
     userId: string,
-    path: readonly TrackCostCoord[],
+    request: TrackBuildRequest,
   ): Promise<{ playerId: string; segments: TrackSegment[]; cost: number; turnBuildCost: number; money: number }> {
     const client = await db.connect();
     try {
@@ -3280,7 +3279,7 @@ export class PlayerService {
         turnNumber: Number(player.turnNumber ?? 1),
         chargeNow: false,
         edgesFor: (ownSegments: readonly TrackSegment[]): TrackBuildEdge[] =>
-          pathToBuildEdges(path, ownSegments),
+          "path" in request ? pathToBuildEdges(request.path, ownSegments) : [...request.sections],
       });
       await client.query("COMMIT");
       return { playerId: player.id, ...built };

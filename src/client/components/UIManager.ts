@@ -363,6 +363,10 @@ export class UIManager {
       if (!isLocalPlayerTurn) return;
       this.turnActionManager.markLastUncommittedTrackSegmentsCommitted(segments.length);
     });
+    this.trackDrawingManager.setOnTrackSegmentsDiscarded?.((count) => {
+      this.turnActionManager.discardLastUncommittedTrackSegments(count);
+      this.refreshPlayerHand().catch(console.error);
+    });
 
     // Connect PlayerHandDisplay and UIManager to TrainInteractionManager
     this.trainInteractionManager.setPlayerHandDisplay(this.playerHandDisplay);
