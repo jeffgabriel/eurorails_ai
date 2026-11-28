@@ -13,6 +13,7 @@ import { getConnectedMajorCityCount } from './connectedMajorCities';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { loadGridPoints, gridToPixel } from '../MapTopology';
 import { activeEffectManager } from '../ActiveEffectManager';
+import { hasMovedThisTurn, reversalBlockedMilepost } from '../trainMovement';
 
 /**
  * Capture a frozen snapshot of the game world for AI evaluation.
@@ -39,10 +40,22 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
       p.bot_config,
       p.current_turn_number,
       COALESCE(pt.segments, '[]'::jsonb)                AS segments,
-      COALESCE(pt.pending_flood_rebuilds, '[]'::jsonb)  AS pending_flood_rebuilds
+      COALESCE(pt.pending_flood_rebuilds, '[]'::jsonb)  AS pending_flood_rebuilds,
+      mh.movement_path                                  AS movement_this_turn,
+      pmh.movement_path                                 AS movement_previous_turn
     FROM games g
     JOIN players p ON p.game_id = g.id
     LEFT JOIN player_tracks pt ON pt.game_id = g.id AND pt.player_id = p.id
+    LEFT JOIN LATERAL (
+      SELECT movement_path FROM movement_history
+      WHERE player_id = p.id AND game_id = g.id AND turn_number = p.current_turn_number
+      LIMIT 1
+    ) mh ON true
+    LEFT JOIN LATERAL (
+      SELECT movement_path FROM movement_history
+      WHERE player_id = p.id AND game_id = g.id AND turn_number = p.current_turn_number - 1
+      LIMIT 1
+    ) pmh ON true
     WHERE g.id = $1
     ORDER BY p.created_at ASC
     `,
@@ -154,16 +167,35 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
 
   // Check if bot is currently at a ferry port — means previous turn ended there,
   // so this turn should be at half speed (game rule: ferry crossing penalty).
+  // Keyed on the ferry lines' ends as well as the terrain, so that Dublin and
+  // Belfast (city terrain) count: the server halves any turn that crosses.
   let ferryHalfSpeed = false;
-  if (botRow.position_row != null && botRow.position_col != null) {
-    const grid = loadGridPoints();
-    const posKey = `${botRow.position_row},${botRow.position_col}`;
-    const posPoint = grid.get(posKey);
-    if (posPoint && posPoint.terrain === TerrainType.FerryPort) {
+  const botPosition =
+    botRow.position_row != null && botRow.position_col != null
+      ? { row: Number(botRow.position_row), col: Number(botRow.position_col) }
+      : null;
+  if (botPosition) {
+    const posKey = `${botPosition.row},${botPosition.col}`;
+    const posPoint = loadGridPoints().get(posKey);
+    const isFerryEnd = ferryEdgesData.some(
+      (ferry) =>
+        (ferry.pointA.row === botPosition.row && ferry.pointA.col === botPosition.col) ||
+        (ferry.pointB.row === botPosition.row && ferry.pointB.col === botPosition.col),
+    );
+    if (posPoint?.terrain === TerrainType.FerryPort || isFerryEnd) {
       ferryHalfSpeed = true;
-      console.warn(`[Ferry] Bot at ferry port ${posPoint.name ?? posKey} — half speed this turn`);
+      console.warn(`[Ferry] Bot at ferry port ${posPoint?.name ?? posKey} — half speed this turn`);
     }
   }
+
+  // The server's ferry and reversal rules (trainMovement.ts) depend on the
+  // moves recorded this turn and the previous one.
+  const movedThisTurn = hasMovedThisTurn(botRow.movement_this_turn);
+  const reversalBlockedTo = reversalBlockedMilepost({
+    position: botPosition,
+    thisTurnPath: botRow.movement_this_turn,
+    previousTurnPath: botRow.movement_previous_turn,
+  });
 
   // Parse pending flood rebuilds for the bot player
   const pendingFloodRebuilds = parseSegments(botRow.pending_flood_rebuilds);
@@ -189,6 +221,8 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
       botConfig,
       connectedMajorCityCount: getConnectedMajorCityCount(botSegments),
       ferryHalfSpeed,
+      movedThisTurn,
+      reversalBlockedTo,
       pendingFloodRebuilds,
     },
     allPlayerTracks,

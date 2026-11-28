@@ -143,6 +143,15 @@ describe('Movement enforcement (#312)', () => {
       .send({ gameId, to: { ...to, x: 0, y: 0 }, ...extra });
   }
 
+  /**
+   * Track on the far side of the first ferry line: its port B, a landing
+   * milepost at (2000,2000), then nine more mileposts along row 2000.
+   */
+  function ferryTrack(): object[] {
+    const landing: Node = { row: 2000, col: 2000 };
+    return [segment(getFerryEdges()[0].pointB, landing), ...line(2000, 2000, 9)];
+  }
+
   async function moverRow(): Promise<any> {
     const result = await db.query('SELECT * FROM players WHERE id = $1', [moverPlayerId]);
     return result.rows[0];
@@ -476,26 +485,26 @@ describe('Movement enforcement (#312)', () => {
       expect(res.body.remainingMovement).toBe(9);
     });
 
-    it('lets a bot at a ferry port move its full speed from the far port (ferry rules are #314)', async () => {
+    it('moves a bot that starts on a ferry port across at half rate (#314)', async () => {
       // The bot planner starts counting from the paired port, then calls moveTrainForUser
       // with the train still at the port it arrived at, and no movementCost.
       const ferry = getFerryEdges()[0];
-      const landing: Node = { row: 2000, col: 2000 };
-      const moverSegments = [segment(ferry.pointB, landing), ...line(2000, 2000, 9)];
-      await createGame({ position: ferry.pointA, moverSegments, isBot: true });
+      await createGame({ position: ferry.pointA, moverSegments: ferryTrack(), isBot: true });
+
+      await expect(
+        PlayerService.moveTrainForUser({ gameId, userId: moverUserId, to: { row: 2000, col: 2005 } }),
+      ).rejects.toThrow(/Invalid move/);
 
       const result = await PlayerService.moveTrainForUser({
         gameId,
         userId: moverUserId,
-        to: { row: 2000, col: 2008, x: 0, y: 0 },
+        to: { row: 2000, col: 2004, x: 0, y: 0 },
       });
 
-      expect(result.milepostsMoved).toBe(9);
+      expect(result.milepostsMoved).toBe(5);
       expect(result.remainingMovement).toBe(0);
-      expect((await moverRow()).position_col).toBe(2008);
-      await expect(
-        PlayerService.moveTrainForUser({ gameId, userId: moverUserId, to: { row: 2000, col: 2009 } }),
-      ).rejects.toThrow(/Invalid move/);
+      expect(result.halfRateApplied).toBe(true);
+      expect((await moverRow()).position_col).toBe(2004);
     });
   });
 
@@ -623,6 +632,155 @@ describe('Movement enforcement (#312)', () => {
       expect(res.body.payment).toBe(demand().payment);
       expect(res.body.updatedMoney).toBe(50 + demand().payment);
       expect(res.body.updatedLoads).toEqual([]);
+    });
+  });
+
+  // ── #314 ───────────────────────────────────────────────────────────────────
+
+  async function startNextTurn(): Promise<void> {
+    await db.query('UPDATE players SET current_turn_number = current_turn_number + 1 WHERE id = $1', [moverPlayerId]);
+  }
+
+  describe('ferry crossing (#314)', () => {
+    const ferry = getFerryEdges()[0];
+
+    it('crosses as the first move of the turn for no mileposts, then moves at half rate', async () => {
+      await createGame({ position: ferry.pointA, moverSegments: ferryTrack() });
+
+      const crossing = await move(ferry.pointB);
+      expect(crossing.status).toBe(200);
+      expect(crossing.body.milepostsMoved).toBe(0);
+      expect(crossing.body.remainingMovement).toBe(5);
+      expect(crossing.body.halfRateApplied).toBe(true);
+      expect(await reportedRemainingMovement()).toBe(5);
+
+      expect((await move({ row: 2000, col: 2005 })).status).toBe(400); // 6 mileposts
+      const onward = await move({ row: 2000, col: 2004 });
+      expect(onward.status).toBe(200);
+      expect(onward.body.remainingMovement).toBe(0);
+    });
+
+    it('does not cross back in the same turn', async () => {
+      await createGame({ position: ferry.pointA, moverSegments: ferryTrack() });
+      expect((await move(ferry.pointB)).status).toBe(200);
+
+      const back = await move(ferry.pointA);
+
+      expect(back.status).toBe(400);
+      expect(back.body.details).toMatch(/end its turn on a ferry port/);
+      expect((await moverRow()).position_row).toBe(ferry.pointB.row);
+    });
+
+    it('makes a train that reaches the port wait for its next turn', async () => {
+      await createGame({ position: { row: 2000, col: 2002 }, moverSegments: ferryTrack() });
+
+      // straight through the ferry
+      const through = await move(ferry.pointA);
+      expect(through.status).toBe(400);
+      expect(through.body.details).toMatch(/end its turn on a ferry port/);
+
+      // to the port, then across in the same turn
+      const toPort = await move(ferry.pointB);
+      expect(toPort.status).toBe(200);
+      expect(toPort.body.remainingMovement).toBe(6);
+      expect((await move(ferry.pointA)).status).toBe(400);
+
+      await startNextTurn();
+      const crossing = await move(ferry.pointA);
+      expect(crossing.status).toBe(200);
+      expect(crossing.body.remainingMovement).toBe(5);
+    });
+
+    it('treats a port it does not cross from as an ordinary milepost', async () => {
+      // track runs through port B: (2000,2002) .. landing .. port B .. (3000,1)
+      const moverSegments = [...ferryTrack(), segment(ferry.pointB, { row: 3000, col: 1 })];
+      await createGame({ position: { row: 2000, col: 2002 }, moverSegments });
+
+      const res = await move({ row: 3000, col: 1 });
+
+      expect(res.status).toBe(200);
+      expect(res.body.milepostsMoved).toBe(4);
+      expect(res.body.halfRateApplied).toBe(false);
+    });
+
+    it('lets the crossing be undone and made again', async () => {
+      await createGame({ position: ferry.pointA, moverSegments: ferryTrack() });
+      expect((await move(ferry.pointB)).status).toBe(200);
+
+      const undo = await request(app)
+        .post('/api/players/undo-last-action')
+        .set('Authorization', `Bearer ${moverToken}`)
+        .send({ gameId });
+      expect(undo.status).toBe(200);
+      expect(await reportedRemainingMovement()).toBe(9);
+
+      expect((await move(ferry.pointB)).status).toBe(200);
+    });
+  });
+
+  describe('reversal (#314)', () => {
+    async function lastTraversedEdge(): Promise<{ from: Node; to: Node } | undefined> {
+      const players = await PlayerService.getPlayers(gameId, moverUserId);
+      return players.find((p) => p.id === moverPlayerId)?.trainState.lastTraversedEdge;
+    }
+
+    it('refuses to go straight back on a non-city milepost, and allows going on', async () => {
+      await createGame();
+      expect((await move(at(3))).status).toBe(200);
+
+      const back = await move(at(2));
+      expect(back.status).toBe(400);
+      expect(back.body.details).toMatch(/can only reverse at cities or ferry ports/);
+      expect((await moverRow()).position_col).toBe(at(3).col);
+      expect(await lastTraversedEdge()).toMatchObject({ from: at(2), to: at(3) });
+
+      expect((await move(at(5))).status).toBe(200);
+      expect((await move(at(1))).status).toBe(400);
+    });
+
+    it('accepts a sharp turn onto a branch, one milepost at a time (#324)', async () => {
+      // branch off at(1) whose row/col delta points "backwards" from the edge just travelled
+      const branch: Node = { row: ROW + 1, col: START.col };
+      await createGame({ moverSegments: [...line(ROW, START.col, 13), segment(at(1), branch)] });
+
+      expect((await move(at(1))).status).toBe(200);
+      expect((await move(branch)).status).toBe(200);
+    });
+
+    it('allows reversing on a city milepost', async () => {
+      const city = cityMilepost('Berlin');
+      await createGame({ moverSegments: [segment(at(0), at(1)), segment(at(1), city)] });
+
+      expect((await move(city)).status).toBe(200);
+      expect(await lastTraversedEdge()).toBeUndefined();
+      expect((await move(at(0))).status).toBe(200);
+    });
+
+    it('keeps the direction into the next turn, and frees it after a turn standing still', async () => {
+      await createGame();
+      expect((await move(at(3))).status).toBe(200);
+
+      await startNextTurn();
+      expect((await move(at(1))).status).toBe(400);
+      expect(await lastTraversedEdge()).toMatchObject({ from: at(2), to: at(3) });
+
+      await startNextTurn();
+      expect(await lastTraversedEdge()).toBeUndefined();
+      expect((await move(at(1))).status).toBe(200);
+    });
+
+    it('restores the earlier direction when a move is undone', async () => {
+      await createGame();
+      expect((await move(at(3))).status).toBe(200);
+      expect((await move(at(5))).status).toBe(200);
+      await request(app)
+        .post('/api/players/undo-last-action')
+        .set('Authorization', `Bearer ${moverToken}`)
+        .send({ gameId })
+        .expect(200);
+
+      expect((await move(at(2))).status).toBe(400);
+      expect((await move(at(4))).status).toBe(200);
     });
   });
 });

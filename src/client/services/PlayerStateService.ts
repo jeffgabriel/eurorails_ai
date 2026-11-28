@@ -319,6 +319,13 @@ export class PlayerStateService {
         }
     }
 
+    /** The server's reason for refusing the last move-train call, when it gave one. */
+    private lastMoveError: string | null = null;
+
+    public getLastMoveError(): string | null {
+        return this.lastMoveError;
+    }
+
     /**
      * Move train using the server-authoritative fee settlement endpoint.
      * This should be used for click-to-move during train operation.
@@ -342,6 +349,8 @@ export class PlayerStateService {
             return null;
         }
 
+        // Cleared before the request, so a call that throws leaves no earlier reason behind.
+        this.lastMoveError = null;
         try {
             const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/move-train`, {
                 method: 'POST',
@@ -355,6 +364,7 @@ export class PlayerStateService {
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
                 console.error('Failed to move train:', errorData);
+                this.lastMoveError = typeof errorData?.details === 'string' ? errorData.details : null;
                 return null;
             }
 

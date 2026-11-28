@@ -42,6 +42,8 @@ import {
   MovementBudgetState,
   MovePathStop,
   beginMoveAt,
+  isFerryCrossing,
+  recordPlannedMove,
   hasNoMovementEventRules,
   movementEventRulesFrom,
   walkMovePath,
@@ -541,7 +543,11 @@ export class ActionResolver {
     let speed = ActionResolver.getBotSpeed(snapshot);
     let skipFerryPortKey: string | null = null;
 
-    const ferryCrossing = ActionResolver.resolveFerryCrossing(fromPosition, snapshot);
+    // The server lets a train cross only as its first move of a turn
+    // (trainMovement.ts), so a bot that has already moved does not cross.
+    const ferryCrossing = snapshot.bot.movedThisTurn
+      ? null
+      : ActionResolver.resolveFerryCrossing(fromPosition, snapshot);
     if (ferryCrossing) {
       skipFerryPortKey = `${fromPosition.row},${fromPosition.col}`;
       fromPosition = ferryCrossing.pairedPort;
@@ -572,6 +578,10 @@ export class ActionResolver {
 
     // Try each target milepost (major cities have multiple), pick the shortest valid path
     let bestResult: { path: { row: number; col: number }[]; fees: Set<string>; totalFee: number } | null = null;
+    // Reversal rule: away from a city or ferry port the bot may not go straight
+    // back the way it came. After a ferry crossing it starts from a port.
+    const reversalBlockedTo = ferryCrossing ? null : snapshot.bot.reversalBlockedTo ?? null;
+    let refusedForReversal = false;
 
     for (const target of targetPositions) {
       const usage = computeTrackUsageForMove({
@@ -583,6 +593,14 @@ export class ActionResolver {
 
       if (!usage.isValid) continue;
       if (usage.path.length === 0) continue;
+      if (
+        reversalBlockedTo &&
+        usage.path[0].to.row === reversalBlockedTo.row &&
+        usage.path[0].to.col === reversalBlockedTo.col
+      ) {
+        refusedForReversal = true;
+        continue;
+      }
 
       // Reconstruct the full path as {row, col}[] from PathEdge[]
       const fullPath: { row: number; col: number }[] = [
@@ -594,7 +612,10 @@ export class ActionResolver {
 
       // Truncate to speed limit if the path is too long (partial move toward destination).
       // Use effective path length (discounting intra-city hops) for movement budget.
-      const effectiveSpeed = remainingSpeed ?? speed;
+      // A turn that crosses a ferry is at half rate, whatever budget the caller holds.
+      const effectiveSpeed = ferryCrossing
+        ? Math.min(remainingSpeed ?? speed, speed)
+        : remainingSpeed ?? speed;
       const majorCityLookup = getMajorCityLookup();
       const rawPathLength = usage.path.length;
       const effectivePathLen = computeEffectivePathLength(fullPath, majorCityLookup);
@@ -702,6 +723,21 @@ export class ActionResolver {
         }
       }
 
+      // A ferry line is only crossed as the first move of a turn, from the port the
+      // bot started on. Stop on the near port of any other ferry line in the path
+      // (the terrain check above misses Dublin and Belfast, which are cities). The
+      // first edge of a path that starts on the far port after a crossing leads
+      // back to the port the bot is really on, so it is not a crossing.
+      for (let i = ferryCrossing ? 1 : 0; i < truncatedPath.length - 1; i++) {
+        if (isFerryCrossing(truncatedPath[i], truncatedPath[i + 1])) {
+          console.warn(`[Ferry] Path truncated before ferry line at step ${i}/${truncatedPath.length - 1}`);
+          pathLength = i;
+          truncatedPath = fullPath.slice(0, i + 1);
+          break;
+        }
+      }
+      if (pathLength === 0) continue;
+
       // Recalculate fees for the truncated path only
       const truncatedEdges = usage.path.slice(0, pathLength);
       const truncatedOwners = new Set<string>();
@@ -732,7 +768,9 @@ export class ActionResolver {
     if (!bestResult) {
       return {
         success: false,
-        error: `No valid path to "${targetDescription}" on existing track network.`,
+        error: refusedForReversal
+          ? `Cannot reverse toward "${targetDescription}" here: a train only reverses at a city or ferry port, or after standing still for a turn.`
+          : `No valid path to "${targetDescription}" on existing track network.`,
       };
     }
 
@@ -1169,6 +1207,7 @@ export class ActionResolver {
         if (lastPos) {
           snapshot.bot.position = { row: lastPos.row, col: lastPos.col };
           context.position = { row: lastPos.row, col: lastPos.col };
+          recordPlannedMove(snapshot.bot, movePlan.path);
         }
         if (movePlan.totalFee > 0) {
           snapshot.bot.money -= movePlan.totalFee;

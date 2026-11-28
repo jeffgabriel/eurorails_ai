@@ -9,7 +9,6 @@ import { DemandCard } from "../../shared/types/DemandCard";
 import { LoadActionResult, LoadType } from "../../shared/types/LoadTypes";
 import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
 import { loadGridPoints } from "./MapTopology";
-import { getFerryEdges } from "../../shared/services/majorCityGroups";
 import { TrackSegment } from "../../shared/types/TrackTypes";
 import { EventCardService } from "./EventCardService";
 import { activeEffectManager } from "./ActiveEffectManager";
@@ -31,7 +30,10 @@ import {
   MovePath,
   NO_MOVEMENT_EVENT_RULES,
   beginMoveAt,
+  FerryAccess,
   findMovePathWithinBudget,
+  hasMovedThisTurn,
+  reversalBlockedMilepost,
   getTurnMovementAllowance,
   isCityMilepost,
   isCityMilepostOf,
@@ -701,6 +703,7 @@ export class PlayerService {
                     position_col,
                     current_turn_number as "turnNumber",
                     mh.movement_path as "movementHistory",
+                    pmh.movement_path as "previousTurnMovement",
                     ta.actions as "turnActions",
                     (SELECT active_event FROM games WHERE games.id = players.game_id) as "activeEvent",
                     hand,
@@ -716,6 +719,13 @@ export class PlayerService {
                       AND turn_number = players.current_turn_number
                     LIMIT 1
                 ) mh ON true
+                LEFT JOIN LATERAL (
+                    SELECT movement_path
+                    FROM movement_history
+                    WHERE player_id = players.id
+                      AND turn_number = players.current_turn_number - 1
+                    LIMIT 1
+                ) pmh ON true
                 LEFT JOIN LATERAL (
                     SELECT actions
                     FROM turn_actions
@@ -749,7 +759,7 @@ export class PlayerService {
 
       const players = result.rows.map((fullRow) => {
         // activeEvent is only an input to remainingMovement; it is not part of a player.
-        const { activeEvent: _activeEvent, ...row } = fullRow;
+        const { activeEvent: _activeEvent, previousTurnMovement, ...row } = fullRow;
         // Issue #176: Demand cards are public in the board game, so show ALL hands
         // Handle both null and empty array cases
         const handArray = row.hand || [];
@@ -775,8 +785,9 @@ export class PlayerService {
         // remainingMovement = what moveTrainForUser would start this player's next
         // move with: the budget state after the turn's last recorded segment, at
         // half rate when the train stands in a half-rate zone (see trainMovement.ts).
+        // A train purchase this turn ends the train's movement.
         const movementHistory = row.movementHistory || [];
-        const remainingMovement = remainingMovementAt(
+        const remainingMovement = hasTrainPurchase(row.turnActions) ? 0 : remainingMovementAt(
           trainType,
           movementHistory,
           row.position_row != null && row.position_col != null
@@ -784,6 +795,26 @@ export class PlayerService {
             : null,
           movementEventRules,
         );
+
+        // The edge the train may not go straight back along (#314), for the client's
+        // own reversal check when it holds no movement history (a reload, a new turn).
+        const position =
+          row.position_row != null && row.position_col != null
+            ? { row: Number(row.position_row), col: Number(row.position_col) }
+            : null;
+        const noReturnTo = reversalBlockedMilepost({
+          position,
+          thisTurnPath: movementHistory,
+          previousTurnPath: previousTurnMovement,
+        });
+        const lastTraversedEdge =
+          position && noReturnTo
+            ? {
+                from: { x: 0, y: 0, row: noReturnTo.row, col: noReturnTo.col, terrain: TerrainType.Clear },
+                to: { x: 0, y: 0, row: position.row, col: position.col, terrain: TerrainType.Clear },
+                cost: 0,
+              }
+            : undefined;
 
         // Extract paidOpponentIds from turn_actions for this turn
         // This ensures the "once per turn" fee tracking persists across browser refresh
@@ -819,6 +850,7 @@ export class PlayerService {
             remainingMovement: remainingMovement, // Calculated from max movement minus costs already spent this turn
             loads: row.loads || [],
             paidOpponentIds: paidOpponentIds, // Track which opponents have been paid for track usage this turn
+            lastTraversedEdge,
           },
           hand: handCards,
           cameraState: row.camera_state || undefined,  // Per-player camera state
@@ -1576,8 +1608,14 @@ export class PlayerService {
    * - Rail Strike #123: the route may not use the drawing player's track,
    *   whoever is moving.
    *
-   * Not enforced here yet: ferry stop/crossing rules (#314). A ferry edge costs
-   * no movement.
+   * Ferry (#314): a ferry is crossed only as the first move of a turn, by a train
+   * that began the turn on the port; the crossing costs no mileposts and puts the
+   * rest of the turn at half rate. A route never runs through a ferry otherwise,
+   * so a train has to end a turn on the port before crossing.
+   *
+   * Reversal (#314): the route may not start back along the edge the train last
+   * arrived by (this turn or the previous one), unless the train stands on a city
+   * milepost or a ferry port. Each segment stores `arrivedFrom` for this.
    *
    * Fee rule:
    * - ECU 4M per distinct opponent whose track is used at any point in the turn.
@@ -1668,6 +1706,13 @@ export class PlayerService {
       );
       const actionsJson = actionsResult.rows[0]?.actions;
       const actions: any[] = Array.isArray(actionsJson) ? actionsJson : (actionsJson ? (actionsJson as any) : []);
+      // Movement comes first in a turn: a train upgrade or crossgrade ends it.
+      if (hasTrainPurchase(actions)) {
+        throw new MovementRuleError(
+          MovementRuleErrorCode.MovedAfterPurchase,
+          "Invalid move: the train cannot move after a train upgrade or crossgrade this turn",
+        );
+      }
       const alreadyPaid = new Set<string>();
       for (const act of Array.isArray(actions) ? actions : []) {
         if (act?.kind !== "move") continue;
@@ -1678,64 +1723,30 @@ export class PlayerService {
         }
       }
 
-      // This turn's movement history, read once: the reversal check, the movement
-      // budget and the append below all use it. It is the server's record of movement
-      // used; the player row is locked, so a concurrent move or undo cannot change it.
-      const turnHistoryResult = await client.query(
-        `SELECT movement_path FROM movement_history
-         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
-        [playerId, gameId, turnNumber]
+      // Movement history of this turn and the previous one, read once. This turn's
+      // row is the server's record of movement used (budget, ferry rule, append
+      // below); the previous turn's is only needed for the train's direction. The
+      // player row is locked, so a concurrent move or undo cannot change either.
+      const historyResult = await client.query(
+        `SELECT turn_number, movement_path FROM movement_history
+         WHERE player_id = $1 AND game_id = $2 AND turn_number IN ($3, $4)`,
+        [playerId, gameId, turnNumber, turnNumber - 1]
       );
-      const hasTurnHistoryRow: boolean = turnHistoryResult.rows.length > 0;
-      const turnMovementPath: unknown = turnHistoryResult.rows[0]?.movement_path;
+      const thisTurnRow = historyResult.rows.find((row) => Number(row.turn_number) === turnNumber);
+      const previousTurnRow = historyResult.rows.find((row) => Number(row.turn_number) === turnNumber - 1);
+      const hasTurnHistoryRow: boolean = thisTurnRow !== undefined;
+      const turnMovementPath: unknown = thisTurnRow?.movement_path;
 
-      // Reversal validation: trains may only reverse direction at a city or ferry port.
-      if (from && (from.row !== to.row || from.col !== to.col)) {
-        const movePath = turnMovementPath;
-        if (Array.isArray(movePath) && movePath.length > 0) {
-          const lastSeg = movePath[movePath.length - 1];
-          if (lastSeg?.from && lastSeg?.to) {
-            const lastVecRow = lastSeg.to.row - lastSeg.from.row;
-            const lastVecCol = lastSeg.to.col - lastSeg.from.col;
-            const proposedVecRow = to.row - from.row;
-            const proposedVecCol = to.col - from.col;
-
-            // Only check if last move had a non-zero direction
-            if (lastVecRow !== 0 || lastVecCol !== 0) {
-              const dot = proposedVecRow * lastVecRow + proposedVecCol * lastVecCol;
-              if (dot < 0) {
-                // Reversal detected — check if last segment crossed a ferry (skip check if so)
-                const ferryEdges = getFerryEdges();
-                const lastFromKey = `${lastSeg.from.row},${lastSeg.from.col}`;
-                const lastToKey = `${lastSeg.to.row},${lastSeg.to.col}`;
-                const lastWasFerry = ferryEdges.some(f => {
-                  const aKey = `${f.pointA.row},${f.pointA.col}`;
-                  const bKey = `${f.pointB.row},${f.pointB.col}`;
-                  return (lastFromKey === aKey && lastToKey === bKey) ||
-                         (lastFromKey === bKey && lastToKey === aKey);
-                });
-
-                if (!lastWasFerry) {
-                  // Only allow reversal at city or ferry port terrain
-                  const grid = loadGridPoints();
-                  const currentPoint = grid.get(`${from.row},${from.col}`);
-                  const terrain = currentPoint?.terrain ?? TerrainType.Clear;
-                  const canReverse = [
-                    TerrainType.MajorCity, TerrainType.MediumCity,
-                    TerrainType.SmallCity, TerrainType.FerryPort,
-                  ].includes(terrain);
-
-                  if (!canReverse) {
-                    throw new Error(
-                      "Invalid direction change - can only reverse at cities or ferry ports"
-                    );
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+      // Reversal: the milepost the first edge of this move may not lead back to.
+      const noReturnTo = reversalBlockedMilepost({
+        position: from ? { row: from.row, col: from.col } : null,
+        thisTurnPath: turnMovementPath,
+        previousTurnPath: previousTurnRow?.movement_path,
+      });
+      // Ferry: only a train that has not moved yet this turn may cross.
+      const ferryAccess: FerryAccess = hasMovedThisTurn(turnMovementPath)
+        ? FerryAccess.None
+        : FerryAccess.FromStart;
 
       // First placement: the train starts at a city milepost.
       if (!from && !isCityMilepost(to.row, to.col)) {
@@ -1747,8 +1758,7 @@ export class PlayerService {
 
       // Movement left this turn: the budget state after the last move recorded in
       // the turn's movement history read above (the full allowance when there is
-      // none). #314 passes "this turn starts at half rate" as the third argument
-      // of readTurnMovementState.
+      // none).
       const movementAllowance = getTurnMovementAllowance(
         PlayerService.normalizeTrainType(playerRow.trainType),
       );
@@ -1762,6 +1772,9 @@ export class PlayerService {
       let ownersUsed: string[] = [];
       let mileposts = 0;
       let stateAfterMove: MovementBudgetState = recordedState;
+      // The milepost before the destination on the route taken. A move that goes
+      // nowhere keeps the direction the train already had.
+      let arrivedFrom: { row: number; col: number } | null = noReturnTo;
       if (from && (from.row !== to.row || from.col !== to.col)) {
         // A train standing in a half-rate zone moves at half rate: this halves
         // what is left once (the start of the turn, or an event drawn mid-turn).
@@ -1789,7 +1802,11 @@ export class PlayerService {
         // around struck track or a Snow block over an opponent it does not show is
         // refused too.
         const allowedOpponentIds = new Set<string>([...previewUsage.ownersUsed, ...alreadyPaid]);
-        const findPath = (start: MovementBudgetState, rules: MovementEventRules): MovePath | null =>
+        const findPath = (
+          start: MovementBudgetState,
+          rules: MovementEventRules,
+          lift: { reversal?: boolean; ferry?: boolean } = {},
+        ): MovePath | null =>
           findMovePathWithinBudget({
             allTracks,
             from: { row: from.row, col: from.col },
@@ -1799,9 +1816,25 @@ export class PlayerService {
             halfRateApplied: start.halfRateApplied,
             eventRules: rules,
             allowedOpponentIds,
+            ferryAccess: lift.ferry ? FerryAccess.Unrestricted : ferryAccess,
+            noReturnTo: lift.reversal ? null : noReturnTo,
           });
         const movePath = findPath(stateBefore, eventRules);
         if (!movePath) {
+          // Name the rule that stands in the way, when one does: the move would
+          // fit with the reversal rule lifted, or with ferries open.
+          if (noReturnTo && findPath(stateBefore, eventRules, { reversal: true })) {
+            throw new MovementRuleError(
+              MovementRuleErrorCode.IllegalReversal,
+              "Invalid direction change - can only reverse at cities or ferry ports",
+            );
+          }
+          if (findPath(stateBefore, eventRules, { ferry: true })) {
+            throw new MovementRuleError(
+              MovementRuleErrorCode.FerryNotAvailable,
+              "Invalid move: a train must end its turn on a ferry port before crossing, and crosses as its first move of the next turn",
+            );
+          }
           // Name the event that stands in the way, when one does: retry (still only
           // over allowed opponents) with the Rail Strike lifted, then also the
           // blocked mileposts, then half rate. Otherwise it is plain distance.
@@ -1842,6 +1875,8 @@ export class PlayerService {
         ownersUsed = Array.from(movePath.ownersUsed);
         mileposts = movePath.mileposts;
         stateAfterMove = movePath.stateAfter;
+        const lastEdge = movePath.path[movePath.path.length - 1];
+        if (lastEdge) arrivedFrom = { row: lastEdge.from.row, col: lastEdge.from.col };
       }
 
       const newlyPayable = ownersUsed.filter((pid) => !alreadyPaid.has(pid));
@@ -1920,6 +1955,8 @@ export class PlayerService {
         // Budget state after this move; the turn's next move continues from it.
         remainingAfter: stateAfterMove.remaining,
         halfRate: stateAfterMove.halfRateApplied,
+        // The milepost before `to` on the route taken: the train's direction (#314).
+        arrivedFrom,
       };
 
       if (hasTurnHistoryRow) {
@@ -2574,7 +2611,8 @@ export class PlayerService {
    *   - FastFreight <-> HeavyFreight
    *
    * - any purchase: at most one per turn; not after building track this turn
-   *   (a purchase replaces building); not after moving this turn.
+   *   (a purchase replaces building). It comes after the train's movement:
+   *   `moveTrainForUser` refuses any move once a purchase is recorded this turn.
    *
    * Server-authoritative on money + train_type. The purchase is recorded in
    * the turn's action log, so the validated build path refuses track after it.
@@ -2599,9 +2637,8 @@ export class PlayerService {
       const currentLoads: unknown = playerRow.loads;
       const currentLoadCount = Array.isArray(currentLoads) ? currentLoads.length : 0;
 
-      // A train purchase takes the place of track building, and must come
-      // before any movement this turn (the movement used so far was counted
-      // against the old train). Both are read on this transaction's client.
+      // A train purchase takes the place of track building. It follows the
+      // train's movement, and ends it for the turn (moveTrainForUser).
       const turnNumber: number = Number(playerRow.turnNumber ?? 1);
       const trackState = await TrackService.getTrackState(gameId, playerId, client);
       const turnBuildCost = trackState?.turnBuildCost ?? 0;
@@ -2618,16 +2655,6 @@ export class PlayerService {
       if (turnBuildCost !== 0 || buildActionsOf(turnActions).length > 0) {
         throw new Error(`Cannot ${kind} after building track this turn`);
       }
-      const movedResult = await client.query(
-        `SELECT movement_path FROM movement_history
-         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
-        [playerId, gameId, turnNumber]
-      );
-      const movedPath: unknown = movedResult.rows[0]?.movement_path;
-      if (Array.isArray(movedPath) && movedPath.length > 0) {
-        throw new Error(`Cannot ${kind} after moving this turn`);
-      }
-
       // Validate target train type
       const isValidTrainType = Object.values(TrainType).includes(targetTrainType);
       if (!isValidTrainType) {

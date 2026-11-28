@@ -1050,6 +1050,11 @@ export class PlayerHandScene extends Phaser.Scene {
     // Refresh our local view of game state (same object reference updated by GameStateService)
     this.gameState = this.gameStateService.getGameState();
 
+    // Movement comes before a purchase: the train does not move again this turn.
+    const buyerId = this.gameStateService.getLocalPlayerId();
+    const buyer = this.gameState.players.find((p) => p.id === buyerId);
+    if (buyer?.trainState) buyer.trainState.remainingMovement = 0;
+
     this.closeActionsModal();
     // Rebuild UI to ensure TrainCard is recreated with latest player object
     this.createUI({ animate: false });

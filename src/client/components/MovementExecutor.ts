@@ -206,7 +206,10 @@ export class MovementExecutor {
 
       if (!moveApiResult) {
         restoreAfterAbort();
-        this.showInvalidMoveMessage(pointer, "Move rejected by server (fees/path).");
+        this.showInvalidMoveMessage(
+          pointer,
+          this.playerStateService.getLastMoveError() || "Move rejected by server (fees/path)."
+        );
         return { success: false, message: "Server rejected move", endMovement: false };
       }
 
@@ -227,9 +230,8 @@ export class MovementExecutor {
       // Ensure the movement deduction from canMoveTo is applied to the refreshed object.
       // A move that ends movement (ferry port) already left it at zero.
       // The server also halves what is left when the train is in, or enters, a
-      // half-rate (Snow) zone. It reports the movement it will allow next; never
-      // show more than that. (The client can hold less: its ferry half rate is
-      // not known to the server yet.)
+      // half-rate (Snow) zone, and after a ferry crossing. It reports the movement
+      // it will allow next; never show more than that.
       if (refreshedPlayer.trainState) {
         const afterDistance = Math.max(0, remainingMovementAfterValidation - (serverDistance - clientDistance));
         const serverRemaining = moveApiResult.remainingMovement;

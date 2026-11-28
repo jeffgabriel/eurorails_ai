@@ -32,6 +32,17 @@ import { loadGridPoints } from "./MapTopology";
  * each segment the server writes also carries the budget state after it
  * (`remainingAfter`, `halfRate`); the next move of the turn continues from the
  * last segment's state.
+ *
+ * Ferry and reversal rules (issue #314), in the "Ferry and reversal rules"
+ * section below:
+ * - A ferry is crossed only as the first move of a turn, by a train that
+ *   began the turn on the ferry port. The crossing uses no mileposts and the
+ *   rest of that turn is at half rate. A train therefore has to end a turn on
+ *   the port before it can cross; a port it does not cross from is an ordinary
+ *   milepost.
+ * - A train may not go straight back along the edge it last arrived by, unless
+ *   it stands on a city milepost or a ferry port. Each segment the server
+ *   writes carries `arrivedFrom`, the milepost before its destination.
  */
 
 /** Why a move or delivery was refused by the movement rules. */
@@ -44,6 +55,12 @@ export enum MovementRuleErrorCode {
   MovementExceeded = 2,
   /** The train is not in the city the delivery names. */
   NotAtDeliveryCity = 3,
+  /** The move turns the train straight back where it is not on a city or ferry port. */
+  IllegalReversal = 4,
+  /** The move needs a ferry the train may not cross now. */
+  FerryNotAvailable = 5,
+  /** The train was upgraded or crossgraded this turn; movement comes before a purchase. */
+  MovedAfterPurchase = 6,
 }
 
 /**
@@ -261,8 +278,8 @@ export function isEdgeStruck(
  * `movement_history.movement_path`.
  *
  * - No segments yet: the train type's allowance, halved up front when
- *   `startsAtHalfRate` (the input for a turn that begins at half rate, e.g. the
- *   turn after a ferry crossing in issue #314).
+ *   `startsAtHalfRate`. (A ferry crossing does not use this: it is a move, and
+ *   the route search halves the budget when it takes the ferry edge.)
  * - Otherwise the state the server stored on the last segment.
  * - A last segment without stored state (written before #313): the allowance
  *   minus the summed segment costs.
@@ -336,11 +353,7 @@ export function walkMovePath(
   // Milepost keys are built here ("row,col", the zone key format) rather than
   // with the trackUsageFees helpers, so that this function, which the bot
   // planners call, does not depend on a module their tests replace.
-  const ferryPairs = new Set<string>();
-  for (const ferry of getFerryEdges()) {
-    ferryPairs.add(`${milepostKey(ferry.pointA)}|${milepostKey(ferry.pointB)}`);
-    ferryPairs.add(`${milepostKey(ferry.pointB)}|${milepostKey(ferry.pointA)}`);
-  }
+  const ferryPairs = getFerryPairKeys();
   let state: MovementBudgetState = start;
   for (let i = 0; i < path.length - 1; i++) {
     const fromKey = milepostKey(path[i]);
@@ -373,6 +386,16 @@ function getFerryEdgeKeys(): Set<string> {
   return new Set<string>(getFerryEdges().map((ferry) => edgeKey(ferry.pointA, ferry.pointB)));
 }
 
+/** Both directions of every ferry line, as "row,col|row,col". */
+function getFerryPairKeys(): Set<string> {
+  const pairs = new Set<string>();
+  for (const ferry of getFerryEdges()) {
+    pairs.add(`${milepostKey(ferry.pointA)}|${milepostKey(ferry.pointB)}`);
+    pairs.add(`${milepostKey(ferry.pointB)}|${milepostKey(ferry.pointA)}`);
+  }
+  return pairs;
+}
+
 // ── City mileposts ───────────────────────────────────────────────────────────
 
 const CITY_TERRAINS: readonly TerrainType[] = [
@@ -396,6 +419,121 @@ export function isCityMilepostOf(row: number, col: number, cityName: string): bo
   return isCityMilepost(row, col) && isPositionAtCity(row, col, cityName, loadGridPoints());
 }
 
+// ── Ferry and reversal rules (issue #314) ────────────────────────────────────
+
+type Milepost = { row: number; col: number };
+
+/** How a route search may use ferry lines. */
+export enum FerryAccess {
+  /** No ferry line may be used. */
+  None = 0,
+  /**
+   * A ferry line may be the first edge of the route only: the train began the
+   * turn on the port and has not moved yet. Taking it puts the turn at half rate.
+   */
+  FromStart = 1,
+  /**
+   * Ferry lines are free edges anywhere. Not a legal way to move; used only to
+   * tell "the ferry rule stands in the way" apart from "too far".
+   */
+  Unrestricted = 2,
+}
+
+/** True when the two mileposts are the two ports of one ferry line. */
+export function isFerryCrossing(a: Milepost, b: Milepost): boolean {
+  return getFerryPairKeys().has(`${milepostKey(a)}|${milepostKey(b)}`);
+}
+
+/**
+ * True when the milepost is a ferry port: an end of a ferry line (which
+ * includes Dublin and Belfast, whose terrain is a city) or ferry-port terrain.
+ */
+export function isFerryPortMilepost(row: number, col: number): boolean {
+  const key = `${row},${col}`;
+  if (loadGridPoints().get(key)?.terrain === TerrainType.FerryPort) return true;
+  return getFerryEdges().some(
+    (ferry) => milepostKey(ferry.pointA) === key || milepostKey(ferry.pointB) === key,
+  );
+}
+
+/** True where a train may reverse direction: a city milepost or a ferry port. */
+export function canReverseAt(row: number, col: number): boolean {
+  return isCityMilepost(row, col) || isFerryPortMilepost(row, col);
+}
+
+function lastSegmentOf(movementPath: unknown): { to?: unknown; arrivedFrom?: unknown } | null {
+  if (!Array.isArray(movementPath) || movementPath.length === 0) return null;
+  const last: unknown = movementPath[movementPath.length - 1];
+  return last !== null && typeof last === "object" ? (last as { to?: unknown; arrivedFrom?: unknown }) : null;
+}
+
+function asMilepost(value: unknown): Milepost | null {
+  const candidate = value as { row?: unknown; col?: unknown } | null | undefined;
+  if (!candidate || !Number.isInteger(candidate.row) || !Number.isInteger(candidate.col)) return null;
+  return { row: candidate.row as number, col: candidate.col as number };
+}
+
+/** True when the turn's `movement_history.movement_path` holds at least one move. */
+export function hasMovedThisTurn(movementPath: unknown): boolean {
+  return Array.isArray(movementPath) && movementPath.length > 0;
+}
+
+/**
+ * The milepost the train may not move straight back to, or null when its
+ * first step is unrestricted.
+ *
+ * The train's direction is the last edge it travelled: the `arrivedFrom` of
+ * the last segment of this turn, or of the previous turn when it has not moved
+ * yet this turn. There is no restriction when
+ * - the train stands on a city milepost or a ferry port,
+ * - it did not move this turn or the previous one (a train that stood still
+ *   for a whole turn may leave in either direction: the rulebook's
+ *   backtracking, which costs a turn),
+ * - the last segment does not end where the train stands, or carries no
+ *   `arrivedFrom` (a first placement, or a row written before #314).
+ */
+export function reversalBlockedMilepost(args: {
+  position: Milepost | null;
+  thisTurnPath: unknown;
+  previousTurnPath: unknown;
+}): Milepost | null {
+  const { position } = args;
+  if (!position) return null;
+  const last = lastSegmentOf(args.thisTurnPath) ?? lastSegmentOf(args.previousTurnPath);
+  if (!last) return null;
+  const endedAt = asMilepost(last.to);
+  if (!endedAt || endedAt.row !== position.row || endedAt.col !== position.col) return null;
+  const arrivedFrom = asMilepost(last.arrivedFrom);
+  if (!arrivedFrom) return null;
+  if (arrivedFrom.row === position.row && arrivedFrom.col === position.col) return null;
+  return canReverseAt(position.row, position.col) ? null : arrivedFrom;
+}
+
+/**
+ * The same answer for a route just travelled (mileposts, start first): the
+ * milepost before the last one, unless the route ends where a train may
+ * reverse. Used by the bot planner to carry the train's direction from one
+ * planned move to the next.
+ */
+export function reversalBlockedAfterPath(path: ReadonlyArray<Milepost>): Milepost | null {
+  if (path.length < 2) return null;
+  const end = path[path.length - 1];
+  const before = path[path.length - 2];
+  return canReverseAt(end.row, end.col) ? null : { row: before.row, col: before.col };
+}
+
+/**
+ * Carry a planned move into a bot snapshot's movement-rule state, so that the
+ * next move planned in the same turn follows the ferry and reversal rules.
+ */
+export function recordPlannedMove(
+  train: { movedThisTurn?: boolean; reversalBlockedTo?: Milepost | null },
+  path: ReadonlyArray<Milepost>,
+): void {
+  train.movedThisTurn = true;
+  train.reversalBlockedTo = reversalBlockedAfterPath(path);
+}
+
 // ── Route search ─────────────────────────────────────────────────────────────
 
 export type MovePath = {
@@ -407,6 +545,8 @@ export type MovePath = {
   mileposts: number;
   /** The movement budget once the train is at the destination. */
   stateAfter: MovementBudgetState;
+  /** True when the route crosses a ferry. */
+  usedFerry: boolean;
 };
 
 type SearchState = {
@@ -416,6 +556,11 @@ type SearchState = {
   halfRateApplied: boolean;
   /** Paid edges walked so far. */
   mileposts: number;
+  /**
+   * The node the next step may not lead back to: the one this node was reached
+   * from, or null on a node where a train may reverse.
+   */
+  cameFrom: string | null;
 };
 
 /** Edge key between two node keys, in the encoding `buildUnionTrackGraph` uses. */
@@ -447,10 +592,15 @@ function budgetOf(state: SearchState): MovementBudgetState {
  * (`computeEffectivePathLength`): an edge inside one major city's red area is
  * free, every other track edge is one milepost.
  *
- * A ferry edge is also free here. Ferry rules (stop at the port, cross at the
- * start of the next turn, then half rate) belong to issue #314; until then the
- * crossing itself must not use up movement, because a bot's first move after
- * reaching a port starts from the port it arrived at.
+ * Ferry lines (#314) are used as `ferryAccess` says, by default not at all.
+ * With `FerryAccess.FromStart` a ferry line may be the first edge of the
+ * route: the crossing uses no milepost and halves what is left of the turn
+ * (once per turn, like any half rate).
+ *
+ * Reversal (#314): no step of the route goes straight back to the milepost the
+ * train just came from, unless it stands on a city milepost or a ferry port
+ * (`canReverseAt`). `noReturnTo`, when given, is that milepost for the first
+ * step: the one the train last arrived from (`reversalBlockedMilepost`).
  *
  * Event rules (#313), when given: the route never enters a blocked milepost,
  * never uses track under a Rail Strike, and entering a half-rate zone halves
@@ -473,6 +623,10 @@ export function findMovePathWithinBudget(args: {
   /** True when this turn's movement has already been halved. */
   halfRateApplied?: boolean;
   eventRules?: MovementEventRules;
+  /** How ferry lines may be used. Default: not at all. */
+  ferryAccess?: FerryAccess;
+  /** The milepost the first edge of the route may not lead to (no reversal). */
+  noReturnTo?: { row: number; col: number } | null;
 }): MovePath | null {
   const budget = Math.max(0, Math.floor(args.maxMileposts));
   const rules = args.eventRules ?? NO_MOVEMENT_EVENT_RULES;
@@ -483,10 +637,22 @@ export function findMovePathWithinBudget(args: {
     remaining: budget,
     halfRateApplied: args.halfRateApplied === true,
     mileposts: 0,
+    cameFrom: args.noReturnTo ? nodeKey(args.noReturnTo) : null,
   };
   if (startKey === goalKey) {
-    return { path: [], ownersUsed: new Set(), mileposts: 0, stateAfter: budgetOf(start) };
+    return { path: [], ownersUsed: new Set(), mileposts: 0, stateAfter: budgetOf(start), usedFerry: false };
   }
+  const ferryAccess: FerryAccess = args.ferryAccess ?? FerryAccess.None;
+  const reversalPoints = new Map<string, boolean>();
+  const mayReverseAt = (key: string): boolean => {
+    let known = reversalPoints.get(key);
+    if (known === undefined) {
+      const node = parseNodeKey(key);
+      known = canReverseAt(node.row, node.col);
+      reversalPoints.set(key, known);
+    }
+    return known;
+  };
 
   const { adjacency, edgeOwners } = buildUnionTrackGraph({ allTracks: args.allTracks });
   const majorCityLookup = getMajorCityLookup();
@@ -498,7 +664,7 @@ export function findMovePathWithinBudget(args: {
   // along a route. Both are small integers, so the queue is an array of
   // buckets indexed by `opponentEdges * (budget + 1) + usedUp`.
   const stateKey = (s: SearchState): string =>
-    `${s.nodeKey}|${s.remaining}|${s.halfRateApplied ? 1 : 0}`;
+    `${s.nodeKey}|${s.remaining}|${s.halfRateApplied ? 1 : 0}|${s.cameFrom ?? ""}`;
   const buckets: SearchState[][] = [[start]];
   // Fewest opponent edges each state has been queued with so far.
   const fewestOpponentEdges = new Map<string, number>([[stateKey(start), 0]]);
@@ -524,9 +690,16 @@ export function findMovePathWithinBudget(args: {
         return buildMovePath(current, parent, stateKey, edgeOwners, args.currentPlayerId);
       }
 
+      // `start` is settled first and never re-queued, so this is the first edge.
+      const isFirstEdge = current === start;
       for (const nextKey of adjacency.get(current.nodeKey) ?? []) {
         if (isMilepostBlocked(nextKey, rules)) continue;
+        if (nextKey === current.cameFrom) continue;
         const eKey = edgeKeyOf(current.nodeKey, nextKey);
+        const isFerry = ferryKeys.has(eKey);
+        if (isFerry && ferryAccess !== FerryAccess.Unrestricted) {
+          if (ferryAccess === FerryAccess.None || !isFirstEdge) continue;
+        }
         const owners = edgeOwners.get(eKey);
         if (isEdgeStruck(owners, rules)) continue;
         // An edge with an owner who is neither the mover nor an allowed opponent
@@ -539,10 +712,12 @@ export function findMovePathWithinBudget(args: {
           if (hasUnshownOwner) continue;
         }
 
-        const isFree =
-          ferryKeys.has(eKey) || isIntraCityEdge(current.nodeKey, nextKey, majorCityLookup);
-        const after = enterMilepost(budgetOf(current), nextKey, isFree, rules);
-        if (!after) continue;
+        const isFree = isFerry || isIntraCityEdge(current.nodeKey, nextKey, majorCityLookup);
+        const entered = enterMilepost(budgetOf(current), nextKey, isFree, rules);
+        if (!entered) continue;
+        // A ferry crossing puts the rest of the turn at half rate.
+        const after =
+          isFerry && ferryAccess === FerryAccess.FromStart ? applyHalfRate(entered) : entered;
 
         const isOpponentOnly =
           owners !== undefined && owners.size > 0 && !owners.has(args.currentPlayerId);
@@ -551,6 +726,7 @@ export function findMovePathWithinBudget(args: {
           remaining: after.remaining,
           halfRateApplied: after.halfRateApplied,
           mileposts: current.mileposts + (isFree ? 0 : 1),
+          cameFrom: mayReverseAt(nextKey) ? null : current.nodeKey,
         };
         const nextStateKey = stateKey(next);
         if (settled.has(nextStateKey)) continue;
@@ -586,13 +762,17 @@ function buildMovePath(
 
   const path: PathEdge[] = [];
   const ownersUsed = new Set<string>();
+  const ferryKeys = getFerryEdgeKeys();
+  let usedFerry = false;
   for (let i = 0; i < nodeKeys.length - 1; i++) {
-    const owners = edgeOwners.get(edgeKeyOf(nodeKeys[i], nodeKeys[i + 1]));
+    const eKey = edgeKeyOf(nodeKeys[i], nodeKeys[i + 1]);
+    if (ferryKeys.has(eKey)) usedFerry = true;
+    const owners = edgeOwners.get(eKey);
     const ownerPlayerIds = owners ? Array.from(owners) : [];
     for (const ownerId of ownerPlayerIds) {
       if (ownerId !== currentPlayerId) ownersUsed.add(ownerId);
     }
     path.push({ from: parseNodeKey(nodeKeys[i]), to: parseNodeKey(nodeKeys[i + 1]), ownerPlayerIds });
   }
-  return { path, ownersUsed, mileposts: goal.mileposts, stateAfter: budgetOf(goal) };
+  return { path, ownersUsed, mileposts: goal.mileposts, stateAfter: budgetOf(goal), usedFerry };
 }

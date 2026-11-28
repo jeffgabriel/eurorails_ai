@@ -380,8 +380,18 @@ export interface WorldSnapshot {
             provider?: string;
             model?: string;
         } | null;
-        /** Set by AIStrategyEngine when bot crosses a ferry — halves movement speed for this turn */
+        /** True when the bot starts on a ferry port: its turn is planned at half speed (ferry crossing rule). */
         ferryHalfSpeed?: boolean;
+        /**
+         * True once the bot has moved this turn (recorded moves, then moves planned
+         * so far). A ferry is only crossed as the first move of a turn.
+         */
+        movedThisTurn?: boolean;
+        /**
+         * The milepost the bot's next move may not go straight back to (no
+         * reversal away from a city or ferry port), or null when unrestricted.
+         */
+        reversalBlockedTo?: { row: number; col: number } | null;
         /** Number of major cities connected by the bot's continuous track network */
         connectedMajorCityCount: number;
         /**

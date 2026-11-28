@@ -523,6 +523,20 @@ describe('TrainMovementManager Ferry Movement', () => {
     expect(player.trainState.remainingMovement).toBe(0);
   });
 
+  it('crosses directly to the other port without ending movement or deferring the half rate (#314)', () => {
+    // The server decides whether the crossing is allowed and how much movement is left.
+    player.trainState.ferryState = undefined;
+    player.trainState.remainingMovement = 9;
+    const farPort = { ...ferryConnection.connections[1], ferryConnection } as GridPoint;
+
+    const result = manager.canMoveTo(farPort);
+
+    expect(result).toMatchObject({ canMove: true, endMovement: false, distance: 0 });
+    expect(player.trainState.remainingMovement).toBe(9);
+    expect(player.trainState.ferryState).toBeUndefined();
+    expect(player.trainState.justCrossedFerry).toBeFalsy();
+  });
+
   it('does not halve movement when not at a ferry port', () => {
     // Move to a clear point, then try another move
     player.trainState.position = { ...nextPoint };
