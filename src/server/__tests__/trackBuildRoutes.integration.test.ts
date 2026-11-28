@@ -25,7 +25,7 @@ import { db } from '../db';
 import { activeEffectManager } from '../services/ActiveEffectManager';
 import { PlayerService } from '../services/playerService';
 import { TrackService } from '../services/trackService';
-import { TrackBuildError, TrackBuildErrorCode } from '../services/trackBuild';
+import { MAX_BUILD_SECTIONS, TrackBuildError, TrackBuildErrorCode } from '../services/trackBuild';
 import { getWaterCrossingExtraCost } from '../../shared/config/waterCrossings';
 import { TerrainType, TrackSegment, TrainType } from '../../shared/types/GameTypes';
 import { withOneFreeConnection } from './utils/pool';
@@ -592,6 +592,7 @@ describe('Server-validated track building (#308)', () => {
       ['a section with no end', [{ from: p(24, 51) }]],
       ['a non-integer milepost', [{ from: p(24, 51), to: { row: 24.5, col: 50 } }]],
       ['something that is not a list', 'segments'],
+      ['more sections than one turn could build', Array.from({ length: MAX_BUILD_SECTIONS + 1 }, () => ({ from: p(24, 51), to: p(24, 50) }))],
     ])('returns 400 InvalidPath for %s', async (_name: string, segments: unknown) => {
       await createGame();
       const res = await buildSections(firstToken, segments);

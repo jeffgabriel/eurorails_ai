@@ -473,6 +473,44 @@ describe('TrackDrawingManager Undo Feature', () => {
     expect(mockGameState.players[0].money).toBe(50);
   });
 
+  it('should not duplicate sections when a socket reload lands before the build response', async () => {
+    const manager = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints,
+      undefined,
+      fakeTrackService()
+    );
+    const playerId = mockGameState.players[0].id;
+    const older = { from: { x: 9, y: 9, row: 5, col: 5, terrain: TerrainType.Clear }, to: { x: 9, y: 9, row: 5, col: 6, terrain: TerrainType.Clear }, cost: 2 };
+    const built = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
+    // While the build request is in flight, the track:updated reload replaces the
+    // stored state with one that already contains the new section.
+    trackService.buildTrack = jest.fn().mockImplementation(async () => {
+      (manager as any).playerTracks.set(playerId, {
+        playerId,
+        gameId: mockGameState.id,
+        segments: [older, { ...built }],
+        totalCost: 3,
+        turnBuildCost: 1,
+        lastBuildTimestamp: new Date()
+      });
+      return { ok: true, segments: [built], cost: 1, turnBuildCost: 1 };
+    });
+    (manager as any)["currentSegments"] = [built];
+    (manager as any)["turnBuildCost"] = 1;
+
+    await (manager as any)["saveCurrentTracks"]();
+
+    expect((manager as any).playerTracks.get(playerId)).toMatchObject({
+      segments: [older, built],
+      totalCost: 3,
+      turnBuildCost: 1,
+    });
+    expect(manager.segmentsDrawnThisTurn).toEqual([built]);
+  });
+
   it('should drop the drawn segments and report why when the server refuses the build', async () => {
     const manager = new TrackDrawingManager(
       mockScene,

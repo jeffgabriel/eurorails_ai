@@ -542,8 +542,15 @@ export class TrackDrawingManager {
             };
             this.playerTracks.set(currentPlayer.id, playerTrackState);
         }
-        playerTrackState.segments = [...playerTrackState.segments, ...result.segments];
-        playerTrackState.totalCost += result.cost;
+        // The server announces the build on the socket before it answers, and that
+        // reloads every player's track. If the reload got here first, the stored
+        // state already holds these sections: add only the ones it does not.
+        const known = playerTrackState.segments;
+        const missing = result.segments.filter(
+            (built) => !known.some((seg) => TrackDrawingManager.isSameSection(seg, built))
+        );
+        playerTrackState.segments = [...known, ...missing];
+        playerTrackState.totalCost = TrackDrawingManager.totalCostOf(playerTrackState.segments);
         playerTrackState.turnBuildCost = result.turnBuildCost;
         playerTrackState.lastBuildTimestamp = new Date();
         this.segmentsDrawnThisTurn = [...this.segmentsDrawnThisTurn, ...result.segments];
@@ -1816,6 +1823,18 @@ export class TrackDrawingManager {
         return null;
     }
 
+    /** True when two sections run between the same two mileposts in the same direction. */
+    private static isSameSection(a: TrackSegment, b: TrackSegment): boolean {
+        return a.from.row === b.from.row &&
+            a.from.col === b.from.col &&
+            a.to.row === b.to.row &&
+            a.to.col === b.to.col;
+    }
+
+    private static totalCostOf(segments: readonly TrackSegment[]): number {
+        return segments.reduce((sum: number, seg: TrackSegment): number => sum + seg.cost, 0);
+    }
+
     /**
      * Undo the last section built (committed) this turn.
      *
@@ -1835,14 +1854,9 @@ export class TrackDrawingManager {
             return false;
         }
         const removed = result.removedSegment;
-        const sameSection = (seg: TrackSegment): boolean =>
-            seg.from.row === removed.from.row &&
-            seg.from.col === removed.from.col &&
-            seg.to.row === removed.to.row &&
-            seg.to.col === removed.to.col;
         const removeLast = (segments: TrackSegment[]): void => {
             for (let i = segments.length - 1; i >= 0; i--) {
-                if (sameSection(segments[i])) {
+                if (TrackDrawingManager.isSameSection(segments[i], removed)) {
                     segments.splice(i, 1);
                     return;
                 }
@@ -1853,8 +1867,9 @@ export class TrackDrawingManager {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         const playerTrackState = this.playerTracks.get(currentPlayer.id);
         if (playerTrackState) {
+            // A socket-triggered reload may already have dropped the section.
             removeLast(playerTrackState.segments);
-            playerTrackState.totalCost = Math.max(0, playerTrackState.totalCost - removed.cost);
+            playerTrackState.totalCost = TrackDrawingManager.totalCostOf(playerTrackState.segments);
             playerTrackState.turnBuildCost = result.turnBuildCost;
         }
         // Money only differs when the section had already been charged.
