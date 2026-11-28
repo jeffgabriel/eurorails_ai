@@ -4,6 +4,11 @@ import {
   PlayerTrackState,
   GridPoint,
 } from "../../shared/types/GameTypes";
+import {
+  getMajorCityInternalEdges,
+  MajorCityGroup,
+  MajorCityInternalEdge,
+} from "../../shared/services/majorCityGroups";
 import { majorCityGroups } from "../config/mapConfig";
 
 export interface MovementSegment {
@@ -23,6 +28,8 @@ export interface MovementCostResult {
 export class MovementCostCalculator {
   private cityNodeMap: Map<string, string> = new Map(); // nodeKey -> cityName
   private cityPerimeterNodes: Map<string, Set<string>> = new Map(); // cityName -> Set of nodeKeys
+  // Edges a train may ride inside the major cities' red areas
+  private cityInternalEdges: MajorCityInternalEdge[] = [];
 
   constructor() {
     this.initializeCityMappings();
@@ -32,10 +39,12 @@ export class MovementCostCalculator {
    * Initialize mappings from majorCityGroups to identify which nodes belong to which cities
    */
   private initializeCityMappings(): void {
+    const cities: MajorCityGroup[] = [];
     Object.entries(majorCityGroups).forEach(([cityName, group]) => {
       if (!group || group.length === 0) return;
 
       const perimeterNodeSet = new Set<string>();
+      const outposts: MajorCityGroup['outposts'] = [];
 
       // Index 0 is the center — add it to cityNodeMap so isNodeInMajorCity() works for centers
       const center = group[0];
@@ -50,11 +59,16 @@ export class MovementCostCalculator {
           const nodeKey = this.getNodeKey({ row: outpost.GridY, col: outpost.GridX, x: 0, y: 0 });
           this.cityNodeMap.set(nodeKey, cityName);
           perimeterNodeSet.add(nodeKey);
+          outposts.push({ row: outpost.GridY, col: outpost.GridX });
         }
       });
 
       this.cityPerimeterNodes.set(cityName, perimeterNodeSet);
+      if (center && typeof center.GridX === 'number' && typeof center.GridY === 'number') {
+        cities.push({ cityName, center: { row: center.GridY, col: center.GridX }, outposts });
+      }
     });
+    this.cityInternalEdges = getMajorCityInternalEdges(cities);
   }
 
   /**
@@ -108,7 +122,8 @@ export class MovementCostCalculator {
     }
 
     // Special case: Starting from a major city center (train placement)
-    // Allow movement from any major city center to connected perimeter nodes at no cost
+    // Allow movement from any major city center to connected perimeter nodes.
+    // It costs one milepost, like entering any other milepost.
     const fromPoint = allPoints.find(p => p.row === from.row && p.col === from.col);
     if (fromPoint?.terrain === TerrainType.MajorCity && fromPoint.city?.connectedPoints) {
       const isToConnectedPerimeter = fromPoint.city.connectedPoints.some(
@@ -116,13 +131,13 @@ export class MovementCostCalculator {
       );
       if (isToConnectedPerimeter) {
         return {
-          totalCost: 0,
+          totalCost: 1,
           isValid: true,
           segments: [{
             from,
             to,
             type: 'city_internal',
-            cost: 0
+            cost: 1
           }]
         };
       }
@@ -187,24 +202,17 @@ export class MovementCostCalculator {
       graph.get(toKey)!.add(fromKey);
     }
 
-    // Add major city internal edges (center ↔ outpost) — public/ownerless connections
-    // Mirrors server-side buildUnionTrackGraph in trackUsageFees.ts
-    Object.entries(majorCityGroups).forEach(([, group]) => {
-      if (!group || group.length === 0) return;
-      const center = group[0];
-      if (!center || typeof center.GridX !== 'number' || typeof center.GridY !== 'number') return;
-      const centerKey = this.getNodeKey({ row: center.GridY, col: center.GridX, x: 0, y: 0 });
-
-      group.slice(1, 7).forEach(outpost => {
-        if (typeof outpost.GridX !== 'number' || typeof outpost.GridY !== 'number') return;
-        const outpostKey = this.getNodeKey({ row: outpost.GridY, col: outpost.GridX, x: 0, y: 0 });
-
-        if (!graph.has(centerKey)) graph.set(centerKey, new Set());
-        if (!graph.has(outpostKey)) graph.set(outpostKey, new Set());
-        graph.get(centerKey)!.add(outpostKey);
-        graph.get(outpostKey)!.add(centerKey);
-      });
-    });
+    // Add the major city red-area edges (center ↔ outer milepost, and between
+    // neighbouring outer mileposts) — public/ownerless connections.
+    // Same edges as the server-side buildUnionTrackGraph in trackUsageFees.ts
+    for (const edge of this.cityInternalEdges) {
+      const edgeFromKey = `${edge.from.row},${edge.from.col}`;
+      const edgeToKey = `${edge.to.row},${edge.to.col}`;
+      if (!graph.has(edgeFromKey)) graph.set(edgeFromKey, new Set());
+      if (!graph.has(edgeToKey)) graph.set(edgeToKey, new Set());
+      graph.get(edgeFromKey)!.add(edgeToKey);
+      graph.get(edgeToKey)!.add(edgeFromKey);
+    }
 
     const fromKey = this.getNodeKey(from);
     const toKey = this.getNodeKey(to);
@@ -312,9 +320,10 @@ export class MovementCostCalculator {
         segmentType = 'city_exit';
         cost = 1;
       } else if (fromInCity && toInCity && sameCity) {
-        // Internal city movement - free traversal through major city red area
+        // Internal city movement. The red area is shared space with no
+        // player's track, not free space: its mileposts count.
         segmentType = 'city_internal';
-        cost = 0;
+        cost = 1;
       } else {
         // Between different cities (shouldn't happen in normal gameplay)
         segmentType = 'normal';
