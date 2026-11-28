@@ -90,6 +90,9 @@ export class TrackBuildError extends Error {
 /** Most mileposts one build request may name (a 20M turn builds at most 20 sections). */
 export const MAX_BUILD_PATH_POINTS = 64;
 
+/** Most sections one build request may name: as many as the longest path has. */
+export const MAX_BUILD_SECTIONS = MAX_BUILD_PATH_POINTS - 1;
+
 /** The most sections a player may build out of one major city milepost per turn. */
 export const MAJOR_CITY_SECTIONS_PER_TURN = 2;
 
@@ -187,14 +190,69 @@ function isCoord(value: unknown): value is TrackCostCoord {
  */
 export function parseBuildPath(path: unknown): TrackCostCoord[] {
   if (!Array.isArray(path) || path.length < 2 || path.length > MAX_BUILD_PATH_POINTS || !path.every(isCoord)) {
-    throw new TrackBuildError(
-      TrackBuildErrorCode.InvalidPath,
-      `path must be a list of 2 to ${MAX_BUILD_PATH_POINTS} mileposts, each with an integer row and col`,
-    );
+    throw invalidBuildRequest();
   }
   return (path as TrackCostCoord[]).map(
     (point: TrackCostCoord): TrackCostCoord => ({ row: point.row, col: point.col }),
   );
+}
+
+function invalidBuildRequest(): TrackBuildError {
+  return new TrackBuildError(
+    TrackBuildErrorCode.InvalidPath,
+    `A build names either a path of 2 to ${MAX_BUILD_PATH_POINTS} mileposts or 1 to ${MAX_BUILD_SECTIONS} sections, each milepost with an integer row and col`,
+  );
+}
+
+/**
+ * Check the shape of a request body's `segments` and reduce it to the
+ * sections to build: an ordered list of `{ from, to }` milepost pairs.
+ *
+ * This is what the client sends when the player leaves drawing mode. One
+ * drawing session can hold several stretches of track that do not join up, so
+ * it cannot always be written as a single path. Anything else on a section
+ * (its cost, terrain, pixel position) is dropped here: the server works those
+ * out itself.
+ *
+ * @throws TrackBuildError InvalidPath when the shape is wrong.
+ */
+export function parseBuildSections(sections: unknown): TrackBuildEdge[] {
+  if (!Array.isArray(sections) || sections.length < 1 || sections.length > MAX_BUILD_SECTIONS) {
+    throw invalidBuildRequest();
+  }
+  return sections.map((section: unknown): TrackBuildEdge => {
+    const { from, to } = (typeof section === "object" && section !== null ? section : {}) as {
+      from?: unknown;
+      to?: unknown;
+    };
+    if (!isCoord(from) || !isCoord(to)) {
+      throw invalidBuildRequest();
+    }
+    return { from: { row: from.row, col: from.col }, to: { row: to.row, col: to.col } };
+  });
+}
+
+/**
+ * What a player asks to build: a path of mileposts, or an explicit list of
+ * sections. Never both.
+ */
+export type TrackBuildRequest =
+  | { path: readonly TrackCostCoord[] }
+  | { sections: readonly TrackBuildEdge[] };
+
+/**
+ * Read a build request body, which carries `path` or `segments`, not both.
+ *
+ * @throws TrackBuildError InvalidPath when the shape is wrong.
+ */
+export function parseBuildRequest(body: { path?: unknown; segments?: unknown }): TrackBuildRequest {
+  if (body.segments !== undefined) {
+    if (body.path !== undefined) {
+      throw invalidBuildRequest();
+    }
+    return { sections: parseBuildSections(body.segments) };
+  }
+  return { path: parseBuildPath(body.path) };
 }
 
 /**

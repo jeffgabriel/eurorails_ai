@@ -104,6 +104,21 @@ export class TurnActionManager {
     }
   }
 
+  /**
+   * Drop the most recent `count` uncommitted track sections: the server
+   * refused them, so there is nothing left to undo.
+   */
+  public discardLastUncommittedTrackSegments(count: number): void {
+    if (!Number.isFinite(count) || count <= 0) return;
+    let remaining = Math.floor(count);
+    for (let i = this.stack.length - 1; i >= 0 && remaining > 0; i--) {
+      const action = this.stack[i];
+      if (action.kind !== "trackSegmentBuilt" || action.committed) continue;
+      this.stack.splice(i, 1);
+      remaining--;
+    }
+  }
+
   public recordTrainMoved(args: {
     playerId: string;
     previousPosition: Point;
@@ -187,8 +202,7 @@ export class TurnActionManager {
     switch (action.kind) {
       case "trackSegmentBuilt": {
         if (action.committed) {
-          await this.trackDrawingManager.undoLastSegment();
-          return true;
+          return this.trackDrawingManager.undoLastSegment();
         }
         if (typeof (this.trackDrawingManager as any).undoLastUncommittedSegment === "function") {
           return (this.trackDrawingManager as any).undoLastUncommittedSegment();

@@ -97,6 +97,7 @@ export class TrackDrawingManager {
     public segmentsDrawnThisTurn: TrackSegment[] = [];
     private onTrackSegmentAdded: ((segment: TrackSegment) => void) | null = null;
     private onTrackSegmentsCommitted: ((segments: TrackSegment[]) => void) | null = null;
+    private onTrackSegmentsDiscarded: ((count: number) => void) | null = null;
 
     // When true, player may not enter drawing mode for the rest of the turn (e.g., after a full upgrade)
     private drawingDisabledForTurn: boolean = false;
@@ -210,6 +211,14 @@ export class TrackDrawingManager {
      */
     public setOnTrackSegmentsCommitted(callback: ((segments: TrackSegment[]) => void) | null): void {
         this.onTrackSegmentsCommitted = callback;
+    }
+
+    /**
+     * Called when the server refuses the track drawn in a session, with the number
+     * of drawn (uncommitted) sections that were dropped.
+     */
+    public setOnTrackSegmentsDiscarded(callback: ((count: number) => void) | null): void {
+        this.onTrackSegmentsDiscarded = callback;
     }
 
     /**
@@ -490,11 +499,36 @@ export class TrackDrawingManager {
     }
 
     /**
-     * Save current tracks to the server
-     * Server-authoritative: API call first, update local state only after success
+     * Commit the track drawn in this drawing session.
+     *
+     * Server-authoritative: the drawn sections are sent to the server, which
+     * checks the build rules and prices them, and builds all of them or none.
+     * Local state is updated from its response, so the costs shown are the
+     * server's. The player's money does not change here; the server charges
+     * the turn's build cost once, when the turn ends.
+     *
+     * If the server refuses, the drawn sections are dropped and the player is
+     * told why.
      */
     private async saveCurrentTracks(): Promise<void> {
+        if (this.currentSegments.length === 0) {
+            return;
+        }
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const drawnCount = this.currentSegments.length;
+
+        const result = await this.trackService.buildTrack(this.gameState.id, this.currentSegments);
+        if (!result.ok) {
+            console.error('Track build refused:', result.message);
+            this.onDrawingHint?.(result.message);
+            try {
+                this.onTrackSegmentsDiscarded?.(drawnCount);
+            } catch (e) {
+                // Non-fatal
+            }
+            return;
+        }
+
         // Get or create track state for current player
         let playerTrackState = this.playerTracks.get(currentPlayer.id);
         if (!playerTrackState) {
@@ -508,56 +542,21 @@ export class TrackDrawingManager {
             };
             this.playerTracks.set(currentPlayer.id, playerTrackState);
         }
-        // Only proceed if there are new segments to add
-        if (this.currentSegments.length > 0 && playerTrackState) {
-            const committedSegments = [...this.currentSegments];
-            // Prepare new state values (calculations only, no mutations yet)
-            const newSegments = [...playerTrackState.segments, ...this.currentSegments];
-            const newTotalCost = playerTrackState.totalCost + this.turnBuildCost;
-            const newTurnBuildCost = playerTrackState.turnBuildCost + this.turnBuildCost;
-            const newLastBuildTimestamp = new Date();
-            const newSegmentsDrawnThisTurn = [...this.segmentsDrawnThisTurn, ...this.currentSegments];
-            try {
-                // Server-authoritative: Make API call first
-                const ok = await this.trackService.saveTrackState(
-                    this.gameState.id,
-                    currentPlayer.id,
-                    {
-                        ...playerTrackState,
-                        segments: newSegments,
-                        totalCost: newTotalCost,
-                        turnBuildCost: newTurnBuildCost,
-                        lastBuildTimestamp: newLastBuildTimestamp
-                    }
-                );
-                if (!ok) {
-                    console.error('Failed to save track state in database');
-                    // Don't update local state on failure
-                    return;
-                }
-                // Only update local state after API succeeds
-                playerTrackState.segments = newSegments;
-                playerTrackState.totalCost = newTotalCost;
-                playerTrackState.turnBuildCost = newTurnBuildCost;
-                playerTrackState.lastBuildTimestamp = newLastBuildTimestamp;
-                this.segmentsDrawnThisTurn = newSegmentsDrawnThisTurn;
+        playerTrackState.segments = [...playerTrackState.segments, ...result.segments];
+        playerTrackState.totalCost += result.cost;
+        playerTrackState.turnBuildCost = result.turnBuildCost;
+        playerTrackState.lastBuildTimestamp = new Date();
+        this.segmentsDrawnThisTurn = [...this.segmentsDrawnThisTurn, ...result.segments];
 
-                // Notify commit as a batch so the action stack can mark those entries committed.
-                try {
-                    this.onTrackSegmentsCommitted?.(committedSegments);
-                } catch (e) {
-                    // Non-fatal
-                }
-                
-                // Check if we need to move the train to the track when first track is drawn from major city
-                this.checkAndUpdateTrainPosition(currentPlayer, playerTrackState);
-                // (No player money update here)
-            } catch (error) {
-                console.error('Error saving track state:', error);
-                // Don't update local state on error
-                return;
-            }
+        // Notify commit as a batch so the action stack can mark those entries committed.
+        try {
+            this.onTrackSegmentsCommitted?.(result.segments);
+        } catch (e) {
+            // Non-fatal
         }
+
+        // Check if we need to move the train to the track when first track is drawn from major city
+        this.checkAndUpdateTrainPosition(currentPlayer, playerTrackState);
     }
 
     private initializeDrawingMode(): void {
@@ -1817,49 +1816,50 @@ export class TrackDrawingManager {
         return null;
     }
 
-    // Undo the last segment built this turn
-    public async undoLastSegment(): Promise<void> {
+    /**
+     * Undo the last section built (committed) this turn.
+     *
+     * Server-authoritative: the server removes its own record of the last
+     * section built this turn; local state follows its response.
+     *
+     * @returns false when the server refused, in which case nothing changes.
+     */
+    public async undoLastSegment(): Promise<boolean> {
         if (this.segmentsDrawnThisTurn.length === 0) {
-            return;
+            return false;
         }
-        // Remove the last segment from the turn array
-        const lastSegment = this.segmentsDrawnThisTurn.pop();
-        if (!lastSegment) return;
-        // Remove from permanent track state
+        const result = await this.trackService.undoLastSegment(this.gameState.id);
+        if (!result.ok) {
+            console.error('Track undo refused:', result.message);
+            this.onDrawingHint?.(result.message);
+            return false;
+        }
+        const removed = result.removedSegment;
+        const sameSection = (seg: TrackSegment): boolean =>
+            seg.from.row === removed.from.row &&
+            seg.from.col === removed.from.col &&
+            seg.to.row === removed.to.row &&
+            seg.to.col === removed.to.col;
+        const removeLast = (segments: TrackSegment[]): void => {
+            for (let i = segments.length - 1; i >= 0; i--) {
+                if (sameSection(segments[i])) {
+                    segments.splice(i, 1);
+                    return;
+                }
+            }
+        };
+
+        removeLast(this.segmentsDrawnThisTurn);
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         const playerTrackState = this.playerTracks.get(currentPlayer.id);
         if (playerTrackState) {
-            // Remove the last matching segment (LIFO)
-            for (let i = playerTrackState.segments.length - 1; i >= 0; i--) {
-                const seg = playerTrackState.segments[i];
-                if (
-                    seg.from.row === lastSegment.from.row &&
-                    seg.from.col === lastSegment.from.col &&
-                    seg.to.row === lastSegment.to.row &&
-                    seg.to.col === lastSegment.to.col
-                ) {
-                    playerTrackState.segments.splice(i, 1);
-                    break;
-                }
-            }
-            // Subtract cost only from turnBuildCost
-            playerTrackState.turnBuildCost = Math.max(0, playerTrackState.turnBuildCost - lastSegment.cost);
-            // Persist updated track state to backend
-            try {
-                const ok = await this.trackService.saveTrackState(
-                    this.gameState.id,
-                    currentPlayer.id,
-                    playerTrackState
-                );
-                if (!ok) {
-                    console.error('Failed to persist undo to backend');
-                    // Do not throw, just log and continue
-                }
-            } catch (error) {
-                console.error('Error persisting undo to backend:', error);
-                // Do not throw, just log and continue
-            }
+            removeLast(playerTrackState.segments);
+            playerTrackState.totalCost = Math.max(0, playerTrackState.totalCost - removed.cost);
+            playerTrackState.turnBuildCost = result.turnBuildCost;
         }
+        // Money only differs when the section had already been charged.
+        currentPlayer.money = result.money;
+
         // Clear caches since track state has changed
         this.networkNodesCache.clear();
         this.pathCache.clear();
@@ -1867,9 +1867,8 @@ export class TrackDrawingManager {
         this.drawAllTracks();
         // Update cost display
         if (this.onCostUpdateCallback) {
-            const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
-            const totalCost = previousSessionsCost + this.turnBuildCost;
-            this.onCostUpdateCallback(totalCost);
+            this.onCostUpdateCallback(result.turnBuildCost + this.turnBuildCost);
         }
+        return true;
     }
 }

@@ -31,7 +31,7 @@ describe("TurnActionManager", () => {
   it("should undo last track segment by delegating to TrackDrawingManager.undoLastSegment()", async () => {
     const gameState = createGameState();
     const trackDrawingManager = {
-      undoLastSegment: jest.fn().mockResolvedValue(undefined),
+      undoLastSegment: jest.fn().mockResolvedValue(true),
       undoLastUncommittedSegment: jest.fn().mockReturnValue(true),
     } as any;
     const playerStateService = {
@@ -220,6 +220,35 @@ describe("TurnActionManager", () => {
     expect(ok2).toBe(false);
     expect(loadService.adjustTrayCount).not.toHaveBeenCalled();
   });
+
+  it("should forget drawn track sections the server refused", async () => {
+    const trackDrawingManager = {
+      undoLastSegment: jest.fn().mockResolvedValue(true),
+      undoLastUncommittedSegment: jest.fn().mockReturnValue(false),
+    } as any;
+    const mgr = new TurnActionManager({
+      gameState: createGameState(),
+      trackDrawingManager,
+      trainInteractionManager: { updateTrainPosition: jest.fn().mockResolvedValue(undefined) },
+      playerStateService: { isCurrentPlayer: jest.fn().mockReturnValue(true) } as any,
+      loadService: {} as any,
+    });
+    const segment = {
+      from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
+      to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear },
+      cost: 1,
+    };
+    mgr.recordTrackSegmentBuilt(segment);
+    mgr.markLastUncommittedTrackSegmentsCommitted(1);
+    mgr.recordTrackSegmentBuilt(segment);
+    mgr.recordTrackSegmentBuilt(segment);
+
+    mgr.discardLastUncommittedTrackSegments(2);
+
+    // Only the committed section is left to undo.
+    expect(await mgr.undoLastAction()).toBe(true);
+    expect(trackDrawingManager.undoLastSegment).toHaveBeenCalledTimes(1);
+    expect(trackDrawingManager.undoLastUncommittedSegment).not.toHaveBeenCalled();
+    expect(mgr.canUndo()).toBe(false);
+  });
 });
-
-

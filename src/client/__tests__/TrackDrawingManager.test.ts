@@ -1016,12 +1016,10 @@ describe('State consistency on backend failure', () => {
     beforeEach(() => {
         // Setup mocks
         mockTrackService = {
-            saveTrackState: jest.fn(),
+            buildTrack: jest.fn(),
             loadAllTracks: jest.fn().mockResolvedValue([])
         };
-        mockGameStateService = {
-            updatePlayerMoney: jest.fn()
-        };
+        mockGameStateService = {};
 
         // Setup game state and grid
         const gameState = {
@@ -1098,8 +1096,8 @@ describe('State consistency on backend failure', () => {
         currentPlayer = gameState.players[0];
     });
 
-    it('should not update local state if trackService.saveTrackState fails', async () => {
-        mockTrackService.saveTrackState.mockResolvedValue(false);
+    it('should not update local state if the server refuses the build', async () => {
+        mockTrackService.buildTrack.mockResolvedValue({ ok: false, message: 'refused' });
 
         await (trackDrawingManager as any).saveCurrentTracks();
 
@@ -1110,11 +1108,6 @@ describe('State consistency on backend failure', () => {
         expect((trackDrawingManager as any).segmentsDrawnThisTurn).toHaveLength(0);
         expect(currentPlayer.money).toBe(50);
     });
-
-    // The following tests are no longer relevant since saveCurrentTracks does not update player money or perform rollback on money update failure.
-    // it('should not update local state if gameStateService.updatePlayerMoney fails', async () => { ... });
-    // it('should attempt rollback if updatePlayerMoney fails after saveTrackState succeeds', async () => { ... });
-    // it('should log an error if rollback fails after updatePlayerMoney failure', async () => { ... });
 });
 
 describe('TrackDrawingManager - Shift+Click Mode', () => {
