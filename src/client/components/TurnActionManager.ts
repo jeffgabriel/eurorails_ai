@@ -13,7 +13,6 @@ type TrainPositionUpdater = {
     y: number,
     row: number,
     col: number
-    , opts?: { persist?: boolean }
   ): Promise<void>;
 };
 
@@ -259,8 +258,7 @@ export class TurnActionManager {
           pos.x,
           pos.y,
           pos.row,
-          pos.col,
-          { persist: false }
+          pos.col
         );
         return true;
       }

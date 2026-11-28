@@ -262,60 +262,52 @@ export class PlayerStateService {
     }
 
     /**
-     * Update local player's position
-     * Server-authoritative: API call first, update local state only after success
+     * Put the local player's train on the board at a city.
+     * Server-authoritative: the server checks it is the player's turn, that the
+     * train is not on the board yet and that the milepost is a city. Local state
+     * is updated only after it succeeds.
+     *
+     * @returns null on success, or the reason the server gave for refusing.
      */
-    public async updatePlayerPosition(
+    public async placeTrain(
         x: number,
         y: number,
         row: number,
         col: number,
         gameId: string
-    ): Promise<boolean> {
+    ): Promise<string | null> {
+        const failed = 'Could not place your train';
         if (!this.localPlayer) {
-            console.error('Cannot update position: no local player');
-            return false;
+            console.error('Cannot place train: no local player');
+            return failed;
         }
 
-        // Ensure trainState exists for the API call
-        if (!this.localPlayer.trainState) {
-            this.localPlayer.trainState = {
-                position: null,
-                remainingMovement: 0,
-                movementHistory: [],
-                loads: [],
-                lastTraversedEdge: undefined
-            };
-        }
-
-        // Server-authoritative: Make API call first
         try {
-            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/place-train`, {
                 method: 'POST',
-                body: JSON.stringify({
-                    gameId: gameId,
-                    player: {
-                        ...this.localPlayer,
-                        trainState: {
-                            ...this.localPlayer.trainState,
-                            position: { x, y, row, col }
-                        }
-                    }
-                })
+                body: JSON.stringify({ gameId, to: { row, col } })
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
-                console.error('Failed to update player position:', errorData);
-                return false;
+                const errorData = await response.json().catch(() => null);
+                console.error('Failed to place train:', errorData);
+                return typeof errorData?.details === 'string' ? errorData.details : failed;
             }
 
-            // Only update local state after API succeeds
+            if (!this.localPlayer.trainState) {
+                this.localPlayer.trainState = {
+                    position: null,
+                    remainingMovement: 0,
+                    movementHistory: [],
+                    loads: [],
+                    lastTraversedEdge: undefined
+                };
+            }
             this.localPlayer.trainState.position = { x, y, row, col };
-            return true;
+            return null;
         } catch (error) {
-            console.error('Error updating player position:', error);
-            return false;
+            console.error('Error placing train:', error);
+            return failed;
         }
     }
 

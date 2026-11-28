@@ -479,8 +479,8 @@ export class GameScene extends Phaser.Scene {
       llmTranscriptOverlay: this.llmTranscriptOverlay,
       getMapGridPoints: () => this.mapRenderer.gridPoints,
       getTrainSprite: (playerId) => this.uiManager.getTrainSprite(playerId),
-      updateTrainPosition: (playerId, x, y, row, col, opts) =>
-        void this.uiManager.updateTrainPosition(playerId, x, y, row, col, opts),
+      updateTrainPosition: (playerId, x, y, row, col) =>
+        void this.uiManager.updateTrainPosition(playerId, x, y, row, col),
       resolveBotDisplay: (botPlayerId) => this.resolveBotDisplay(botPlayerId),
     });
 
@@ -740,8 +740,7 @@ export class GameScene extends Phaser.Scene {
         result.newPosition.x,
         result.newPosition.y,
         result.newPosition.row,
-        result.newPosition.col,
-        { persist: false }
+        result.newPosition.col
       );
     }
 
@@ -1124,15 +1123,12 @@ export class GameScene extends Phaser.Scene {
       this.gameState.trainSprites = new Map();
     }
     for (const update of updates) {
-      // persist: false — this position just came from the server, so writing
-      // it back would be a redundant round-trip.
       this.uiManager.updateTrainPosition(
         update.playerId,
         update.x,
         update.y,
         update.row,
-        update.col,
-        { persist: false }
+        update.col
       );
     }
   }

@@ -111,7 +111,7 @@ describe("TurnActionManager", () => {
     expect(player.trainState.remainingMovement).toBe(7);
     expect(player.trainState.ferryState).toBeUndefined();
     expect(player.trainState.movementHistory).toHaveLength(0);
-    expect(trainUpdater.updateTrainPosition).toHaveBeenCalledWith("p1", 10, 20, 1, 2, { persist: false });
+    expect(trainUpdater.updateTrainPosition).toHaveBeenCalledWith("p1", 10, 20, 1, 2);
   });
 
   const createManager = (playerStateService: any, loadService: any, gameState = createGameState()) => {
