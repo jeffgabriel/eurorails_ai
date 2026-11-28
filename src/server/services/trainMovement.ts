@@ -5,7 +5,7 @@ import {
   parseNodeKey,
   PathEdge,
 } from "../../shared/services/trackUsageFees";
-import { getFerryEdges, getMajorCityLookup, isIntraCityEdge } from "../../shared/services/majorCityGroups";
+import { getFerryEdges } from "../../shared/services/majorCityGroups";
 import { isPositionAtCity } from "../../shared/services/cityPositionResolver";
 import { getTrainSpeed } from "../../shared/services/trainProperties";
 import { MovementRestriction } from "../../shared/types/EventCard";
@@ -349,7 +349,6 @@ export function walkMovePath(
   rules: MovementEventRules,
   ownersOfEdge?: (index: number) => Iterable<string> | undefined,
 ): { edgesTravelled: number; state: MovementBudgetState; stoppedBy: MovePathStop } {
-  const majorCityLookup = getMajorCityLookup();
   // Milepost keys are built here ("row,col", the zone key format) rather than
   // with the trackUsageFees helpers, so that this function, which the bot
   // planners call, does not depend on a module their tests replace.
@@ -364,10 +363,8 @@ export function walkMovePath(
     if (isEdgeStruck(ownersOfEdge?.(i), rules)) {
       return { edgesTravelled: i, state, stoppedBy: MovePathStop.RailStrike };
     }
-    const fromCity = majorCityLookup.get(fromKey);
-    const isFree =
-      ferryPairs.has(`${fromKey}|${toKey}`) ||
-      (fromCity !== undefined && fromCity === majorCityLookup.get(toKey));
+    // Only a ferry crossing uses no milepost; a major city's mileposts count.
+    const isFree = ferryPairs.has(`${fromKey}|${toKey}`);
     const next = enterMilepost(state, toKey, isFree, rules);
     if (!next) {
       return { edgesTravelled: i, state, stoppedBy: MovePathStop.OutOfMovement };
@@ -589,8 +586,9 @@ function budgetOf(state: SearchState): MovementBudgetState {
  * the player was not shown.
  *
  * Milepost counting matches the client and the bots
- * (`computeEffectivePathLength`): an edge inside one major city's red area is
- * free, every other track edge is one milepost.
+ * (`computeEffectivePathLength`): every milepost entered is one milepost,
+ * inside a major city's red area as much as on a player's track. The red area
+ * is shared space, not free space.
  *
  * Ferry lines (#314) are used as `ferryAccess` says, by default not at all.
  * With `FerryAccess.FromStart` a ferry line may be the first edge of the
@@ -655,7 +653,6 @@ export function findMovePathWithinBudget(args: {
   };
 
   const { adjacency, edgeOwners } = buildUnionTrackGraph({ allTracks: args.allTracks });
-  const majorCityLookup = getMajorCityLookup();
   const ferryKeys = getFerryEdgeKeys();
 
   // Search over (node, movement left, half rate) states in increasing order of
@@ -712,7 +709,8 @@ export function findMovePathWithinBudget(args: {
           if (hasUnshownOwner) continue;
         }
 
-        const isFree = isFerry || isIntraCityEdge(current.nodeKey, nextKey, majorCityLookup);
+        // Only a ferry crossing uses no milepost; a major city's mileposts count.
+        const isFree = isFerry;
         const entered = enterMilepost(budgetOf(current), nextKey, isFree, rules);
         if (!entered) continue;
         // A ferry crossing puts the rest of the turn at half rate.

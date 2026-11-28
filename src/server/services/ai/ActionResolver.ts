@@ -611,7 +611,7 @@ export class ActionResolver {
       }
 
       // Truncate to speed limit if the path is too long (partial move toward destination).
-      // Use effective path length (discounting intra-city hops) for movement budget.
+      // Every milepost entered counts toward the movement budget, inside a major city too.
       // A turn that crosses a ferry is at half rate, whatever budget the caller holds.
       const effectiveSpeed = ferryCrossing
         ? Math.min(remainingSpeed ?? speed, speed)
@@ -620,29 +620,12 @@ export class ActionResolver {
       const rawPathLength = usage.path.length;
       const effectivePathLen = computeEffectivePathLength(fullPath, majorCityLookup);
 
-      // Find the raw truncation index where effective mileposts reach the speed limit
+      // One milepost per edge, so the budget is also the number of edges travelled.
       let pathLength = rawPathLength;
       if (effectivePathLen > effectiveSpeed) {
-        let effectiveCount = 0;
-        for (let idx = 0; idx < fullPath.length - 1; idx++) {
-          const fromKey = `${fullPath[idx].row},${fullPath[idx].col}`;
-          const toKey = `${fullPath[idx + 1].row},${fullPath[idx + 1].col}`;
-          const fromCity = majorCityLookup.get(fromKey);
-          const toCity = majorCityLookup.get(toKey);
-          if (!(fromCity && fromCity === toCity)) {
-            effectiveCount++;
-          }
-          if (effectiveCount >= effectiveSpeed) {
-            pathLength = idx + 1; // raw index for truncation
-            break;
-          }
-        }
+        pathLength = Math.max(1, effectiveSpeed);
         console.warn(
-          `[Movement Budget] MOVE truncated: raw ${rawPathLength} edges, effective ${effectivePathLen}mp, budget ${effectiveSpeed}mp remaining`,
-        );
-      } else if (effectivePathLen !== rawPathLength) {
-        console.warn(
-          `[Movement Budget] Path: raw ${rawPathLength} edges, effective ${effectivePathLen}mp (intra-city hops discounted)`,
+          `[Movement Budget] MOVE truncated: ${rawPathLength} edges, budget ${effectiveSpeed}mp remaining`,
         );
       }
 
@@ -1140,7 +1123,7 @@ export class ActionResolver {
       }
       plans.push(result.plan!);
 
-      // Track cumulative movement from MOVE plans (effective mileposts, discounting intra-city hops)
+      // Track cumulative movement from MOVE plans (one milepost per edge)
       if (isMove && result.plan) {
         const movePlan = result.plan as TurnPlanMoveTrain;
         const stepsUsed = computeEffectivePathLength(movePlan.path, getMajorCityLookup());

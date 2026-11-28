@@ -188,30 +188,24 @@ describe('Bug 2: computeReachableCities — FerryPort city inclusion', () => {
   });
 });
 
-// ─── Bug 3: computeEffectivePathLength discounts intra-city hops ───────────
+// ─── Bug 3: computeEffectivePathLength counts every milepost entered ─────────
 
-describe('Bug 3: computeEffectivePathLength — intra-city hops are free', () => {
-  it('should discount intra-city edges from path length', () => {
-    // Use a custom lookup with known city assignments
+describe('Bug 3: computeEffectivePathLength — one milepost per edge', () => {
+  it('should count the edges inside a major city like any other', () => {
     const lookup = new Map<string, string>([
       ['10,10', 'TestCity'],
       ['10,11', 'TestCity'],
     ]);
 
-    // Path: external(9,10) → city(10,10) → city(10,11) [free] → external(11,11)
+    // Path: external(9,10) → city(10,10) → city(10,11) → external(11,11)
     const path = [
       { row: 9, col: 10 },
       { row: 10, col: 10 },  // TestCity
-      { row: 10, col: 11 },  // TestCity (intra-city = free)
+      { row: 10, col: 11 },  // TestCity (shared space, still a milepost)
       { row: 11, col: 11 },  // external
     ];
 
-    const rawLength = path.length - 1; // 3
-    const effectiveLength = computeEffectivePathLength(path, lookup);
-
-    // 1 free intra-city edge: effective = 2
-    expect(effectiveLength).toBe(2);
-    expect(effectiveLength).toBeLessThan(rawLength);
+    expect(computeEffectivePathLength(path, lookup)).toBe(path.length - 1);
   });
 
   it('should count all edges when no intra-city hops exist', () => {

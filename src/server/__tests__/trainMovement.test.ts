@@ -282,17 +282,72 @@ describe('findMovePathWithinBudget', () => {
     expect(result?.path.map((edge) => edge.to)).toEqual([b, d]);
   });
 
-  it('does not count movement inside one major city (red area)', () => {
-    // Berlin: outpost (24,51) -> centre (24,52) -> outpost (24,53), no track needed.
-    const result = findMovePathWithinBudget({
-      allTracks: [],
-      from: { row: 24, col: 51 },
-      to: { row: 24, col: 53 },
-      currentPlayerId: ME,
-      maxMileposts: 0,
+  describe('major city red area: shared space, every milepost counts', () => {
+    // Berlin: centre (24,52); outer mileposts (24,51), (23,51), (23,52), (24,53), ...
+    const across = (maxMileposts: number) =>
+      findMovePathWithinBudget({
+        allTracks: [],
+        from: { row: 24, col: 51 },
+        to: { row: 24, col: 53 },
+        currentPlayerId: ME,
+        maxMileposts,
+      });
+
+    it('counts the centre and the far outer milepost when crossing', () => {
+      // outer (24,51) -> centre (24,52) -> outer (24,53), no track needed.
+      const result = across(9);
+      expect(result?.mileposts).toBe(2);
+      expect(result?.path.map((edge) => edge.to)).toEqual([
+        { row: 24, col: 52 },
+        { row: 24, col: 53 },
+      ]);
+      expect(result?.stateAfter.remaining).toBe(7);
     });
-    expect(result?.mileposts).toBe(0);
-    expect(result?.path).toHaveLength(2);
+
+    it('refuses a crossing the train has no movement left for', () => {
+      expect(across(1)).toBeNull();
+      expect(across(0)).toBeNull();
+    });
+
+    it('rides straight between two neighbouring outer mileposts, not through the centre', () => {
+      const result = findMovePathWithinBudget({
+        allTracks: [],
+        from: { row: 24, col: 51 },
+        to: { row: 23, col: 51 },
+        currentPlayerId: ME,
+        maxMileposts: 1,
+      });
+      expect(result?.mileposts).toBe(1);
+      expect(result?.path.map((edge) => edge.to)).toEqual([{ row: 23, col: 51 }]);
+    });
+
+    it('charges 3 to come in at one outer milepost and leave from the next (in, across, out)', () => {
+      // Own track: (24,50) -> Berlin (24,51), and Berlin (23,51) -> (22,51).
+      const allTracks = [
+        track(ME, [
+          segment({ row: 24, col: 50 }, { row: 24, col: 51 }),
+          segment({ row: 23, col: 51 }, { row: 22, col: 51 }),
+        ]),
+      ];
+      const search = (maxMileposts: number) =>
+        findMovePathWithinBudget({
+          allTracks,
+          from: { row: 24, col: 50 },
+          to: { row: 22, col: 51 },
+          currentPlayerId: ME,
+          maxMileposts,
+        });
+
+      const result = search(9);
+      // Two mileposts inside the city, then the one beyond it. Never the centre.
+      expect(result?.path.map((edge) => edge.to)).toEqual([
+        { row: 24, col: 51 },
+        { row: 23, col: 51 },
+        { row: 22, col: 51 },
+      ]);
+      expect(result?.mileposts).toBe(3);
+      expect(search(2)).toBeNull();
+    });
   });
 
   describe('ferry lines (#314)', () => {

@@ -474,15 +474,25 @@ describe('Movement enforcement (#312)', () => {
   });
 
   describe('major city and ferry', () => {
-    it('does not count movement inside one major city', async () => {
-      // Berlin outpost -> centre -> outpost, no track
+    it('counts every milepost entered inside a major city', async () => {
+      // Berlin outer milepost -> centre -> outer milepost, no track: shared space, not free.
       await createGame({ position: { row: 24, col: 51 }, moverSegments: [] });
 
       const res = await move({ row: 24, col: 53 });
 
       expect(res.status).toBe(200);
-      expect(res.body.milepostsMoved).toBe(0);
-      expect(res.body.remainingMovement).toBe(9);
+      expect(res.body.milepostsMoved).toBe(2);
+      expect(res.body.remainingMovement).toBe(7);
+    });
+
+    it('rides between two neighbouring outer mileposts for one milepost', async () => {
+      await createGame({ position: { row: 24, col: 51 }, moverSegments: [] });
+
+      const res = await move({ row: 23, col: 51 });
+
+      expect(res.status).toBe(200);
+      expect(res.body.milepostsMoved).toBe(1);
+      expect(res.body.remainingMovement).toBe(8);
     });
 
     it('moves a bot that starts on a ferry port across at half rate (#314)', async () => {

@@ -30,6 +30,17 @@ jest.mock('../config/mapConfig', () => ({
       { GridX: 17, GridY: 49 }, // perimeter 4
       { GridX: 16, GridY: 50 }, // perimeter 5
       { GridX: 15, GridY: 50 }  // perimeter 6
+    ],
+    // A city laid out on the real hex grid: center on an even row, so each
+    // outer milepost is next to two others.
+    'Hexville': [
+      { GridX: 30, GridY: 30 }, // center
+      { GridX: 29, GridY: 29 }, // north-west
+      { GridX: 30, GridY: 29 }, // north-east
+      { GridX: 31, GridY: 30 }, // east
+      { GridX: 30, GridY: 31 }, // south-east
+      { GridX: 29, GridY: 31 }, // south-west
+      { GridX: 29, GridY: 30 }  // west
     ]
   }
 }));
@@ -184,7 +195,7 @@ describe('MovementCostCalculator', () => {
       const result = calculator.calculateMovementCost(berlinCenter, berlinPerimeter, null, mockAllPoints);
       
       expect(result.isValid).toBe(true);
-      expect(result.totalCost).toBe(0);
+      expect(result.totalCost).toBe(1); // the perimeter milepost entered counts
       expect(result.segments).toHaveLength(1);
       expect(result.segments[0].type).toBe('city_internal');
     });
@@ -212,7 +223,7 @@ describe('MovementCostCalculator', () => {
       expect(result.errorMessage).toBeDefined();
     });
 
-    it('should handle major city internal transit with fixed cost', () => {
+    it('should count a milepost for a hop inside a major city', () => {
       const berlinPerimeter1: Point = { row: 9, col: 9, x: 0, y: 0 };
       const berlinPerimeter2: Point = { row: 11, col: 9, x: 0, y: 0 };
       
@@ -240,10 +251,10 @@ describe('MovementCostCalculator', () => {
       );
       
       expect(result.isValid).toBe(true);
-      expect(result.totalCost).toBe(0); // City internal movement is free (red area traversal)
+      expect(result.totalCost).toBe(1); // the red area is shared space, not free space
       expect(result.segments).toHaveLength(1);
       expect(result.segments[0].type).toBe('city_internal');
-      expect(result.segments[0].cost).toBe(0);
+      expect(result.segments[0].cost).toBe(1);
     });
 
     it('should reject movement when no track data and not major city case', () => {
@@ -312,7 +323,7 @@ describe('MovementCostCalculator', () => {
         ...mockAllPoints
       ];
 
-      // Movement within same city should be free even if starting node not on track
+      // Movement within the same city needs no track, but the milepost entered counts
       const result = calculator.calculateMovementCost(
         madridPerimeter1, 
         madridPerimeter2, 
@@ -320,14 +331,14 @@ describe('MovementCostCalculator', () => {
         madridCityPoints
       );
       expect(result.isValid).toBe(true);
-      expect(result.totalCost).toBe(0); // Should be 0 cost for city internal movement from unconnected start
+      expect(result.totalCost).toBe(1);
       expect(result.segments).toHaveLength(1);
       expect(result.segments[0].type).toBe('city_internal');
-      expect(result.segments[0].cost).toBe(0);
+      expect(result.segments[0].cost).toBe(1);
     });
   });
 
-  describe('Major city internal movement (red area free traversal)', () => {
+  describe('Major city internal movement (red area is shared space, every milepost counts)', () => {
     it('should recognize city center as part of major city', () => {
       const berlinCenter: Point = { row: 10, col: 10, x: 0, y: 0 };
       expect(calculator.isNodeInMajorCity(berlinCenter)).toBe(true);
@@ -366,13 +377,14 @@ describe('MovementCostCalculator', () => {
       );
 
       expect(result.isValid).toBe(true);
-      expect(result.totalCost).toBe(0); // All intra-city movement is free
+      // Center, then the far perimeter milepost
+      expect(result.totalCost).toBe(2);
     });
 
-    it('should cost 0 for traversal from one side of city to the other', () => {
+    it('should count the entry milepost, the center and the exit milepost when crossing a city', () => {
       // Berlin perimeter 6: GridX=8,GridY=10 → row=10,col=8 (west)
       // Berlin perimeter 3: GridX=12,GridY=10 → row=10,col=12 (east)
-      // Track enters from west approach, exits east — city internal hops are free
+      // Track enters from west approach, exits east — the city's mileposts all count
       const westApproach: Point = { row: 10, col: 7, x: 0, y: 0 };
       const eastExit: Point = { row: 10, col: 13, x: 0, y: 0 };
 
@@ -406,12 +418,61 @@ describe('MovementCostCalculator', () => {
       );
 
       expect(result.isValid).toBe(true);
-      // Entry (1) + city_internal hops (0 each) + exit (1) = 2
-      expect(result.totalCost).toBe(2);
-      // Verify city internal segments are free
+      // Entry perimeter (1) + center (1) + exit perimeter (1) + first milepost beyond (1) = 4
+      expect(result.totalCost).toBe(4);
       const internalSegments = result.segments.filter(s => s.type === 'city_internal');
-      expect(internalSegments.length).toBeGreaterThan(0);
-      internalSegments.forEach(s => expect(s.cost).toBe(0));
+      expect(internalSegments).toHaveLength(2);
+      internalSegments.forEach(s => expect(s.cost).toBe(1));
+    });
+
+    it('should ride between two neighbouring perimeter mileposts instead of through the center', () => {
+      // Hexville: track comes in at the west milepost (30,29) and leaves from the
+      // north-west one (29,29), which is next to it.
+      const westApproach: Point = { row: 30, col: 28, x: 0, y: 0 };
+      const northWestExit: Point = { row: 28, col: 29, x: 0, y: 0 };
+
+      const track: PlayerTrackState = {
+        gameId: 'test-game',
+        playerId: 'test-player',
+        segments: [
+          {
+            from: { ...westApproach, terrain: TerrainType.Clear },
+            to: { row: 30, col: 29, x: 0, y: 0, terrain: TerrainType.MajorCity },
+            cost: 1
+          },
+          {
+            from: { row: 29, col: 29, x: 0, y: 0, terrain: TerrainType.MajorCity },
+            to: { ...northWestExit, terrain: TerrainType.Clear },
+            cost: 1
+          }
+        ],
+        totalCost: 2,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date()
+      };
+
+      const result = calculator.calculateMovementCost(westApproach, northWestExit, track, mockAllPoints);
+
+      expect(result.isValid).toBe(true);
+      // Two mileposts inside the city (in at one, across to the next), then the one beyond: 3.
+      // Through the center it would be 4.
+      expect(result.totalCost).toBe(3);
+      expect(result.segments.map(s => `${s.to.row},${s.to.col}`)).toEqual(['30,29', '29,29', '28,29']);
+      expect(result.segments.some(s => s.to.row === 30 && s.to.col === 30)).toBe(false);
+    });
+
+    it('should go through the center between opposite perimeter mileposts', () => {
+      // Hexville west (30,29) to east (30,31): center is 2, around the ring is 3.
+      const result = calculator.calculateMovementCost(
+        { row: 30, col: 29, x: 0, y: 0 },
+        { row: 30, col: 31, x: 0, y: 0 },
+        mockPlayerTrackState,
+        mockAllPoints
+      );
+
+      expect(result.isValid).toBe(true);
+      expect(result.totalCost).toBe(2);
+      expect(result.segments.map(s => `${s.to.row},${s.to.col}`)).toEqual(['30,30', '30,31']);
     });
   });
 

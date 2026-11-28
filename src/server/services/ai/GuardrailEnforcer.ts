@@ -37,7 +37,6 @@ import {
 } from '../restrictionPredicates';
 import {
   computeEffectivePathLength,
-  isIntraCityEdge,
   getMajorCityLookup,
 } from '../../../shared/services/majorCityGroups';
 import { hasCarriedDeliverableOnNetwork } from './routeHelpers';
@@ -202,7 +201,7 @@ export class GuardrailEnforcer {
 
     // Guardrail 8: Movement budget enforcement (defense-in-depth)
     // For MultiAction plans, ensure total movement doesn't exceed speed limit.
-    // Uses effective mileposts — intra-city edges are free per game rules.
+    // Every milepost entered counts, inside a major city too.
     // This is a silent truncation — returns overridden: false.
     if (plan.type === 'MultiAction') {
       const majorCityLookup = getMajorCityLookup();
@@ -224,23 +223,13 @@ export class GuardrailEnforcer {
           `[Guardrail 8] Movement budget exceeded: ${totalMovement}mp > ${context.speed}mp limit. Truncating.`,
         );
         const newSteps = [...plan.steps];
-        // Truncate from last MOVE backward, skipping intra-city edges (they are free)
+        // Truncate from last MOVE backward, one milepost per edge removed
         for (let i = moveIndices.length - 1; i >= 0 && excess > 0; i--) {
           const idx = moveIndices[i];
           const movePlan = newSteps[idx] as TurnPlanMoveTrain;
           const path = movePlan.path;
-          // Walk the path backwards to find how many raw edges to remove for `excess` effective mp
-          let rawRemove = 0;
-          let effectiveRemoved = 0;
-          for (let j = path.length - 1; j >= 1 && effectiveRemoved < excess; j--) {
-            const fromKey = `${path[j - 1].row},${path[j - 1].col}`;
-            const toKey = `${path[j].row},${path[j].col}`;
-            rawRemove++;
-            if (!isIntraCityEdge(fromKey, toKey, majorCityLookup)) {
-              effectiveRemoved++;
-            }
-          }
-          const newPathLength = path.length - rawRemove;
+          const effectiveRemoved = Math.min(excess, Math.max(0, path.length - 1));
+          const newPathLength = path.length - effectiveRemoved;
           if (newPathLength > 1) {
             newSteps[idx] = { ...movePlan, path: path.slice(0, newPathLength) };
           } else {

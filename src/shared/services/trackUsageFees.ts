@@ -1,5 +1,5 @@
 import { PlayerTrackState, TrackSegment } from "../types/TrackTypes";
-import { getMajorCityGroups, MajorCityGroup, getFerryEdges, FerryEdge } from "./majorCityGroups";
+import { getMajorCityInternalEdges, MajorCityGroup, getFerryEdges, FerryEdge } from "./majorCityGroups";
 
 export type Node = { row: number; col: number };
 
@@ -82,14 +82,9 @@ export function buildUnionTrackGraph(args: {
   }
 
   // Add major city internal connectivity (public/ownerless edges)
-  const cities = args.majorCityGroups ?? getMajorCityGroups();
-  for (const city of cities) {
-    const centerKey = nodeKey(city.center);
-    for (const outpost of city.outposts) {
-      const outpostKey = nodeKey(outpost);
-      addUndirectedEdge(adjacency, centerKey, outpostKey);
-      // Ownerless/public edge: do not add to edgeOwners map
-    }
+  for (const edge of getMajorCityInternalEdges(args.majorCityGroups)) {
+    // Ownerless/public edge: do not add to edgeOwners map
+    addUndirectedEdge(adjacency, nodeKey(edge.from), nodeKey(edge.to));
   }
 
   // Add ferry connections (public/ownerless edges)
